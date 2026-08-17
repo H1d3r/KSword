@@ -23,6 +23,8 @@
 
 #include <functional>
 
+class QCheckBox;
+class QComboBox;
 class QEvent;
 class QFrame;
 class QLabel;
@@ -135,8 +137,6 @@ namespace ks::ui
         // searchScopeDisplayTextChanged：范围变化后刷新标题栏模式标签和提示。
         void searchScopeDisplayTextChanged(const QString& displayText);
 
-        // searchResultsOnlyChanged：同步顶部与表格内嵌结果专显勾选框。
-        void searchResultsOnlyChanged(bool checked);
 
     public slots:
         // handleQueryEdited：
@@ -169,8 +169,14 @@ namespace ks::ui
 
     private:
         // ensurePopupCreated：
-        // - 作用：首次需要时构建结果弹层控件树（列表+空态提示）。
+        // - 作用：首次需要时构建搜索选项、结果列表与空态提示。
         void ensurePopupCreated();
+
+        // refreshSearchOptionControls：同步弹层中的范围下拉与结果专显状态。
+        void refreshSearchOptionControls();
+
+        // showOptionsOnlyPopup：空查询时仍显示可操作的搜索范围与结果专显控件。
+        void showOptionsOnlyPopup();
 
         // runSearchNow：
         // - 作用：启动一次异步分片搜索（防抖定时器到期或显式触发）；
@@ -253,6 +259,10 @@ namespace ks::ui
         DockActivator m_dockActivator;            // m_dockActivator：Dock 置前激活回调。
 
         QFrame* m_popupPanel = nullptr;           // m_popupPanel：结果弹层容器（宿主窗口子控件）。
+        QWidget* m_searchOptionsRow = nullptr;    // m_searchOptionsRow：范围与结果专显选项行。
+        QLabel* m_searchScopeLabel = nullptr;     // m_searchScopeLabel：范围下拉标签。
+        QComboBox* m_searchScopeCombo = nullptr;  // m_searchScopeCombo：全局/当前页面/当前表格切换。
+        QCheckBox* m_searchResultsOnlyCheck = nullptr; // m_searchResultsOnlyCheck：仅显示命中行。
         QListWidget* m_resultListWidget = nullptr;// m_resultListWidget：结果列表。
         QLabel* m_emptyHintLabel = nullptr;       // m_emptyHintLabel：无结果时的空态提示。
         QWidget* m_searchProgressRow = nullptr;   // m_searchProgressRow：扫描进行中的进度行容器。
