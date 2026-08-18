@@ -327,6 +327,14 @@ KswordARKBugcheckPanelWriteGlyphPixel(
         Pixel[0] = KSWORD_ARK_BUGCHECK_LAYOUT_WARNING_BLUE;
         Pixel[1] = KSWORD_ARK_BUGCHECK_LAYOUT_WARNING_GREEN;
         Pixel[2] = KSWORD_ARK_BUGCHECK_LAYOUT_WARNING_RED;
+    } else if (ColorIndex == KswordArkBugcheckLayoutColorCritical) {
+        Pixel[0] = KSWORD_ARK_BUGCHECK_LAYOUT_CRITICAL_BLUE;
+        Pixel[1] = KSWORD_ARK_BUGCHECK_LAYOUT_CRITICAL_GREEN;
+        Pixel[2] = KSWORD_ARK_BUGCHECK_LAYOUT_CRITICAL_RED;
+    } else if (ColorIndex == KswordArkBugcheckLayoutColorSuccess) {
+        Pixel[0] = KSWORD_ARK_BUGCHECK_LAYOUT_SUCCESS_BLUE;
+        Pixel[1] = KSWORD_ARK_BUGCHECK_LAYOUT_SUCCESS_GREEN;
+        Pixel[2] = KSWORD_ARK_BUGCHECK_LAYOUT_SUCCESS_RED;
     } else if (ColorIndex == KswordArkBugcheckLayoutColorMuted) {
         Pixel[0] = KSWORD_ARK_BUGCHECK_LAYOUT_MUTED_BLUE;
         Pixel[1] = KSWORD_ARK_BUGCHECK_LAYOUT_MUTED_GREEN;

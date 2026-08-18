@@ -877,6 +877,18 @@ KswordARKBugcheckSvgaDrawPanelNoLog(
             KSWORD_ARK_BUGCHECK_LAYOUT_WARNING_RED,
             KSWORD_ARK_BUGCHECK_LAYOUT_WARNING_GREEN,
             KSWORD_ARK_BUGCHECK_LAYOUT_WARNING_BLUE);
+    layout.Colors[KswordArkBugcheckLayoutColorCritical] =
+        KswordARKSvgaPixelFromRgb(
+            svga,
+            KSWORD_ARK_BUGCHECK_LAYOUT_CRITICAL_RED,
+            KSWORD_ARK_BUGCHECK_LAYOUT_CRITICAL_GREEN,
+            KSWORD_ARK_BUGCHECK_LAYOUT_CRITICAL_BLUE);
+    layout.Colors[KswordArkBugcheckLayoutColorSuccess] =
+        KswordARKSvgaPixelFromRgb(
+            svga,
+            KSWORD_ARK_BUGCHECK_LAYOUT_SUCCESS_RED,
+            KSWORD_ARK_BUGCHECK_LAYOUT_SUCCESS_GREEN,
+            KSWORD_ARK_BUGCHECK_LAYOUT_SUCCESS_BLUE);
     layout.Border = KswordARKSvgaPixelFromRgb(
         svga,
         KSWORD_ARK_BUGCHECK_LAYOUT_BORDER_RED,

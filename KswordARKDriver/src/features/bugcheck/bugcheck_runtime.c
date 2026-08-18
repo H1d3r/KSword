@@ -12,6 +12,7 @@ Abstract:
 --*/
 
 #include "bugcheck_internal.h"
+#include "bugcheck_decode.h"
 #include "bugcheck_bgp.h"
 #include "bugcheck_panel.h"
 #include "bugcheck_preparation_log.h"
@@ -439,70 +440,14 @@ KswordARKBugcheckSetCandidate(
         Source);
 }
 
-static BOOLEAN
-KswordARKBugcheckSelectPrimaryAddress(
-    _Inout_ PKSWORD_ARK_BUGCHECK_DIAGNOSTICS Diagnostics,
-    _Out_ PULONG_PTR Address,
-    _Out_ PULONG ParameterIndex,
-    _Out_ PULONG Confidence
-    )
-{
-    PCSTR meaning = "no known address parameter";
-
-    *Address = 0;
-    *ParameterIndex = 0;
-    *Confidence = KSWORD_ARK_BUGCHECK_CONFIDENCE_NONE;
-
-    switch (Diagnostics->BugCheckCode) {
-    case 0x0000000A:
-    case 0x000000D1:
-        *Address = Diagnostics->Parameter4;
-        *ParameterIndex = 4;
-        *Confidence = KSWORD_ARK_BUGCHECK_CONFIDENCE_HIGH;
-        meaning = "instruction pointer that referenced memory";
-        break;
-    case 0x0000001E:
-    case 0x0000003B:
-    case 0x0000007E:
-        *Address = Diagnostics->Parameter2;
-        *ParameterIndex = 2;
-        *Confidence = KSWORD_ARK_BUGCHECK_CONFIDENCE_HIGH;
-        meaning = "exception or instruction address";
-        break;
-    case 0x00000050:
-    case 0x000000BE:
-    case 0x00000116:
-    case 0x00000117:
-        *Address = Diagnostics->Parameter3;
-        *ParameterIndex = 3;
-        *Confidence = KSWORD_ARK_BUGCHECK_CONFIDENCE_MEDIUM;
-        meaning = "probable instruction or fault address";
-        break;
-    default:
-        break;
-    }
-
-    Diagnostics->FaultAddress = *Address;
-    Diagnostics->FaultParameter = *ParameterIndex;
-    (VOID)RtlStringCbCopyA(
-        Diagnostics->FaultMeaning,
-        sizeof(Diagnostics->FaultMeaning),
-        meaning);
-    return (*Address != 0 && *Confidence != KSWORD_ARK_BUGCHECK_CONFIDENCE_NONE)
-        ? TRUE
-        : FALSE;
-}
-
 static VOID
 KswordARKBugcheckResolveCandidate(
     _Inout_ PKSWORD_ARK_BUGCHECK_DIAGNOSTICS Diagnostics
     )
 {
-    ULONG_PTR candidates[4];
     ULONG_PTR primaryAddress;
     ULONG primaryParameter;
     ULONG primaryConfidence;
-    ULONG index;
     PKSWORD_ARK_BUGCHECK_MODULE_ENTRY module;
 
     Diagnostics->CandidateAddress = 0;
@@ -527,7 +472,7 @@ KswordARKBugcheckResolveCandidate(
         sizeof(Diagnostics->FaultMeaning),
         "not classified");
 
-    if (KswordARKBugcheckSelectPrimaryAddress(
+    if (KswordARKBugcheckDecodePrimaryAddress(
             Diagnostics,
             &primaryAddress,
             &primaryParameter,
@@ -541,26 +486,6 @@ KswordARKBugcheckResolveCandidate(
                 primaryConfidence,
                 primaryParameter,
                 "bugcheck-specific address parameter");
-            return;
-        }
-    }
-
-    candidates[0] = Diagnostics->Parameter1;
-    candidates[1] = Diagnostics->Parameter2;
-    candidates[2] = Diagnostics->Parameter3;
-    candidates[3] = Diagnostics->Parameter4;
-    for (index = 0; index < RTL_NUMBER_OF(candidates); ++index) {
-        module = KswordARKBugcheckFindModuleForAddress(candidates[index]);
-        if (module != NULL) {
-            KswordARKBugcheckSetCandidate(
-                Diagnostics,
-                module,
-                candidates[index],
-                index == 0
-                    ? KSWORD_ARK_BUGCHECK_CONFIDENCE_MEDIUM
-                    : KSWORD_ARK_BUGCHECK_CONFIDENCE_LOW,
-                index + 1,
-                "fallback scan of bugcheck parameters");
             return;
         }
     }
