@@ -7,8 +7,8 @@ Module Name:
 Abstract:
 
     Information-dense 1280x720 crash layout for the physical BGP and VMware
-    framebuffer renderers. Every displayed value is either captured by the
-    bugcheck callbacks or derived from immutable crash-safe caches.
+    framebuffer renderers. Unavailable debugger data is labeled explicitly
+    instead of being fabricated or collected through unsafe crash-time work.
 
 --*/
 
@@ -25,6 +25,7 @@ typedef struct _KSWORD_ARK_BUGCHECK_DETAILED_WRITER
     CHAR Line[KSWORD_ARK_BUGCHECK_PANEL_LINE_CHARS];
 } KSWORD_ARK_BUGCHECK_DETAILED_WRITER;
 
+// This helper clips every formatted row before it reaches the fixed canvas.
 static VOID
 KswordARKBugcheckDetailedClipLine(
     _Inout_updates_z_(Capacity) PCHAR Text,
@@ -57,44 +58,7 @@ KswordARKBugcheckDetailedClipLine(
     Text[MaximumCharacters] = '\0';
 }
 
-static VOID
-KswordARKBugcheckDetailedWriteV(
-    _Inout_ KSWORD_ARK_BUGCHECK_DETAILED_WRITER* Writer,
-    _In_ LONG X,
-    _In_ LONG Y,
-    _In_ ULONG ColorIndex,
-    _In_ ULONG MaximumCharacters,
-    _In_ KSWORD_ARK_BUGCHECK_LAYOUT_TEXT_STYLE TextStyle,
-    _In_z_ _Printf_format_string_ PCSTR Format,
-    _In_ va_list Arguments
-    )
-{
-    if (Writer == NULL || !NT_SUCCESS(Writer->Status)) {
-        return;
-    }
-
-    Writer->Status = RtlStringCbVPrintfA(
-        Writer->Line,
-        sizeof(Writer->Line),
-        Format,
-        Arguments);
-    if (!NT_SUCCESS(Writer->Status)) {
-        return;
-    }
-
-    KswordARKBugcheckDetailedClipLine(
-        Writer->Line,
-        (ULONG)RTL_NUMBER_OF(Writer->Line),
-        MaximumCharacters);
-    Writer->Status = Writer->Canvas->DrawText(
-        Writer->Canvas->Context,
-        Writer->OriginX + X,
-        Y,
-        Writer->Line,
-        ColorIndex,
-        TextStyle);
-}
-
+// This helper formats into a fixed stack buffer and never allocates memory.
 static VOID
 KswordARKBugcheckDetailedWrite(
     _Inout_ KSWORD_ARK_BUGCHECK_DETAILED_WRITER* Writer,
@@ -108,45 +72,34 @@ KswordARKBugcheckDetailedWrite(
 {
     va_list arguments;
 
+    if (Writer == NULL || !NT_SUCCESS(Writer->Status)) {
+        return;
+    }
+
     va_start(arguments, Format);
-    KswordARKBugcheckDetailedWriteV(
-        Writer,
-        X,
-        Y,
-        ColorIndex,
-        MaximumCharacters,
-        KswordArkBugcheckLayoutTextBody,
+    Writer->Status = RtlStringCbVPrintfA(
+        Writer->Line,
+        sizeof(Writer->Line),
         Format,
         arguments);
     va_end(arguments);
-}
+    if (!NT_SUCCESS(Writer->Status)) {
+        return;
+    }
 
-static VOID
-KswordARKBugcheckDetailedWriteHero(
-    _Inout_ KSWORD_ARK_BUGCHECK_DETAILED_WRITER* Writer,
-    _In_ LONG X,
-    _In_ LONG Y,
-    _In_ ULONG ColorIndex,
-    _In_ ULONG MaximumCharacters,
-    _In_z_ _Printf_format_string_ PCSTR Format,
-    ...
-    )
-{
-    va_list arguments;
-
-    va_start(arguments, Format);
-    KswordARKBugcheckDetailedWriteV(
-        Writer,
-        X,
+    KswordARKBugcheckDetailedClipLine(
+        Writer->Line,
+        (ULONG)RTL_NUMBER_OF(Writer->Line),
+        MaximumCharacters);
+    Writer->Status = Writer->Canvas->DrawText(
+        Writer->Canvas->Context,
+        Writer->OriginX + X,
         Y,
-        ColorIndex,
-        MaximumCharacters,
-        KswordArkBugcheckLayoutTextHero,
-        Format,
-        arguments);
-    va_end(arguments);
+        Writer->Line,
+        ColorIndex);
 }
 
+// This helper forwards a pre-generated frame to the active renderer.
 static VOID
 KswordARKBugcheckDetailedFrame(
     _Inout_ KSWORD_ARK_BUGCHECK_DETAILED_WRITER* Writer,
@@ -166,6 +119,7 @@ KswordARKBugcheckDetailedFrame(
         Frame);
 }
 
+// This helper removes internal resolver notes from the public module label.
 static PCSTR
 KswordARKBugcheckDetailedModuleText(
     _In_ const KSWORD_ARK_BUGCHECK_DIAGNOSTICS* Diagnostics
@@ -173,556 +127,484 @@ KswordARKBugcheckDetailedModuleText(
 {
     if (Diagnostics->CandidateModule[0] == '\0' ||
         Diagnostics->CandidateModule[0] == '(') {
-        return "NO MODULE CLAIMED";
+        return "NOT IDENTIFIED";
     }
     return Diagnostics->CandidateModule;
 }
 
+// This helper returns a safe source label when no resolver supplied one.
 static PCSTR
 KswordARKBugcheckDetailedSourceText(
     _In_ const KSWORD_ARK_BUGCHECK_DIAGNOSTICS* Diagnostics
     )
 {
     if (Diagnostics->CandidateSource[0] == '\0') {
-        return "CALLBACK PARAMETER";
+        return "NOT IDENTIFIED";
     }
     return Diagnostics->CandidateSource;
 }
 
-static BOOLEAN
-KswordARKBugcheckDetailedUsesSystemFont(VOID)
-{
-    return InterlockedCompareExchange(
-        &g_KswordArkBugcheckState.Font.Valid,
-        1,
-        1) != 0;
-}
-
-static BOOLEAN
-KswordARKBugcheckDetailedUsesCustomBrand(VOID)
-{
-    return InterlockedCompareExchange(
-        &g_KswordArkBugcheckState.Bitmap.Valid,
-        1,
-        1) != 0;
-}
-
-static VOID
-KswordARKBugcheckDetailedWriteParameter(
-    _Inout_ KSWORD_ARK_BUGCHECK_DETAILED_WRITER* Writer,
-    _In_ LONG X,
-    _In_ LONG Y,
-    _In_ ULONG MaximumCharacters,
-    _In_ const KSWORD_ARK_BUGCHECK_DIAGNOSTICS* Diagnostics,
-    _In_ ULONG ParameterIndex
-    )
-{
-    ULONG_PTR value;
-    PCSTR role;
-
-    value = KswordARKBugcheckLayoutParameterValue(
-        Diagnostics,
-        ParameterIndex);
-    role = KswordARKBugcheckLayoutParameterRole(
-        Diagnostics->BugCheckCode,
-        ParameterIndex);
-    if (Diagnostics->BugCheckCode == 0x000000EF && ParameterIndex == 2UL) {
-        KswordARKBugcheckDetailedWrite(
-            Writer,
-            X,
-            Y,
-            KswordARKBugcheckLayoutParameterColor(
-                Diagnostics,
-                ParameterIndex),
-            MaximumCharacters,
-            "ARG2 OBJECT TYPE  %s",
-            KswordARKBugcheckLayoutCriticalObjectTypeText(value));
-        return;
-    }
-
-    KswordARKBugcheckDetailedWrite(
-        Writer,
-        X,
-        Y,
-        KswordARKBugcheckLayoutParameterColor(Diagnostics, ParameterIndex),
-        MaximumCharacters,
-        "ARG%lu %s  0x%p",
-        ParameterIndex,
-        role,
-        (PVOID)value);
-}
-
+// The header exposes captured state and the availability contract at a glance.
 static VOID
 KswordARKBugcheckDetailedDrawHeader(
     _Inout_ KSWORD_ARK_BUGCHECK_DETAILED_WRITER* Writer,
-    _In_ const KSWORD_ARK_BUGCHECK_DIAGNOSTICS* Diagnostics
+    _In_ const KSWORD_ARK_BUGCHECK_DIAGNOSTICS* Diagnostics,
+    _In_ ULONG CallbackMask
     )
 {
     KswordARKBugcheckDetailedWrite(
-        Writer, 280L, 10L, KswordArkBugcheckLayoutColorAccent, 42UL,
+        Writer, 280L, 18L, KswordArkBugcheckLayoutColorAccent, 58UL,
         "KSWORD ARK CRASH DIAGNOSTICS");
     KswordARKBugcheckDetailedWrite(
-        Writer, 280L, 31L, KswordArkBugcheckLayoutColorCritical, 42UL,
-        "%s", KswordARKBugcheckName(Diagnostics->BugCheckCode));
-    KswordARKBugcheckDetailedWriteHero(
-        Writer, 280L, 52L, KswordArkBugcheckLayoutColorCritical, 10UL,
-        "0x%08lX", Diagnostics->BugCheckCode);
+        Writer, 280L, 40L, KswordArkBugcheckLayoutColorText, 72UL,
+        "A FATAL KERNEL ERROR HAS OCCURRED.");
     KswordARKBugcheckDetailedWrite(
-        Writer, 502L, 61L, KswordArkBugcheckLayoutColorMuted, 18UL,
-        "STOP CODE");
-
-    // Keep the original joke white and in the original fixed-width voice.
+        Writer, 280L, 56L, KswordArkBugcheckLayoutColorMuted, 72UL,
+        "THE SYSTEM STOPPED TO PROTECT DATA AND PRESERVE CRASH CONTEXT.");
     KswordARKBugcheckDetailedWrite(
-        Writer, 760L, 10L, KswordArkBugcheckLayoutColorText, 30UL,
-        "THIS IS NOBODY'S FAULT.");
+        Writer, 280L, 72L, KswordArkBugcheckLayoutColorWarning, 72UL,
+        "AMBER FIELDS REQUIRE MEMORY.DMP ANALYSIS AFTER RESTART.");
     KswordARKBugcheckDetailedWrite(
-        Writer, 760L, 31L, KswordArkBugcheckLayoutColorText, 30UL,
-        "YOUR COMPUTER JUST EXPLODED.");
-    KswordARKBugcheckDetailedWrite(
-        Writer, 760L, 52L, KswordArkBugcheckLayoutColorText, 30UL,
-        "RESTART IT, REINSTALL IT,");
-    KswordARKBugcheckDetailedWrite(
-        Writer, 760L, 73L, KswordArkBugcheckLayoutColorText, 30UL,
-        "OR BUY A NEW ONE.");
-    KswordARKBugcheckDetailedWrite(
-        Writer, 1148L, 10L, KswordArkBugcheckLayoutColorText, 12UL,
+        Writer, 1122L, 18L, KswordArkBugcheckLayoutColorText, 16UL,
         "CRASH CPU %02lu", Diagnostics->Cpu);
     KswordARKBugcheckDetailedWrite(
-        Writer, 1148L, 31L, KswordArkBugcheckLayoutColorText, 12UL,
-        "IRQL %02lu", Diagnostics->Irql);
+        Writer, 1122L, 36L, KswordArkBugcheckLayoutColorText, 16UL,
+        "IRQL      %02lu", Diagnostics->Irql);
+    KswordARKBugcheckDetailedWrite(
+        Writer, 1122L, 54L, KswordArkBugcheckLayoutColorText, 16UL,
+        "CALLBACKS 0x%02lX", CallbackMask & 0x0FUL);
+    KswordARKBugcheckDetailedWrite(
+        Writer, 1122L, 72L, KswordArkBugcheckLayoutColorWarning, 16UL,
+        "UPTIME DUMP ONLY");
 }
 
+// The BugCheck panel contains only callback arguments and derived verdicts.
 static VOID
-KswordARKBugcheckDetailedDrawParameters(
+KswordARKBugcheckDetailedDrawBugcheck(
     _Inout_ KSWORD_ARK_BUGCHECK_DETAILED_WRITER* Writer,
     _In_ const KSWORD_ARK_BUGCHECK_DIAGNOSTICS* Diagnostics
     )
 {
     KswordARKBugcheckDetailedWrite(
-        Writer, 28L, 118L, KswordArkBugcheckLayoutColorAccent, 34UL,
-        "PARAMETER SEMANTICS");
-    KswordARKBugcheckDetailedWriteParameter(
-        Writer, 28L, 142L, 34UL, Diagnostics, 1UL);
-    KswordARKBugcheckDetailedWriteParameter(
-        Writer, 28L, 164L, 34UL, Diagnostics, 2UL);
-    KswordARKBugcheckDetailedWriteParameter(
-        Writer, 28L, 186L, 34UL, Diagnostics, 3UL);
-    KswordARKBugcheckDetailedWriteParameter(
-        Writer, 28L, 208L, 34UL, Diagnostics, 4UL);
+        Writer, 28L, 112L, KswordArkBugcheckLayoutColorMuted, 48UL,
+        "BUGCHECK");
     KswordARKBugcheckDetailedWrite(
-        Writer,
-        28L,
-        234L,
-        Diagnostics->BugCheckCode == 0x000000EF
-            ? KswordArkBugcheckLayoutColorWarning
-            : KswordArkBugcheckLayoutColorText,
-        34UL,
-        Diagnostics->BugCheckCode == 0x000000EF
-            ? "ARG1 IS AN OBJECT, NOT CODE"
-            : "RAW CALLBACK VALUES PRESERVED");
+        Writer, 388L, 112L, KswordArkBugcheckLayoutColorAccent, 12UL,
+        "[CAPTURED]");
     KswordARKBugcheckDetailedWrite(
-        Writer, 28L, 256L, KswordArkBugcheckLayoutColorMuted, 34UL,
-        "DECODED WITHOUT MEMORY READS");
+        Writer, 28L, 134L, KswordArkBugcheckLayoutColorAccent, 48UL,
+        "%s", KswordARKBugcheckName(Diagnostics->BugCheckCode));
     KswordARKBugcheckDetailedWrite(
-        Writer, 28L, 274L, KswordArkBugcheckLayoutColorText, 34UL,
-        "CAPTURED  %s", Diagnostics->Captured != 0 ? "YES" : "NO");
+        Writer, 28L, 152L, KswordArkBugcheckLayoutColorAccent, 48UL,
+        "0x%08lX", Diagnostics->BugCheckCode);
+    KswordARKBugcheckDetailedWrite(
+        Writer, 28L, 174L, KswordArkBugcheckLayoutColorText, 48UL,
+        "ARG1  0x%p", (PVOID)Diagnostics->Parameter1);
+    KswordARKBugcheckDetailedWrite(
+        Writer, 28L, 190L, KswordArkBugcheckLayoutColorText, 48UL,
+        "ARG2  0x%p", (PVOID)Diagnostics->Parameter2);
+    KswordARKBugcheckDetailedWrite(
+        Writer, 28L, 206L, KswordArkBugcheckLayoutColorText, 48UL,
+        "ARG3  0x%p", (PVOID)Diagnostics->Parameter3);
+    KswordARKBugcheckDetailedWrite(
+        Writer, 28L, 222L, KswordArkBugcheckLayoutColorText, 48UL,
+        "ARG4  0x%p", (PVOID)Diagnostics->Parameter4);
+    KswordARKBugcheckDetailedWrite(
+        Writer, 28L, 242L, KswordArkBugcheckLayoutColorText, 48UL,
+        "FAULT PARAM %lu  %s",
+        Diagnostics->FaultParameter,
+        Diagnostics->FaultMeaning);
+    KswordARKBugcheckDetailedWrite(
+        Writer, 28L, 258L, KswordArkBugcheckLayoutColorText, 48UL,
+        "FAULT IP  0x%p", (PVOID)Diagnostics->FaultAddress);
+    KswordARKBugcheckDetailedWrite(
+        Writer, 28L, 278L, KswordArkBugcheckLayoutColorAccent, 48UL,
+        "%s", KswordARKBugcheckVerdictText(Diagnostics->CandidateClass));
+    KswordARKBugcheckDetailedWrite(
+        Writer, 28L, 294L, KswordArkBugcheckLayoutColorText, 48UL,
+        "CONFIDENCE %s",
+        KswordARKBugcheckConfidenceText(Diagnostics->CandidateConfidence));
 }
 
+// The fault panel separates captured callback values from debugger registers.
 static VOID
-KswordARKBugcheckDetailedDrawFaultEvidence(
+KswordARKBugcheckDetailedDrawFaultContext(
+    _Inout_ KSWORD_ARK_BUGCHECK_DETAILED_WRITER* Writer,
+    _In_ const KSWORD_ARK_BUGCHECK_DIAGNOSTICS* Diagnostics
+    )
+{
+    PCSTR moduleText;
+
+    moduleText = KswordARKBugcheckDetailedModuleText(Diagnostics);
+    KswordARKBugcheckDetailedWrite(
+        Writer, 504L, 112L, KswordArkBugcheckLayoutColorMuted, 35UL,
+        "FAULT CONTEXT");
+    KswordARKBugcheckDetailedWrite(
+        Writer, 778L, 112L, KswordArkBugcheckLayoutColorWarning, 8UL,
+        "[MIXED]");
+    KswordARKBugcheckDetailedWrite(
+        Writer, 504L, 136L, KswordArkBugcheckLayoutColorAccent, 35UL,
+        "RIP     0x%p", (PVOID)Diagnostics->FaultAddress);
+    KswordARKBugcheckDetailedWrite(
+        Writer, 504L, 152L, KswordArkBugcheckLayoutColorText, 35UL,
+        "CPU     %lu", Diagnostics->Cpu);
+    KswordARKBugcheckDetailedWrite(
+        Writer, 504L, 168L, KswordArkBugcheckLayoutColorText, 35UL,
+        "IRQL    %lu", Diagnostics->Irql);
+    KswordARKBugcheckDetailedWrite(
+        Writer, 504L, 184L, KswordArkBugcheckLayoutColorText, 35UL,
+        "SOURCE  %s", KswordARKBugcheckDetailedSourceText(Diagnostics));
+    KswordARKBugcheckDetailedWrite(
+        Writer, 504L, 200L, KswordArkBugcheckLayoutColorText, 35UL,
+        "MODULE  %s", moduleText);
+    KswordARKBugcheckDetailedWrite(
+        Writer, 504L, 216L, KswordArkBugcheckLayoutColorText, 35UL,
+        "CLASS   %s",
+        KswordARKBugcheckModuleClassText(Diagnostics->CandidateClass));
+    KswordARKBugcheckDetailedWrite(
+        Writer, 504L, 232L, KswordArkBugcheckLayoutColorText, 35UL,
+        "CONF    %s",
+        KswordARKBugcheckConfidenceText(Diagnostics->CandidateConfidence));
+    KswordARKBugcheckDetailedWrite(
+        Writer, 504L, 252L, KswordArkBugcheckLayoutColorWarning, 35UL,
+        "RSP     DUMP ONLY");
+    KswordARKBugcheckDetailedWrite(
+        Writer, 504L, 268L, KswordArkBugcheckLayoutColorWarning, 35UL,
+        "RFLAGS  DUMP ONLY");
+    KswordARKBugcheckDetailedWrite(
+        Writer, 504L, 284L, KswordArkBugcheckLayoutColorWarning, 35UL,
+        "CR2     DUMP ONLY");
+}
+
+// Instruction bytes are never dereferenced in the high-IRQL callback path.
+static VOID
+KswordARKBugcheckDetailedDrawInstruction(
     _Inout_ KSWORD_ARK_BUGCHECK_DETAILED_WRITER* Writer,
     _In_ const KSWORD_ARK_BUGCHECK_DIAGNOSTICS* Diagnostics
     )
 {
     KswordARKBugcheckDetailedWrite(
-        Writer, 436L, 118L, KswordArkBugcheckLayoutColorAccent, 34UL,
-        "FAULT EVIDENCE");
-    if (KswordARKBugcheckLayoutHasDirectFaultAddress(Diagnostics)) {
-        KswordARKBugcheckDetailedWrite(
-            Writer, 436L, 142L, KswordArkBugcheckLayoutColorAccent, 34UL,
-            "FAULT IP  0x%p", (PVOID)Diagnostics->FaultAddress);
-        KswordARKBugcheckDetailedWrite(
-            Writer, 436L, 164L, KswordArkBugcheckLayoutColorText, 34UL,
-            "SOURCE PARAMETER  ARG%lu", Diagnostics->FaultParameter);
-        KswordARKBugcheckDetailedWrite(
-            Writer, 436L, 186L, KswordArkBugcheckLayoutColorText, 34UL,
-            "%s", Diagnostics->FaultMeaning);
-        KswordARKBugcheckDetailedWrite(
-            Writer, 436L, 208L, KswordArkBugcheckLayoutColorMuted, 34UL,
-            "SEARCH ADDRESS  0x%p",
-            (PVOID)Diagnostics->CandidateAddress);
-    } else {
-        KswordARKBugcheckDetailedWrite(
-            Writer, 436L, 142L, KswordArkBugcheckLayoutColorWarning, 34UL,
-            "NO DIRECT FAULT IP");
-        if (Diagnostics->BugCheckCode == 0x000000EF) {
-            KswordARKBugcheckDetailedWrite(
-                Writer, 436L, 164L, KswordArkBugcheckLayoutColorAccent, 34UL,
-                "CRITICAL OBJECT  0x%p",
-                (PVOID)Diagnostics->Parameter1);
-            KswordARKBugcheckDetailedWrite(
-                Writer, 436L, 186L, KswordArkBugcheckLayoutColorText, 34UL,
-                "OBJECT TYPE  %s",
-                KswordARKBugcheckLayoutCriticalObjectTypeText(
-                    Diagnostics->Parameter2));
-        } else {
-            KswordARKBugcheckDetailedWrite(
-                Writer, 436L, 164L, KswordArkBugcheckLayoutColorText, 34UL,
-                "NO EXECUTABLE ARGUMENT");
-            KswordARKBugcheckDetailedWrite(
-                Writer, 436L, 186L, KswordArkBugcheckLayoutColorMuted, 34UL,
-                "RAW PARAMETERS RETAINED");
-        }
-    }
+        Writer, 860L, 112L, KswordArkBugcheckLayoutColorMuted, 43UL,
+        "FAULTING INSTRUCTION");
     KswordARKBugcheckDetailedWrite(
-        Writer, 436L, 230L, KswordArkBugcheckLayoutColorText, 34UL,
-        "CPU / IRQL  %lu / %lu", Diagnostics->Cpu, Diagnostics->Irql);
+        Writer, 1160L, 112L, KswordArkBugcheckLayoutColorWarning, 11UL,
+        "[DUMP ONLY]");
     KswordARKBugcheckDetailedWrite(
-        Writer,
-        436L,
-        252L,
-        KswordARKBugcheckLayoutAttributionColor(Diagnostics),
-        34UL,
-        "%s",
-        KswordARKBugcheckLayoutAttributionText(Diagnostics));
+        Writer, 860L, 138L, KswordArkBugcheckLayoutColorWarning, 43UL,
+        "PREVIOUS   REQUIRES MEMORY.DMP");
     KswordARKBugcheckDetailedWrite(
-        Writer, 436L, 274L, KswordArkBugcheckLayoutColorMuted, 34UL,
-        "SAFE CALLBACK DATA ONLY");
+        Writer, 860L, 158L, KswordArkBugcheckLayoutColorAccent, 43UL,
+        "> CURRENT  0x%p", (PVOID)Diagnostics->FaultAddress);
+    KswordARKBugcheckDetailedWrite(
+        Writer, 860L, 178L, KswordArkBugcheckLayoutColorWarning, 43UL,
+        "NEXT       REQUIRES MEMORY.DMP");
+    KswordARKBugcheckDetailedWrite(
+        Writer, 860L, 206L, KswordArkBugcheckLayoutColorText, 43UL,
+        "ADDRESS   0x%p", (PVOID)Diagnostics->CandidateAddress);
+    KswordARKBugcheckDetailedWrite(
+        Writer, 860L, 224L, KswordArkBugcheckLayoutColorText, 43UL,
+        "ACCESS    %s", Diagnostics->FaultMeaning);
+    KswordARKBugcheckDetailedWrite(
+        Writer, 860L, 242L, KswordArkBugcheckLayoutColorWarning, 43UL,
+        "BYTES     NOT READ AT BUGCHECK IRQL");
+    KswordARKBugcheckDetailedWrite(
+        Writer, 860L, 260L, KswordArkBugcheckLayoutColorWarning, 43UL,
+        "SYMBOL    RESOLVE AFTER RESTART");
+    KswordARKBugcheckDetailedWrite(
+        Writer, 860L, 282L, KswordArkBugcheckLayoutColorMuted, 43UL,
+        "WINDBG    .TRAP / .CXR / UB / U");
 }
 
+// Thread and process details are intentionally deferred to dump analysis.
 static VOID
-KswordARKBugcheckDetailedDrawAttribution(
+KswordARKBugcheckDetailedDrawThread(
     _Inout_ KSWORD_ARK_BUGCHECK_DETAILED_WRITER* Writer,
-    _In_ const KSWORD_ARK_BUGCHECK_DIAGNOSTICS* Diagnostics,
-    _In_ ULONG ModuleCount
+    _In_ const KSWORD_ARK_BUGCHECK_DIAGNOSTICS* Diagnostics
     )
 {
     KswordARKBugcheckDetailedWrite(
-        Writer, 844L, 118L, KswordArkBugcheckLayoutColorAccent, 37UL,
-        "ATTRIBUTION RESULT");
-    if (KswordARKBugcheckLayoutHasCandidate(Diagnostics)) {
-        KswordARKBugcheckDetailedWrite(
-            Writer,
-            844L,
-            142L,
-            KswordARKBugcheckLayoutAttributionColor(Diagnostics),
-            37UL,
-            "%s",
-            KswordARKBugcheckDetailedModuleText(Diagnostics));
-        KswordARKBugcheckDetailedWrite(
-            Writer, 844L, 164L, KswordArkBugcheckLayoutColorText, 37UL,
-            "BASE    0x%p", (PVOID)Diagnostics->CandidateModuleBase);
-        KswordARKBugcheckDetailedWrite(
-            Writer, 844L, 186L, KswordArkBugcheckLayoutColorText, 37UL,
-            "OFFSET  0x%p", (PVOID)Diagnostics->CandidateModuleOffset);
-        KswordARKBugcheckDetailedWrite(
-            Writer, 844L, 208L, KswordArkBugcheckLayoutColorText, 37UL,
-            "SIZE    0x%08lX", Diagnostics->CandidateModuleSize);
-        KswordARKBugcheckDetailedWrite(
-            Writer, 844L, 230L, KswordArkBugcheckLayoutColorText, 37UL,
-            "CLASS   %s",
-            KswordARKBugcheckModuleClassText(Diagnostics->CandidateClass));
-        KswordARKBugcheckDetailedWrite(
-            Writer, 844L, 252L, KswordArkBugcheckLayoutColorSuccess, 37UL,
-            "CONF    %s",
-            KswordARKBugcheckConfidenceText(
-                Diagnostics->CandidateConfidence));
-        KswordARKBugcheckDetailedWrite(
-            Writer, 844L, 274L, KswordArkBugcheckLayoutColorMuted, 37UL,
-            "SOURCE  %s",
-            KswordARKBugcheckDetailedSourceText(Diagnostics));
-    } else {
-        KswordARKBugcheckDetailedWrite(
-            Writer, 844L, 142L, KswordArkBugcheckLayoutColorWarning, 37UL,
-            "DUMP ANALYSIS REQUIRED");
-        KswordARKBugcheckDetailedWrite(
-            Writer, 844L, 164L, KswordArkBugcheckLayoutColorMuted, 37UL,
-            KswordARKBugcheckLayoutHasDirectFaultAddress(Diagnostics)
-                ? "ADDRESS OUTSIDE MODULE CACHE"
-                : "STOP CODE HAS NO DIRECT IP");
-        KswordARKBugcheckDetailedWrite(
-            Writer, 844L, 186L, KswordArkBugcheckLayoutColorSuccess, 37UL,
-            "MODULE CACHE  %lu AVAILABLE", ModuleCount);
-        KswordARKBugcheckDetailedWrite(
-            Writer, 844L, 208L, KswordArkBugcheckLayoutColorText, 37UL,
-            "NO MODULE RANGE CLAIMED");
-        KswordARKBugcheckDetailedWrite(
-            Writer, 844L, 230L, KswordArkBugcheckLayoutColorMuted, 37UL,
-            "ROOT CAUSE NEEDS SAVED STACK");
-        KswordARKBugcheckDetailedWrite(
-            Writer, 844L, 252L, KswordArkBugcheckLayoutColorAccent, 37UL,
-            "NEXT  RUN !ANALYZE -V");
-        KswordARKBugcheckDetailedWrite(
-            Writer, 844L, 274L, KswordArkBugcheckLayoutColorText, 37UL,
-            "RAW EVIDENCE RETAINED");
-    }
+        Writer, 28L, 323L, KswordArkBugcheckLayoutColorMuted, 32UL,
+        "CURRENT THREAD / PROCESS");
+    KswordARKBugcheckDetailedWrite(
+        Writer, 226L, 323L, KswordArkBugcheckLayoutColorWarning, 11UL,
+        "[DUMP ONLY]");
+    KswordARKBugcheckDetailedWrite(
+        Writer, 28L, 348L, KswordArkBugcheckLayoutColorWarning, 32UL,
+        "THREAD   NOT CAPTURED");
+    KswordARKBugcheckDetailedWrite(
+        Writer, 28L, 364L, KswordArkBugcheckLayoutColorWarning, 32UL,
+        "PROCESS  NOT CAPTURED");
+    KswordARKBugcheckDetailedWrite(
+        Writer, 28L, 380L, KswordArkBugcheckLayoutColorWarning, 32UL,
+        "START    DUMP ONLY");
+    KswordARKBugcheckDetailedWrite(
+        Writer, 28L, 396L, KswordArkBugcheckLayoutColorWarning, 32UL,
+        "STATE    DUMP ONLY");
+    KswordARKBugcheckDetailedWrite(
+        Writer, 28L, 412L, KswordArkBugcheckLayoutColorText, 32UL,
+        "CPU      %lu", Diagnostics->Cpu);
+    KswordARKBugcheckDetailedWrite(
+        Writer, 28L, 428L, KswordArkBugcheckLayoutColorText, 32UL,
+        "IRQL     %lu", Diagnostics->Irql);
+    KswordARKBugcheckDetailedWrite(
+        Writer, 28L, 448L, KswordArkBugcheckLayoutColorMuted, 32UL,
+        "WINDBG   !THREAD / !PROCESS");
 }
 
+// Stack walking is represented honestly because unwind work is not crash-safe.
 static VOID
-KswordARKBugcheckDetailedDrawModuleEvidence(
-    _Inout_ KSWORD_ARK_BUGCHECK_DETAILED_WRITER* Writer,
-    _In_ const KSWORD_ARK_BUGCHECK_DIAGNOSTICS* Diagnostics,
-    _In_ ULONG ModuleCount
+KswordARKBugcheckDetailedDrawStack(
+    _Inout_ KSWORD_ARK_BUGCHECK_DETAILED_WRITER* Writer
     )
 {
     KswordARKBugcheckDetailedWrite(
-        Writer, 28L, 316L, KswordArkBugcheckLayoutColorAccent, 34UL,
-        "MODULE EVIDENCE");
-    if (KswordARKBugcheckLayoutHasCandidate(Diagnostics)) {
-        KswordARKBugcheckDetailedWrite(
-            Writer, 28L, 340L, KswordArkBugcheckLayoutColorText, 34UL,
-            "ADDRESS  0x%p", (PVOID)Diagnostics->CandidateAddress);
-        KswordARKBugcheckDetailedWrite(
-            Writer, 28L, 362L, KswordArkBugcheckLayoutColorText, 34UL,
-            "PARAMETER  ARG%lu", Diagnostics->CandidateParameter);
-        KswordARKBugcheckDetailedWrite(
-            Writer,
-            28L,
-            384L,
-            KswordARKBugcheckLayoutAttributionColor(Diagnostics),
-            34UL,
-            "MODULE  %s",
-            KswordARKBugcheckDetailedModuleText(Diagnostics));
-        KswordARKBugcheckDetailedWrite(
-            Writer, 28L, 406L, KswordArkBugcheckLayoutColorText, 34UL,
-            "BASE + OFFSET VERIFIED");
-        KswordARKBugcheckDetailedWrite(
-            Writer, 28L, 428L, KswordArkBugcheckLayoutColorMuted, 34UL,
-            "SOURCE  %s",
-            KswordARKBugcheckDetailedSourceText(Diagnostics));
-        KswordARKBugcheckDetailedWrite(
-            Writer, 28L, 450L, KswordArkBugcheckLayoutColorSuccess, 34UL,
-            "CACHE RANGE MATCHED");
-    } else {
-        KswordARKBugcheckDetailedWrite(
-            Writer, 28L, 340L, KswordArkBugcheckLayoutColorText, 34UL,
-            "CACHE ENTRIES  %lu", ModuleCount);
-        if (KswordARKBugcheckLayoutHasDirectFaultAddress(Diagnostics)) {
-            KswordARKBugcheckDetailedWrite(
-                Writer, 28L, 362L, KswordArkBugcheckLayoutColorText, 34UL,
-                "SEARCHED  0x%p", (PVOID)Diagnostics->FaultAddress);
-        } else {
-            KswordARKBugcheckDetailedWrite(
-                Writer, 28L, 362L, KswordArkBugcheckLayoutColorMuted, 34UL,
-                "NO SEARCHABLE CODE ADDRESS");
-        }
-        KswordARKBugcheckDetailedWrite(
-            Writer, 28L, 384L, KswordArkBugcheckLayoutColorSuccess, 34UL,
-            "RANGE SEARCH COMPLETE");
-        KswordARKBugcheckDetailedWrite(
-            Writer, 28L, 406L, KswordArkBugcheckLayoutColorWarning, 34UL,
-            "NO MODULE RANGE MATCHED");
-        KswordARKBugcheckDetailedWrite(
-            Writer, 28L, 428L, KswordArkBugcheckLayoutColorText, 34UL,
-            "RAW EVIDENCE PRESERVED");
-        KswordARKBugcheckDetailedWrite(
-            Writer, 28L, 450L, KswordArkBugcheckLayoutColorAccent, 34UL,
-            "NEXT  STACK + SYMBOLS");
-    }
+        Writer, 346L, 323L, KswordArkBugcheckLayoutColorMuted, 34UL,
+        "STACK TRACE / TOP FRAMES");
+    KswordARKBugcheckDetailedWrite(
+        Writer, 558L, 323L, KswordArkBugcheckLayoutColorWarning, 11UL,
+        "[DUMP ONLY]");
+    KswordARKBugcheckDetailedWrite(
+        Writer, 346L, 348L, KswordArkBugcheckLayoutColorWarning, 34UL,
+        "#00  REQUIRES MEMORY.DMP");
+    KswordARKBugcheckDetailedWrite(
+        Writer, 346L, 364L, KswordArkBugcheckLayoutColorWarning, 34UL,
+        "#01  REQUIRES UNWIND METADATA");
+    KswordARKBugcheckDetailedWrite(
+        Writer, 346L, 380L, KswordArkBugcheckLayoutColorWarning, 34UL,
+        "#02  REQUIRES REGISTER CONTEXT");
+    KswordARKBugcheckDetailedWrite(
+        Writer, 346L, 396L, KswordArkBugcheckLayoutColorWarning, 34UL,
+        "#03  RESOLVE WITH SYMBOLS");
+    KswordARKBugcheckDetailedWrite(
+        Writer, 346L, 416L, KswordArkBugcheckLayoutColorText, 34UL,
+        "COMMAND  !ANALYZE -V");
+    KswordARKBugcheckDetailedWrite(
+        Writer, 346L, 432L, KswordArkBugcheckLayoutColorText, 34UL,
+        "COMMAND  KV / .TRAP / .CXR");
+    KswordARKBugcheckDetailedWrite(
+        Writer, 346L, 448L, KswordArkBugcheckLayoutColorMuted, 34UL,
+        "NO UNSAFE LIVE STACK WALK ATTEMPTED");
 }
 
+// Module identity is resolved from the nonpaged cache prepared before failure.
 static VOID
-KswordARKBugcheckDetailedDrawCaptureHealth(
+KswordARKBugcheckDetailedDrawModule(
+    _Inout_ KSWORD_ARK_BUGCHECK_DETAILED_WRITER* Writer,
+    _In_ const KSWORD_ARK_BUGCHECK_DIAGNOSTICS* Diagnostics
+    )
+{
+    KswordARKBugcheckDetailedWrite(
+        Writer, 678L, 323L, KswordArkBugcheckLayoutColorMuted, 28UL,
+        "FAULTING MODULE");
+    KswordARKBugcheckDetailedWrite(
+        Writer, 848L, 323L, KswordArkBugcheckLayoutColorAccent, 10UL,
+        "[CAPTURED]");
+    KswordARKBugcheckDetailedWrite(
+        Writer, 678L, 348L, KswordArkBugcheckLayoutColorAccent, 28UL,
+        "%s", KswordARKBugcheckDetailedModuleText(Diagnostics));
+    KswordARKBugcheckDetailedWrite(
+        Writer, 678L, 368L, KswordArkBugcheckLayoutColorText, 28UL,
+        "BASE   0x%p", (PVOID)Diagnostics->CandidateModuleBase);
+    KswordARKBugcheckDetailedWrite(
+        Writer, 678L, 384L, KswordArkBugcheckLayoutColorText, 28UL,
+        "SIZE   0x%08lX", Diagnostics->CandidateModuleSize);
+    KswordARKBugcheckDetailedWrite(
+        Writer, 678L, 400L, KswordArkBugcheckLayoutColorText, 28UL,
+        "OFFSET 0x%p", (PVOID)Diagnostics->CandidateModuleOffset);
+    KswordARKBugcheckDetailedWrite(
+        Writer, 678L, 416L, KswordArkBugcheckLayoutColorText, 28UL,
+        "CLASS  %s",
+        KswordARKBugcheckModuleClassText(Diagnostics->CandidateClass));
+    KswordARKBugcheckDetailedWrite(
+        Writer, 678L, 432L, KswordArkBugcheckLayoutColorText, 28UL,
+        "SOURCE %s", KswordARKBugcheckDetailedSourceText(Diagnostics));
+    KswordARKBugcheckDetailedWrite(
+        Writer, 678L, 448L, KswordArkBugcheckLayoutColorWarning, 28UL,
+        "VERSION / PDB  DUMP ONLY");
+}
+
+// Windows blackbox streams are listed without claiming callback availability.
+static VOID
+KswordARKBugcheckDetailedDrawBlackbox(
+    _Inout_ KSWORD_ARK_BUGCHECK_DETAILED_WRITER* Writer
+    )
+{
+    KswordARKBugcheckDetailedWrite(
+        Writer, 960L, 323L, KswordArkBugcheckLayoutColorMuted, 32UL,
+        "BLACKBOX SNAPSHOT");
+    KswordARKBugcheckDetailedWrite(
+        Writer, 1160L, 323L, KswordArkBugcheckLayoutColorWarning, 11UL,
+        "[DUMP ONLY]");
+    KswordARKBugcheckDetailedWrite(
+        Writer, 960L, 348L, KswordArkBugcheckLayoutColorWarning, 32UL,
+        "BSD       QUERY AFTER RESTART");
+    KswordARKBugcheckDetailedWrite(
+        Writer, 960L, 364L, KswordArkBugcheckLayoutColorWarning, 32UL,
+        "NTFS      QUERY AFTER RESTART");
+    KswordARKBugcheckDetailedWrite(
+        Writer, 960L, 380L, KswordArkBugcheckLayoutColorWarning, 32UL,
+        "PNP       QUERY AFTER RESTART");
+    KswordARKBugcheckDetailedWrite(
+        Writer, 960L, 396L, KswordArkBugcheckLayoutColorWarning, 32UL,
+        "WINLOGON  QUERY AFTER RESTART");
+    KswordARKBugcheckDetailedWrite(
+        Writer, 960L, 416L, KswordArkBugcheckLayoutColorWarning, 32UL,
+        "LAST DRIVER   NOT CAPTURED");
+    KswordARKBugcheckDetailedWrite(
+        Writer, 960L, 432L, KswordArkBugcheckLayoutColorWarning, 32UL,
+        "LAST PROCESS  NOT CAPTURED");
+    KswordARKBugcheckDetailedWrite(
+        Writer, 960L, 448L, KswordArkBugcheckLayoutColorMuted, 32UL,
+        "WINDBG  !BLACKBOXBSD / NTFS / PNP");
+}
+
+// The processor panel reports only state that the callback captures safely.
+static VOID
+KswordARKBugcheckDetailedDrawCpu(
+    _Inout_ KSWORD_ARK_BUGCHECK_DETAILED_WRITER* Writer,
+    _In_ const KSWORD_ARK_BUGCHECK_DIAGNOSTICS* Diagnostics,
+    _In_ PCSTR ModuleText
+    )
+{
+    KswordARKBugcheckDetailedWrite(
+        Writer, 28L, 489L, KswordArkBugcheckLayoutColorMuted, 50UL,
+        "CPU SUMMARY");
+    KswordARKBugcheckDetailedWrite(
+        Writer, 342L, 489L, KswordArkBugcheckLayoutColorWarning, 18UL,
+        "[CRASH CPU LIVE]");
+    KswordARKBugcheckDetailedWrite(
+        Writer, 28L, 514L, KswordArkBugcheckLayoutColorMuted, 50UL,
+        "CPU  STATE       IRQL  CURRENT FUNCTION");
+    KswordARKBugcheckDetailedWrite(
+        Writer, 28L, 536L, KswordArkBugcheckLayoutColorAccent, 50UL,
+        "%02lu   BUGCHECK    %02lu    %s+0x%p",
+        Diagnostics->Cpu,
+        Diagnostics->Irql,
+        ModuleText,
+        (PVOID)Diagnostics->CandidateModuleOffset);
+    KswordARKBugcheckDetailedWrite(
+        Writer, 28L, 558L, KswordArkBugcheckLayoutColorWarning, 50UL,
+        "OTHER CPU STATES REQUIRE MEMORY.DMP");
+    KswordARKBugcheckDetailedWrite(
+        Writer, 28L, 578L, KswordArkBugcheckLayoutColorWarning, 50UL,
+        "ACTIVE CPU COUNT NOT CAPTURED AT BUGCHECK");
+    KswordARKBugcheckDetailedWrite(
+        Writer, 28L, 602L, KswordArkBugcheckLayoutColorText, 50UL,
+        "WINDBG  !PRCB / !RUNAWAY / ~* KV");
+    KswordARKBugcheckDetailedWrite(
+        Writer, 28L, 622L, KswordArkBugcheckLayoutColorMuted, 50UL,
+        "GROUP NUMBER AND PER-CPU THREADS ARE DUMP ONLY");
+    KswordARKBugcheckDetailedWrite(
+        Writer, 28L, 650L, KswordArkBugcheckLayoutColorAccent, 50UL,
+        "CAPTURED CPU / IRQL  %lu / %lu",
+        Diagnostics->Cpu,
+        Diagnostics->Irql);
+}
+
+// The dump panel presents callback state without inventing a percentage.
+static VOID
+KswordARKBugcheckDetailedDrawDump(
     _Inout_ KSWORD_ARK_BUGCHECK_DETAILED_WRITER* Writer,
     _In_ const KSWORD_ARK_BUGCHECK_DIAGNOSTICS* Diagnostics,
     _In_ ULONG CallbackMask,
     _In_ ULONG ModuleCount
     )
 {
-    ULONG callbackCount;
-
-    callbackCount = KswordARKBugcheckLayoutCallbackCount(CallbackMask);
     KswordARKBugcheckDetailedWrite(
-        Writer, 436L, 316L, KswordArkBugcheckLayoutColorAccent, 34UL,
-        "CAPTURE HEALTH");
+        Writer, 512L, 489L, KswordArkBugcheckLayoutColorMuted, 36UL,
+        "DUMP STATUS");
     KswordARKBugcheckDetailedWrite(
-        Writer,
-        436L,
-        340L,
-        callbackCount == 4UL
-            ? KswordArkBugcheckLayoutColorSuccess
-            : KswordArkBugcheckLayoutColorWarning,
-        34UL,
-        "CALLBACKS  %lu / 4 READY",
-        callbackCount);
+        Writer, 750L, 489L, KswordArkBugcheckLayoutColorAccent, 10UL,
+        "[CAPTURED]");
     KswordARKBugcheckDetailedWrite(
-        Writer, 436L, 362L, KswordArkBugcheckLayoutColorText, 34UL,
-        "CLASSIC / SECONDARY  %lu / %lu",
-        (ULONG)((CallbackMask & 0x1UL) != 0),
-        (ULONG)((CallbackMask & 0x2UL) != 0));
+        Writer, 512L, 514L, KswordArkBugcheckLayoutColorText, 36UL,
+        "TYPE      %s",
+        KswordARKBugcheckDumpTypeText(Diagnostics->LastDumpType));
     KswordARKBugcheckDetailedWrite(
-        Writer, 436L, 384L, KswordArkBugcheckLayoutColorText, 34UL,
-        "WRITE / TRIAGE      %lu / %lu",
-        (ULONG)((CallbackMask & 0x4UL) != 0),
-        (ULONG)((CallbackMask & 0x8UL) != 0));
+        Writer, 512L, 530L, KswordArkBugcheckLayoutColorAccent, 36UL,
+        "STAGE     %s",
+        KswordARKBugcheckReasonText(Diagnostics->LastReason));
     KswordARKBugcheckDetailedWrite(
-        Writer, 436L, 406L, KswordArkBugcheckLayoutColorSuccess, 34UL,
-        "MODULE CACHE  %lu READY", ModuleCount);
+        Writer, 512L, 546L, KswordArkBugcheckLayoutColorText, 36UL,
+        "OFFSET    0x%p", (PVOID)(ULONG_PTR)Diagnostics->DumpOffset);
     KswordARKBugcheckDetailedWrite(
-        Writer,
-        436L,
-        428L,
-        KswordARKBugcheckDetailedUsesSystemFont()
-            ? KswordArkBugcheckLayoutColorSuccess
-            : KswordArkBugcheckLayoutColorMuted,
-        34UL,
-        "FONT  %s",
-        KswordARKBugcheckDetailedUsesSystemFont()
-            ? "SYSTEM MONO"
-            : "BUILT-IN 8X12 FALLBACK");
+        Writer, 512L, 562L, KswordArkBugcheckLayoutColorText, 36UL,
+        "CHUNK     0x%08lX", Diagnostics->DumpBufferLength);
     KswordARKBugcheckDetailedWrite(
-        Writer, 436L, 450L, KswordArkBugcheckLayoutColorText, 34UL,
-        "CAPTURED  %s", Diagnostics->Captured != 0 ? "YES" : "NO");
+        Writer, 512L, 578L, KswordArkBugcheckLayoutColorText, 36UL,
+        "CALLBACKS 0x%02lX", CallbackMask & 0x0FUL);
+    KswordARKBugcheckDetailedWrite(
+        Writer, 512L, 594L, KswordArkBugcheckLayoutColorText, 36UL,
+        "MODULES   %lu", ModuleCount);
+    KswordARKBugcheckDetailedWrite(
+        Writer, 512L, 610L, KswordArkBugcheckLayoutColorText, 36UL,
+        "DRIVER    0x%p", g_KswordArkBugcheckState.DriverObject);
+    KswordARKBugcheckDetailedWrite(
+        Writer, 512L, 626L, KswordArkBugcheckLayoutColorText, 36UL,
+        "DEVICE    0x%p", g_KswordArkBugcheckState.DeviceObject);
+    KswordARKBugcheckDetailedWrite(
+        Writer, 512L, 646L, KswordArkBugcheckLayoutColorWarning, 36UL,
+        "PERCENT   CONTROLLED BY WINDOWS");
+    KswordARKBugcheckDetailedWrite(
+        Writer, 512L, 662L, KswordArkBugcheckLayoutColorMuted, 36UL,
+        "DO NOT POWER OFF DURING DUMP WRITING");
 }
 
+// Event metadata states clearly which identifiers only exist after reboot.
 static VOID
-KswordARKBugcheckDetailedDrawRenderPath(
+KswordARKBugcheckDetailedDrawEvent(
     _Inout_ KSWORD_ARK_BUGCHECK_DETAILED_WRITER* Writer,
     _In_ const KSWORD_ARK_BUGCHECK_DIAGNOSTICS* Diagnostics
     )
 {
     KswordARKBugcheckDetailedWrite(
-        Writer, 844L, 316L, KswordArkBugcheckLayoutColorAccent, 37UL,
-        "RENDER CONTRACT");
+        Writer, 864L, 489L, KswordArkBugcheckLayoutColorMuted, 43UL,
+        "EVENT INFO");
     KswordARKBugcheckDetailedWrite(
-        Writer, 844L, 340L, KswordArkBugcheckLayoutColorText, 37UL,
-        "RENDERER  %s",
-        Writer->Canvas->RendererName != NULL
-            ? Writer->Canvas->RendererName
-            : "UNKNOWN");
+        Writer, 1130L, 489L, KswordArkBugcheckLayoutColorWarning, 14UL,
+        "[MIXED SOURCE]");
     KswordARKBugcheckDetailedWrite(
-        Writer, 844L, 362L, KswordArkBugcheckLayoutColorText, 37UL,
-        "CANVAS  %lu X %lu X %lu BPP",
-        Writer->Canvas->Width,
-        Writer->Canvas->Height,
-        Writer->Canvas->BitsPerPixel);
-    KswordARKBugcheckDetailedWrite(
-        Writer, 844L, 384L, KswordArkBugcheckLayoutColorText, 37UL,
-        "BODY GLYPH  %lu X %lu / ADV %lu",
-        KSWORD_ARK_BUGCHECK_FONT_BODY_WIDTH,
-        KSWORD_ARK_BUGCHECK_FONT_BODY_HEIGHT,
-        KSWORD_ARK_BUGCHECK_FONT_BODY_ADVANCE);
-    KswordARKBugcheckDetailedWrite(
-        Writer, 844L, 406L, KswordArkBugcheckLayoutColorText, 37UL,
-        "HERO GLYPH  %lu X %lu / ADV %lu",
-        KSWORD_ARK_BUGCHECK_FONT_HERO_WIDTH,
-        KSWORD_ARK_BUGCHECK_FONT_HERO_HEIGHT,
-        KSWORD_ARK_BUGCHECK_FONT_HERO_ADVANCE);
-    KswordARKBugcheckDetailedWrite(
-        Writer,
-        844L,
-        428L,
-        KswordARKBugcheckDetailedUsesCustomBrand()
-            ? KswordArkBugcheckLayoutColorSuccess
-            : KswordArkBugcheckLayoutColorMuted,
-        37UL,
-        "BRAND  %s",
-        KswordARKBugcheckDetailedUsesCustomBrand()
-            ? "CUSTOM BITMAP"
-            : "BUILT-IN MARK");
-    KswordARKBugcheckDetailedWrite(
-        Writer, 844L, 450L, KswordArkBugcheckLayoutColorMuted, 37UL,
-        "PERF ID  0x%p",
+        Writer, 864L, 514L, KswordArkBugcheckLayoutColorText, 43UL,
+        "PERF COUNTER  0x%p",
         (PVOID)(ULONG_PTR)Diagnostics->PerfCounter.QuadPart);
+    KswordARKBugcheckDetailedWrite(
+        Writer, 864L, 530L, KswordArkBugcheckLayoutColorText, 43UL,
+        "BUGCHECK      0x%08lX", Diagnostics->BugCheckCode);
+    KswordARKBugcheckDetailedWrite(
+        Writer, 864L, 546L, KswordArkBugcheckLayoutColorWarning, 43UL,
+        "EVENT TIME / REPORT ID  ASSIGNED AFTER RESTART");
+    KswordARKBugcheckDetailedWrite(
+        Writer, 864L, 562L, KswordArkBugcheckLayoutColorMuted, 43UL,
+        "DUMP TARGET   MEMORY.DMP");
 }
 
+// Static recovery guidance occupies the last detailed panel.
 static VOID
-KswordARKBugcheckDetailedDrawSummary(
-    _Inout_ KSWORD_ARK_BUGCHECK_DETAILED_WRITER* Writer,
-    _In_ const KSWORD_ARK_BUGCHECK_DIAGNOSTICS* Diagnostics
-    )
-{
-    KswordARKBugcheckDetailedWrite(
-        Writer, 28L, 500L, KswordArkBugcheckLayoutColorAccent, 53UL,
-        "DIAGNOSTIC SUMMARY");
-    if (KswordARKBugcheckLayoutHasCandidate(Diagnostics)) {
-        KswordARKBugcheckDetailedWrite(
-            Writer,
-            28L,
-            524L,
-            KswordARKBugcheckLayoutAttributionColor(Diagnostics),
-            53UL,
-            "%s",
-            KswordARKBugcheckVerdictText(Diagnostics->CandidateClass));
-        KswordARKBugcheckDetailedWrite(
-            Writer, 28L, 546L, KswordArkBugcheckLayoutColorText, 53UL,
-            "CANDIDATE  %s",
-            KswordARKBugcheckDetailedModuleText(Diagnostics));
-        KswordARKBugcheckDetailedWrite(
-            Writer, 28L, 568L, KswordArkBugcheckLayoutColorText, 53UL,
-            "FAULT ADDRESS MAPS INSIDE THE CACHED MODULE RANGE.");
-        KswordARKBugcheckDetailedWrite(
-            Writer, 28L, 590L, KswordArkBugcheckLayoutColorSuccess, 53UL,
-            "CONFIDENCE  %s / SOURCE  %s",
-            KswordARKBugcheckConfidenceText(
-                Diagnostics->CandidateConfidence),
-            KswordARKBugcheckDetailedSourceText(Diagnostics));
-    } else {
-        KswordARKBugcheckDetailedWrite(
-            Writer, 28L, 524L, KswordArkBugcheckLayoutColorWarning, 53UL,
-            Diagnostics->BugCheckCode == 0x000000EF
-                ? "A CRITICAL PROCESS OR THREAD TERMINATED."
-                : "THE SYSTEM STOPPED WITHOUT A DIRECT FAULT IP.");
-        if (Diagnostics->BugCheckCode == 0x000000EF) {
-            KswordARKBugcheckDetailedWrite(
-                Writer, 28L, 546L, KswordArkBugcheckLayoutColorText, 53UL,
-                "OBJECT TYPE  %s",
-                KswordARKBugcheckLayoutCriticalObjectTypeText(
-                    Diagnostics->Parameter2));
-        } else {
-            KswordARKBugcheckDetailedWrite(
-                Writer, 28L, 546L, KswordArkBugcheckLayoutColorText, 53UL,
-                "RAW BUGCHECK PARAMETERS WERE PRESERVED.");
-        }
-        KswordARKBugcheckDetailedWrite(
-            Writer, 28L, 568L, KswordArkBugcheckLayoutColorWarning, 53UL,
-            "NO MODULE CAN BE CLAIMED FROM THE CALLBACK VALUES ALONE.");
-        KswordARKBugcheckDetailedWrite(
-            Writer, 28L, 590L, KswordArkBugcheckLayoutColorMuted, 53UL,
-            "ROOT CAUSE REQUIRES THE SAVED STACK AND SYMBOLS.");
-    }
-    KswordARKBugcheckDetailedWrite(
-        Writer, 28L, 612L, KswordArkBugcheckLayoutColorAccent, 53UL,
-        "ACTION  PRESERVE AND ANALYZE THE NEWEST CRASH DUMP.");
-    KswordARKBugcheckDetailedWrite(
-        Writer, 28L, 634L, KswordArkBugcheckLayoutColorText, 53UL,
-        "REPORT  ATTACH THIS SCREEN WITH THE CRASH DUMP.");
-    KswordARKBugcheckDetailedWrite(
-        Writer, 28L, 656L, KswordArkBugcheckLayoutColorMuted, 53UL,
-        "THE STOP CODE AND RAW ARGUMENTS REMAIN THE PRIMARY EVIDENCE.");
-}
-
-static VOID
-KswordARKBugcheckDetailedDrawNextAction(
+KswordARKBugcheckDetailedDrawHelp(
     _Inout_ KSWORD_ARK_BUGCHECK_DETAILED_WRITER* Writer
     )
 {
     KswordARKBugcheckDetailedWrite(
-        Writer, 648L, 500L, KswordArkBugcheckLayoutColorAccent, 54UL,
+        Writer, 864L, 591L, KswordArkBugcheckLayoutColorMuted, 43UL,
         "NEXT ACTION");
     KswordARKBugcheckDetailedWrite(
-        Writer, 648L, 524L, KswordArkBugcheckLayoutColorText, 54UL,
+        Writer, 1120L, 591L, KswordArkBugcheckLayoutColorAccent, 15UL,
+        "[SAFE GUIDANCE]");
+    KswordARKBugcheckDetailedWrite(
+        Writer, 864L, 614L, KswordArkBugcheckLayoutColorText, 43UL,
         "> PRESERVE THE NEWEST CRASH DUMP.");
     KswordARKBugcheckDetailedWrite(
-        Writer, 648L, 546L, KswordArkBugcheckLayoutColorText, 54UL,
-        "> PHOTOGRAPH THE STOP CODE AND RAW PARAMETERS.");
+        Writer, 864L, 630L, KswordArkBugcheckLayoutColorText, 43UL,
+        "> AFTER RESTART ATTACH THIS SCREEN AND MEMORY.DMP.");
     KswordARKBugcheckDetailedWrite(
-        Writer, 648L, 568L, KswordArkBugcheckLayoutColorAccent, 54UL,
-        "> ANALYZE THE DUMP IN KSWORDARK OR WINDBG.");
+        Writer, 864L, 646L, KswordArkBugcheckLayoutColorText, 43UL,
+        "> RESOLVE AMBER FIELDS WITH WINDBG OR KSWORDARK.");
     KswordARKBugcheckDetailedWrite(
-        Writer, 648L, 590L, KswordArkBugcheckLayoutColorText, 54UL,
-        "> REVIEW RECENT DRIVER OR HARDWARE CHANGES.");
-    KswordARKBugcheckDetailedWrite(
-        Writer, 648L, 612L, KswordArkBugcheckLayoutColorWarning, 54UL,
+        Writer, 864L, 662L, KswordArkBugcheckLayoutColorWarning, 43UL,
         "> DO NOT POWER OFF WHILE WINDOWS WRITES THE DUMP.");
-    KswordARKBugcheckDetailedWrite(
-        Writer, 648L, 634L, KswordArkBugcheckLayoutColorText, 54UL,
-        "> IF REPRODUCIBLE, ATTACH THIS SCREEN AND THE DUMP.");
-    KswordARKBugcheckDetailedWrite(
-        Writer, 648L, 656L, KswordArkBugcheckLayoutColorMuted, 54UL,
-        "WINDOWS CONTROLS THE FINAL RESTART.");
 }
 
+// The public entry renders the complete 1280x720 information architecture.
 NTSTATUS
 KswordARKBugcheckLayoutDrawDetailed(
     _In_ const KSWORD_ARK_BUGCHECK_LAYOUT_CANVAS* Canvas,
@@ -732,6 +614,7 @@ KswordARKBugcheckLayoutDrawDetailed(
     )
 {
     KSWORD_ARK_BUGCHECK_DETAILED_WRITER writer;
+    PCSTR moduleText;
 
     if (Canvas == NULL || Diagnostics == NULL ||
         Canvas->DrawText == NULL || Canvas->DrawFrame == NULL ||
@@ -746,45 +629,50 @@ KswordARKBugcheckLayoutDrawDetailed(
         Canvas->Width,
         Canvas->Height);
     writer.Status = STATUS_SUCCESS;
+    moduleText = KswordARKBugcheckDetailedModuleText(Diagnostics);
 
+    // Every frame uses resources created at PASSIVE_LEVEL before the failure.
     KswordARKBugcheckDetailedFrame(
-        &writer, 16L, 106L, KswordArkBugcheckLayoutFrameDetailedTopLeft);
+        &writer, 16L, 100L, KswordArkBugcheckLayoutFrameDetailedTopLeft);
     KswordARKBugcheckDetailedFrame(
-        &writer, 424L, 106L, KswordArkBugcheckLayoutFrameDetailedTopMiddle);
+        &writer, 492L, 100L, KswordArkBugcheckLayoutFrameDetailedTopMiddle);
     KswordARKBugcheckDetailedFrame(
-        &writer, 832L, 106L, KswordArkBugcheckLayoutFrameDetailedTopRight);
+        &writer, 848L, 100L, KswordArkBugcheckLayoutFrameDetailedTopRight);
     KswordARKBugcheckDetailedFrame(
-        &writer, 16L, 304L, KswordArkBugcheckLayoutFrameDetailedMiddleLeft);
+        &writer, 16L, 311L, KswordArkBugcheckLayoutFrameDetailedMiddleThread);
     KswordARKBugcheckDetailedFrame(
-        &writer, 424L, 304L, KswordArkBugcheckLayoutFrameDetailedMiddleMiddle);
+        &writer, 334L, 311L, KswordArkBugcheckLayoutFrameDetailedMiddleStack);
     KswordARKBugcheckDetailedFrame(
-        &writer, 832L, 304L, KswordArkBugcheckLayoutFrameDetailedMiddleRight);
+        &writer, 666L, 311L, KswordArkBugcheckLayoutFrameDetailedMiddleModule);
     KswordARKBugcheckDetailedFrame(
-        &writer, 16L, 488L, KswordArkBugcheckLayoutFrameDetailedBottomLeft);
+        &writer, 948L, 311L, KswordArkBugcheckLayoutFrameDetailedMiddleBlackbox);
     KswordARKBugcheckDetailedFrame(
-        &writer, 636L, 488L, KswordArkBugcheckLayoutFrameDetailedBottomRight);
+        &writer, 16L, 477L, KswordArkBugcheckLayoutFrameDetailedBottomCpu);
+    KswordARKBugcheckDetailedFrame(
+        &writer, 500L, 477L, KswordArkBugcheckLayoutFrameDetailedBottomDump);
+    KswordARKBugcheckDetailedFrame(
+        &writer, 852L, 477L, KswordArkBugcheckLayoutFrameDetailedBottomEvent);
+    KswordARKBugcheckDetailedFrame(
+        &writer, 852L, 579L, KswordArkBugcheckLayoutFrameDetailedBottomHelp);
 
-    KswordARKBugcheckDetailedDrawHeader(&writer, Diagnostics);
-    KswordARKBugcheckDetailedDrawParameters(&writer, Diagnostics);
-    KswordARKBugcheckDetailedDrawFaultEvidence(&writer, Diagnostics);
-    KswordARKBugcheckDetailedDrawAttribution(
-        &writer,
-        Diagnostics,
-        ModuleCount);
-    KswordARKBugcheckDetailedDrawModuleEvidence(
-        &writer,
-        Diagnostics,
-        ModuleCount);
-    KswordARKBugcheckDetailedDrawCaptureHealth(
+    KswordARKBugcheckDetailedDrawHeader(&writer, Diagnostics, CallbackMask);
+    KswordARKBugcheckDetailedDrawBugcheck(&writer, Diagnostics);
+    KswordARKBugcheckDetailedDrawFaultContext(&writer, Diagnostics);
+    KswordARKBugcheckDetailedDrawInstruction(&writer, Diagnostics);
+    KswordARKBugcheckDetailedDrawThread(&writer, Diagnostics);
+    KswordARKBugcheckDetailedDrawStack(&writer);
+    KswordARKBugcheckDetailedDrawModule(&writer, Diagnostics);
+    KswordARKBugcheckDetailedDrawBlackbox(&writer);
+    KswordARKBugcheckDetailedDrawCpu(&writer, Diagnostics, moduleText);
+    KswordARKBugcheckDetailedDrawDump(
         &writer,
         Diagnostics,
         CallbackMask,
         ModuleCount);
-    KswordARKBugcheckDetailedDrawRenderPath(&writer, Diagnostics);
-    KswordARKBugcheckDetailedDrawSummary(&writer, Diagnostics);
-    KswordARKBugcheckDetailedDrawNextAction(&writer);
+    KswordARKBugcheckDetailedDrawEvent(&writer, Diagnostics);
+    KswordARKBugcheckDetailedDrawHelp(&writer);
     KswordARKBugcheckDetailedWrite(
-        &writer, 16L, 700L, KswordArkBugcheckLayoutColorWarning, 90UL,
-        "WAITING FOR WINDOWS TO COMPLETE THE CRASH DUMP. DO NOT POWER OFF.");
+        &writer, 16L, 700L, KswordArkBugcheckLayoutColorMuted, 72UL,
+        "BLUE=CAPTURED  AMBER=DUMP ONLY  WAITING FOR WINDOWS DUMP COMPLETION");
     return writer.Status;
 }

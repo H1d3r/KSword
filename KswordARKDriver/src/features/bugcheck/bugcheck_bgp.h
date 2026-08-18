@@ -122,6 +122,19 @@ KswordARKBugcheckBgpParseBitmap(
     _Out_ PVOID* Rectangle
     );
 
+// Runtime verdict resources arrive after the panel has been armed.  This gate
+// keeps the private bitmap parser and the bugcheck drawing path mutually
+// exclusive without making the crash callback wait on a pageable lock.
+NTSTATUS
+KswordARKBugcheckBgpBeginResourceUpdate(
+    VOID
+    );
+
+VOID
+KswordARKBugcheckBgpEndResourceUpdate(
+    VOID
+    );
+
 VOID
 KswordARKBugcheckBgpDestroyRectangle(
     _In_opt_ PVOID Rectangle
@@ -131,13 +144,6 @@ NTSTATUS
 KswordARKBugcheckBgpArm(
     _In_ ULONG RequiredWidth,
     _In_ ULONG RequiredHeight
-    );
-
-// Return an armed but not-yet-used renderer to PASSIVE_LEVEL preparation.
-// Callers must first block all panel readers; a live crash draw is never reset.
-NTSTATUS
-KswordARKBugcheckBgpBeginPanelUpdate(
-    VOID
     );
 
 VOID

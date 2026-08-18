@@ -12,3 +12,11 @@ KswordARKBugcheckDecodePrimaryAddress(
     _Out_ PULONG ParameterIndex,
     _Out_ PULONG Confidence
     );
+
+// Return the documented semantic role of one raw stop-code parameter.  The
+// returned labels are deliberately short enough for the crash-safe panel.
+PCSTR
+KswordARKBugcheckDecodeParameterRole(
+    _In_ const KSWORD_ARK_BUGCHECK_DIAGNOSTICS* Diagnostics,
+    _In_ ULONG ParameterIndex
+    );

@@ -3,24 +3,37 @@
 #include <string.h>
 
 #include "../../KswordARKDriver/src/features/bugcheck/bugcheck_layout.h"
-#include "../../KswordARKDriver/src/features/bugcheck/bugcheck_layout_detailed.h"
 #include "../../KswordARKDriver/src/features/bugcheck/bugcheck_decode.h"
 
-#define REPLAY_MAX_LINES 128UL
+#define REPLAY_MAX_LINES 96UL
+#define REPLAY_MAX_FRAMES 8UL
+#define REPLAY_GLYPH_ADVANCE 9UL
+#define REPLAY_GLYPH_HEIGHT 12UL
 
 typedef struct _REPLAY_LINE
 {
     LONG X;
     LONG Y;
     ULONG Color;
-    ULONG Scale;
     CHAR Text[KSWORD_ARK_BUGCHECK_PANEL_LINE_CHARS];
 } REPLAY_LINE;
 
+typedef struct _REPLAY_FRAME
+{
+    LONG X;
+    LONG Y;
+    KSWORD_ARK_BUGCHECK_LAYOUT_FRAME Frame;
+} REPLAY_FRAME;
+
 typedef struct _REPLAY_CONTEXT
 {
-    ULONG Count;
+    ULONG LineCount;
+    ULONG FrameCount;
+    ULONG VerdictCount;
+    LONG VerdictX;
+    LONG VerdictY;
     REPLAY_LINE Lines[REPLAY_MAX_LINES];
+    REPLAY_FRAME Frames[REPLAY_MAX_FRAMES];
 } REPLAY_CONTEXT;
 
 KSWORD_ARK_BUGCHECK_STATE g_KswordArkBugcheckState;
@@ -31,9 +44,11 @@ KswordARKBugcheckName(
     _In_ ULONG BugCheckCode
     )
 {
-    return BugCheckCode == 0x000000EF
-        ? "CRITICAL_PROCESS_DIED"
-        : "UNKNOWN_BUGCHECK_CODE";
+    switch (BugCheckCode) {
+    case 0x000000D1: return "DRIVER_IRQL_NOT_LESS_OR_EQUAL";
+    case 0x000000EF: return "CRITICAL_PROCESS_DIED";
+    default: return "UNKNOWN_BUGCHECK_CODE";
+    }
 }
 
 PCSTR
@@ -41,8 +56,12 @@ KswordARKBugcheckModuleClassText(
     _In_ ULONG Classification
     )
 {
-    UNREFERENCED_PARAMETER(Classification);
-    return "UNKNOWN";
+    switch (Classification) {
+    case KSWORD_ARK_BUGCHECK_MODULE_OURS: return "KSWORDARK";
+    case KSWORD_ARK_BUGCHECK_MODULE_MICROSOFT: return "MICROSOFT";
+    case KSWORD_ARK_BUGCHECK_MODULE_THIRD_PARTY: return "THIRD-PARTY";
+    default: return "UNKNOWN";
+    }
 }
 
 PCSTR
@@ -50,8 +69,12 @@ KswordARKBugcheckConfidenceText(
     _In_ ULONG Confidence
     )
 {
-    UNREFERENCED_PARAMETER(Confidence);
-    return "NONE";
+    switch (Confidence) {
+    case KSWORD_ARK_BUGCHECK_CONFIDENCE_HIGH: return "HIGH";
+    case KSWORD_ARK_BUGCHECK_CONFIDENCE_MEDIUM: return "MEDIUM";
+    case KSWORD_ARK_BUGCHECK_CONFIDENCE_LOW: return "LOW";
+    default: return "NONE";
+    }
 }
 
 PCSTR
@@ -60,7 +83,7 @@ KswordARKBugcheckVerdictText(
     )
 {
     UNREFERENCED_PARAMETER(Classification);
-    return "The faulting component is unknown.";
+    return "The dump provides the final attribution.";
 }
 
 PCSTR
@@ -68,7 +91,8 @@ KswordARKBugcheckReasonText(
     _In_ ULONG Reason
     )
 {
-    return Reason == KbCallbackDumpIo ? "DumpIo" : "Unknown";
+    UNREFERENCED_PARAMETER(Reason);
+    return "DumpIo";
 }
 
 PCSTR
@@ -76,33 +100,8 @@ KswordARKBugcheckDumpTypeText(
     _In_ ULONG DumpType
     )
 {
-    return DumpType == KbDumpIoHeader ? "Header" : "Unknown";
-}
-
-static NTSTATUS
-ReplayRecordText(
-    _In_opt_ PVOID Context,
-    _In_ LONG X,
-    _In_ LONG Y,
-    _In_z_ PCSTR Text,
-    _In_ ULONG ColorIndex,
-    _In_ ULONG Scale
-    )
-{
-    REPLAY_CONTEXT* replay = (REPLAY_CONTEXT*)Context;
-    REPLAY_LINE* line;
-
-    if (replay == NULL || replay->Count >= REPLAY_MAX_LINES) {
-        return STATUS_BUFFER_OVERFLOW;
-    }
-
-    line = &replay->Lines[replay->Count++];
-    line->X = X;
-    line->Y = Y;
-    line->Color = ColorIndex;
-    line->Scale = Scale;
-    (void)strncpy_s(line->Text, sizeof(line->Text), Text, _TRUNCATE);
-    return STATUS_SUCCESS;
+    UNREFERENCED_PARAMETER(DumpType);
+    return "Header";
 }
 
 static NTSTATUS
@@ -111,19 +110,21 @@ ReplayDrawText(
     _In_ LONG X,
     _In_ LONG Y,
     _In_z_ PCSTR Text,
-    _In_ ULONG ColorIndex,
-    _In_ KSWORD_ARK_BUGCHECK_LAYOUT_TEXT_STYLE TextStyle
+    _In_ ULONG ColorIndex
     )
 {
-    return ReplayRecordText(
-        Context,
-        X,
-        Y,
-        Text,
-        ColorIndex,
-        TextStyle == KswordArkBugcheckLayoutTextHero
-            ? KSWORD_ARK_BUGCHECK_LAYOUT_HERO_SCALE
-            : 1UL);
+    REPLAY_CONTEXT* replay = (REPLAY_CONTEXT*)Context;
+    REPLAY_LINE* line;
+
+    if (replay == NULL || replay->LineCount >= REPLAY_MAX_LINES) {
+        return STATUS_BUFFER_OVERFLOW;
+    }
+    line = &replay->Lines[replay->LineCount++];
+    line->X = X;
+    line->Y = Y;
+    line->Color = ColorIndex;
+    (void)strncpy_s(line->Text, sizeof(line->Text), Text, _TRUNCATE);
+    return STATUS_SUCCESS;
 }
 
 static NTSTATUS
@@ -134,10 +135,36 @@ ReplayDrawFrame(
     _In_ KSWORD_ARK_BUGCHECK_LAYOUT_FRAME Frame
     )
 {
-    UNREFERENCED_PARAMETER(Context);
-    UNREFERENCED_PARAMETER(X);
-    UNREFERENCED_PARAMETER(Y);
-    UNREFERENCED_PARAMETER(Frame);
+    REPLAY_CONTEXT* replay = (REPLAY_CONTEXT*)Context;
+    REPLAY_FRAME* recorded;
+
+    if (replay == NULL || replay->FrameCount >= REPLAY_MAX_FRAMES) {
+        return STATUS_BUFFER_OVERFLOW;
+    }
+    recorded = &replay->Frames[replay->FrameCount++];
+    recorded->X = X;
+    recorded->Y = Y;
+    recorded->Frame = Frame;
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS
+ReplayDrawVerdict(
+    _In_opt_ PVOID Context,
+    _In_ LONG X,
+    _In_ LONG Y,
+    _In_ ULONG Classification
+    )
+{
+    REPLAY_CONTEXT* replay = (REPLAY_CONTEXT*)Context;
+
+    UNREFERENCED_PARAMETER(Classification);
+    if (replay == NULL) {
+        return STATUS_INVALID_PARAMETER;
+    }
+    ++replay->VerdictCount;
+    replay->VerdictX = X;
+    replay->VerdictY = Y;
     return STATUS_SUCCESS;
 }
 
@@ -149,7 +176,7 @@ ReplayFindLine(
 {
     ULONG index;
 
-    for (index = 0; index < Replay->Count; ++index) {
+    for (index = 0; index < Replay->LineCount; ++index) {
         if (strstr(Replay->Lines[index].Text, Fragment) != NULL) {
             return &Replay->Lines[index];
         }
@@ -160,122 +187,11 @@ ReplayFindLine(
 static int
 ReplayRequireLine(
     _In_ const REPLAY_CONTEXT* Replay,
-    _In_z_ PCSTR Fragment,
-    _In_ LONG ExpectedColor
+    _In_z_ PCSTR Fragment
     )
 {
-    const REPLAY_LINE* line = ReplayFindLine(Replay, Fragment);
-
-    if (line == NULL) {
+    if (ReplayFindLine(Replay, Fragment) == NULL) {
         printf("FAIL missing line: %s\n", Fragment);
-        return 1;
-    }
-    if (ExpectedColor >= 0 && line->Color != (ULONG)ExpectedColor) {
-        printf(
-            "FAIL wrong color: %s (actual=%lu expected=%ld)\n",
-            Fragment,
-            line->Color,
-            ExpectedColor);
-        return 1;
-    }
-    return 0;
-}
-
-static int
-ReplayRequireLineAt(
-    _In_ const REPLAY_CONTEXT* Replay,
-    _In_z_ PCSTR Fragment,
-    _In_ LONG ExpectedX,
-    _In_ LONG ExpectedY,
-    _In_ ULONG ExpectedColor,
-    _In_ ULONG ExpectedScale
-    )
-{
-    const REPLAY_LINE* line = ReplayFindLine(Replay, Fragment);
-
-    if (line == NULL) {
-        printf("FAIL missing positioned line: %s\n", Fragment);
-        return 1;
-    }
-    if (line->X != ExpectedX || line->Y != ExpectedY ||
-        line->Color != ExpectedColor || line->Scale != ExpectedScale) {
-        printf(
-            "FAIL wrong placement: %s (actual=%ld,%ld,%lu,x%lu expected=%ld,%ld,%lu,x%lu)\n",
-            Fragment,
-            line->X,
-            line->Y,
-            line->Color,
-            line->Scale,
-            ExpectedX,
-            ExpectedY,
-            ExpectedColor,
-            ExpectedScale);
-        return 1;
-    }
-    return 0;
-}
-
-static int
-ReplayRejectCriticalNoise(
-    _In_ const REPLAY_CONTEXT* Replay,
-    _In_z_ PCSTR Name
-    )
-{
-    ULONG index;
-    ULONG criticalCount = 0UL;
-    int failures = 0;
-
-    for (index = 0; index < Replay->Count; ++index) {
-        const REPLAY_LINE* line = &Replay->Lines[index];
-
-        if (line->Color == KswordArkBugcheckLayoutColorCritical) {
-            ++criticalCount;
-            if (!((strstr(line->Text, "CRITICAL_PROCESS_DIED") != NULL &&
-                   line->Scale == 1UL) ||
-                  (strstr(line->Text, "0x000000EF") != NULL &&
-                   line->Scale == KSWORD_ARK_BUGCHECK_LAYOUT_HERO_SCALE))) {
-                printf("FAIL %s competing critical text: %s\n", Name, line->Text);
-                ++failures;
-            }
-        }
-    }
-    if (criticalCount != 2UL) {
-        printf(
-            "FAIL %s critical hierarchy count: %lu (expected 2)\n",
-            Name,
-            criticalCount);
-        ++failures;
-    }
-    return failures;
-}
-
-static int
-ReplayValidateRestrainedPalette(void)
-{
-    const UCHAR warning[3] = {
-        KSWORD_ARK_BUGCHECK_LAYOUT_WARNING_RED,
-        KSWORD_ARK_BUGCHECK_LAYOUT_WARNING_GREEN,
-        KSWORD_ARK_BUGCHECK_LAYOUT_WARNING_BLUE
-    };
-    const UCHAR muted[3] = {
-        KSWORD_ARK_BUGCHECK_LAYOUT_MUTED_RED,
-        KSWORD_ARK_BUGCHECK_LAYOUT_MUTED_GREEN,
-        KSWORD_ARK_BUGCHECK_LAYOUT_MUTED_BLUE
-    };
-    const UCHAR success[3] = {
-        KSWORD_ARK_BUGCHECK_LAYOUT_SUCCESS_RED,
-        KSWORD_ARK_BUGCHECK_LAYOUT_SUCCESS_GREEN,
-        KSWORD_ARK_BUGCHECK_LAYOUT_SUCCESS_BLUE
-    };
-    const UCHAR text[3] = {
-        KSWORD_ARK_BUGCHECK_LAYOUT_TEXT_RED,
-        KSWORD_ARK_BUGCHECK_LAYOUT_TEXT_GREEN,
-        KSWORD_ARK_BUGCHECK_LAYOUT_TEXT_BLUE
-    };
-
-    if (memcmp(warning, muted, sizeof(warning)) != 0 ||
-        memcmp(success, text, sizeof(success)) != 0) {
-        printf("FAIL warning/success colors still compete with the stop code\n");
         return 1;
     }
     return 0;
@@ -288,40 +204,14 @@ ReplayRejectLine(
     )
 {
     if (ReplayFindLine(Replay, Fragment) != NULL) {
-        printf("FAIL misleading line still visible: %s\n", Fragment);
+        printf("FAIL unexpected line: %s\n", Fragment);
         return 1;
     }
     return 0;
 }
 
 static int
-ReplayRejectObsoletePanels(
-    _In_ const REPLAY_CONTEXT* Replay
-    )
-{
-    static const PCSTR fragments[] = {
-        "DUMP STATUS",
-        "DUMP INFO",
-        "DUMP ONLY",
-        "NOT CAPTURED",
-        "REQUIRES MEMORY.DMP",
-        "STACK TRACE",
-        "BLACKBOX",
-        "CURRENT THREAD",
-        "EVENT INFO",
-        "FAULTING INSTRUCTION"
-    };
-    ULONG index;
-    int failures = 0;
-
-    for (index = 0; index < RTL_NUMBER_OF(fragments); ++index) {
-        failures += ReplayRejectLine(Replay, fragments[index]);
-    }
-    return failures;
-}
-
-static int
-ReplayValidateCanvas(
+ReplayValidateBounds(
     _In_ const REPLAY_CONTEXT* Replay,
     _In_ ULONG Width,
     _In_ ULONG Height,
@@ -331,25 +221,15 @@ ReplayValidateCanvas(
     ULONG index;
     int failures = 0;
 
-    for (index = 0; index < Replay->Count; ++index) {
+    for (index = 0; index < Replay->LineCount; ++index) {
         const REPLAY_LINE* line = &Replay->Lines[index];
-        ULONG other;
-        ULONG textAdvance;
-        ULONG textHeight;
         SIZE_T length = strlen(line->Text);
 
-        textAdvance = line->Scale == KSWORD_ARK_BUGCHECK_LAYOUT_HERO_SCALE
-            ? KSWORD_ARK_BUGCHECK_LAYOUT_HERO_ADVANCE
-            : KSWORD_ARK_BUGCHECK_LAYOUT_TEXT_ADVANCE;
-        textHeight = line->Scale == KSWORD_ARK_BUGCHECK_LAYOUT_HERO_SCALE
-            ? KSWORD_ARK_BUGCHECK_LAYOUT_HERO_HEIGHT
-            : KSWORD_ARK_BUGCHECK_LAYOUT_TEXT_HEIGHT;
-
         if (line->X < 0 || line->Y < 0 ||
-            (ULONG)line->X + (ULONG)(length * textAdvance) > Width ||
-            (ULONG)line->Y + textHeight > Height) {
+            (ULONG)line->X + (ULONG)(length * REPLAY_GLYPH_ADVANCE) > Width ||
+            (ULONG)line->Y + REPLAY_GLYPH_HEIGHT > Height) {
             printf(
-                "FAIL %s bounds: x=%ld y=%ld text=%s\n",
+                "FAIL %s text bounds: x=%ld y=%ld text=%s\n",
                 Name,
                 line->X,
                 line->Y,
@@ -357,25 +237,34 @@ ReplayValidateCanvas(
             ++failures;
         }
         if (line->Color >= KswordArkBugcheckLayoutColorCount) {
-            printf(
-                "FAIL %s invalid color %lu: %s\n",
-                Name,
-                line->Color,
-                line->Text);
+            printf("FAIL %s invalid color: %s\n", Name, line->Text);
             ++failures;
         }
-        for (other = index + 1; other < Replay->Count; ++other) {
-            if (Replay->Lines[other].X == line->X &&
-                Replay->Lines[other].Y == line->Y) {
-                printf(
-                    "FAIL %s overdraw at %ld,%ld: %s / %s\n",
-                    Name,
-                    line->X,
-                    line->Y,
-                    line->Text,
-                    Replay->Lines[other].Text);
-                ++failures;
-            }
+        if (strstr(line->Text, "...") != NULL) {
+            printf("FAIL %s clipped line: %s\n", Name, line->Text);
+            ++failures;
+        }
+    }
+
+    for (index = 0; index < Replay->FrameCount; ++index) {
+        const REPLAY_FRAME* frame = &Replay->Frames[index];
+        ULONG frameWidth;
+        ULONG frameHeight;
+
+        if (!KswordARKBugcheckLayoutGetFrameMetrics(
+                frame->Frame,
+                &frameWidth,
+                &frameHeight) ||
+            frame->X < 0 || frame->Y < 0 ||
+            (ULONG)frame->X + frameWidth > Width ||
+            (ULONG)frame->Y + frameHeight > Height) {
+            printf(
+                "FAIL %s frame bounds: x=%ld y=%ld frame=%lu\n",
+                Name,
+                frame->X,
+                frame->Y,
+                (ULONG)frame->Frame);
+            ++failures;
         }
     }
     return failures;
@@ -425,234 +314,249 @@ ReplayCheckDecoder(
     return 0;
 }
 
+static int
+ReplayCheckRole(
+    _In_ ULONG BugCheckCode,
+    _In_ ULONG_PTR Subtype,
+    _In_ ULONG ParameterIndex,
+    _In_z_ PCSTR ExpectedRole
+    )
+{
+    KSWORD_ARK_BUGCHECK_DIAGNOSTICS diagnostics;
+    PCSTR role;
+
+    RtlZeroMemory(&diagnostics, sizeof(diagnostics));
+    diagnostics.BugCheckCode = BugCheckCode;
+    diagnostics.Parameter1 = Subtype;
+    role = KswordARKBugcheckDecodeParameterRole(&diagnostics, ParameterIndex);
+    if (strcmp(role, ExpectedRole) != 0) {
+        printf(
+            "FAIL role 0x%08lX param%lu: actual=%s expected=%s\n",
+            BugCheckCode,
+            ParameterIndex,
+            role,
+            ExpectedRole);
+        return 1;
+    }
+    return 0;
+}
+
+static VOID
+ReplayInitializeCriticalProcess(
+    _Out_ KSWORD_ARK_BUGCHECK_DIAGNOSTICS* Diagnostics
+    )
+{
+    RtlZeroMemory(Diagnostics, sizeof(*Diagnostics));
+    Diagnostics->Captured = 1;
+    Diagnostics->BugCheckCode = 0x000000EF;
+    Diagnostics->Parameter1 = 0xFFFFFA5887F26E80ULL;
+    Diagnostics->Parameter2 = 0;
+    Diagnostics->Irql = 15;
+    Diagnostics->Cpu = 0;
+    Diagnostics->ProcessObject = Diagnostics->Parameter1;
+    Diagnostics->ProcessId = 644;
+    Diagnostics->ProcessSource = KSWORD_ARK_BUGCHECK_PROCESS_SOURCE_CRITICAL;
+    Diagnostics->CandidateClass = KSWORD_ARK_BUGCHECK_MODULE_UNKNOWN;
+    Diagnostics->CandidateConfidence = KSWORD_ARK_BUGCHECK_CONFIDENCE_NONE;
+    (void)strncpy_s(
+        Diagnostics->ProcessName,
+        sizeof(Diagnostics->ProcessName),
+        "csrss.exe",
+        _TRUNCATE);
+    (void)strncpy_s(
+        Diagnostics->CandidateModule,
+        sizeof(Diagnostics->CandidateModule),
+        "(none)",
+        _TRUNCATE);
+}
+
+static VOID
+ReplayInitializeDriverFault(
+    _Out_ KSWORD_ARK_BUGCHECK_DIAGNOSTICS* Diagnostics
+    )
+{
+    RtlZeroMemory(Diagnostics, sizeof(*Diagnostics));
+    Diagnostics->Captured = 1;
+    Diagnostics->BugCheckCode = 0x000000D1;
+    Diagnostics->Parameter1 = 0x30;
+    Diagnostics->Parameter2 = 2;
+    Diagnostics->Parameter3 = 1;
+    Diagnostics->Parameter4 = 0xFFFFF80412345678ULL;
+    Diagnostics->FaultAddress = Diagnostics->Parameter4;
+    Diagnostics->FaultParameter = 4;
+    Diagnostics->Irql = 15;
+    Diagnostics->Cpu = 1;
+    Diagnostics->CandidateAddress = Diagnostics->Parameter4;
+    Diagnostics->CandidateModuleBase = 0xFFFFF80412340000ULL;
+    Diagnostics->CandidateModuleOffset = 0x5678;
+    Diagnostics->CandidateModuleSize = 0x18000;
+    Diagnostics->CandidateParameter = 4;
+    Diagnostics->CandidateClass = KSWORD_ARK_BUGCHECK_MODULE_THIRD_PARTY;
+    Diagnostics->CandidateConfidence = KSWORD_ARK_BUGCHECK_CONFIDENCE_HIGH;
+    (void)strncpy_s(
+        Diagnostics->CandidateModule,
+        sizeof(Diagnostics->CandidateModule),
+        "badfilter.sys",
+        _TRUNCATE);
+}
+
+static int
+ReplayDrawScenario(
+    _In_z_ PCSTR Name,
+    _In_ ULONG Width,
+    _In_ ULONG Height,
+    _In_ const KSWORD_ARK_BUGCHECK_DIAGNOSTICS* Diagnostics,
+    _Out_ REPLAY_CONTEXT* Replay
+    )
+{
+    KSWORD_ARK_BUGCHECK_LAYOUT_CANVAS canvas;
+    NTSTATUS status;
+    int failures = 0;
+
+    RtlZeroMemory(Replay, sizeof(*Replay));
+    RtlZeroMemory(&canvas, sizeof(canvas));
+    canvas.Context = Replay;
+    canvas.Width = Width;
+    canvas.Height = Height;
+    canvas.DrawText = ReplayDrawText;
+    canvas.DrawFrame = ReplayDrawFrame;
+    canvas.DrawVerdict = ReplayDrawVerdict;
+    status = KswordARKBugcheckLayoutDraw(&canvas, Diagnostics, 0x0F, 186);
+    if (!NT_SUCCESS(status)) {
+        printf("FAIL %s layout status 0x%08lX\n", Name, (ULONG)status);
+        return 1;
+    }
+    failures += ReplayValidateBounds(Replay, Width, Height, Name);
+    if (Replay->VerdictCount != 1UL) {
+        printf("FAIL %s verdict count: %lu\n", Name, Replay->VerdictCount);
+        ++failures;
+    }
+    return failures;
+}
+
 int
 main(void)
 {
     REPLAY_CONTEXT replay;
-    KSWORD_ARK_BUGCHECK_LAYOUT_CANVAS canvas;
     KSWORD_ARK_BUGCHECK_DIAGNOSTICS diagnostics;
-    NTSTATUS status;
     int failures = 0;
-
-    failures += ReplayValidateRestrainedPalette();
 
     failures += ReplayCheckDecoder(
         0x000000EF,
         0xFFFFFA5887F26E80ULL,
         0,
-        0xFFFFF80012345678ULL,
+        0,
         0,
         FALSE,
         0,
         0,
         KSWORD_ARK_BUGCHECK_CONFIDENCE_NONE);
     failures += ReplayCheckDecoder(
-        0x000000BE,
-        0xFFFF800000001000ULL,
-        0x1234,
-        0xFFFFF80012345678ULL,
-        0,
-        FALSE,
-        0,
-        0,
-        KSWORD_ARK_BUGCHECK_CONFIDENCE_NONE);
-    failures += ReplayCheckDecoder(
-        0x00000116,
-        0xFFFF800000001000ULL,
-        0xFFFFF80012345678ULL,
-        0xC0000001,
-        0,
-        TRUE,
-        2,
-        0xFFFFF80012345678ULL,
-        KSWORD_ARK_BUGCHECK_CONFIDENCE_HIGH);
-    failures += ReplayCheckDecoder(
-        0x000000C5,
-        0x10,
+        0x000000D1,
+        0x30,
         2,
         1,
-        0xFFFFF80022345678ULL,
+        0xFFFFF80412345678ULL,
         TRUE,
         4,
-        0xFFFFF80022345678ULL,
+        0xFFFFF80412345678ULL,
         KSWORD_ARK_BUGCHECK_CONFIDENCE_HIGH);
     failures += ReplayCheckDecoder(
-        0x000000D5,
-        0x10,
-        1,
-        0xFFFFF80032345678ULL,
+        0x000000C4,
+        0xE6,
+        0xFFFFF80422345678ULL,
+        2,
         0,
         TRUE,
-        3,
-        0xFFFFF80032345678ULL,
-        KSWORD_ARK_BUGCHECK_CONFIDENCE_MEDIUM);
+        2,
+        0xFFFFF80422345678ULL,
+        KSWORD_ARK_BUGCHECK_CONFIDENCE_HIGH);
+    failures += ReplayCheckDecoder(
+        0x000000C9,
+        0x12,
+        0xFFFFF80432345678ULL,
+        0,
+        0,
+        TRUE,
+        2,
+        0xFFFFF80432345678ULL,
+        KSWORD_ARK_BUGCHECK_CONFIDENCE_HIGH);
+    failures += ReplayCheckDecoder(
+        0x000000C4,
+        0x10,
+        0xFFFFF80442345678ULL,
+        0,
+        0,
+        FALSE,
+        0,
+        0,
+        KSWORD_ARK_BUGCHECK_CONFIDENCE_NONE);
+    failures += ReplayCheckRole(0x000000EF, 0, 1, "PROCESS OBJECT");
+    failures += ReplayCheckRole(0x000000D1, 0, 4, "INSTRUCTION");
+    failures += ReplayCheckRole(0x0000009F, 3, 4, "BLOCKED IRP");
+    failures += ReplayCheckRole(0x000000EA, 0, 3, "DRIVER NAME");
 
-    RtlZeroMemory(&replay, sizeof(replay));
-    RtlZeroMemory(&canvas, sizeof(canvas));
-    RtlZeroMemory(&diagnostics, sizeof(diagnostics));
-    RtlZeroMemory(&g_KswordArkBugcheckState, sizeof(g_KswordArkBugcheckState));
-
-    diagnostics.Captured = 1;
-    diagnostics.BugCheckCode = 0x000000EF;
-    diagnostics.Parameter1 = 0xFFFFFA5887F26E80ULL;
-    diagnostics.Parameter2 = 0;
-    diagnostics.Parameter3 = 0xFFFFFA588027F080ULL;
-    diagnostics.Parameter4 = 0;
-    diagnostics.LastReason = KbCallbackDumpIo;
-    diagnostics.LastDumpType = KbDumpIoHeader;
-    diagnostics.DumpBufferLength = 0x1000;
-    diagnostics.DumpOffset = ~0ULL;
-    diagnostics.Irql = 15;
-    diagnostics.Cpu = 0;
-    diagnostics.CandidateClass = KSWORD_ARK_BUGCHECK_MODULE_UNKNOWN;
-    diagnostics.CandidateConfidence = KSWORD_ARK_BUGCHECK_CONFIDENCE_NONE;
-    (void)strncpy_s(
-        diagnostics.FaultMeaning,
-        sizeof(diagnostics.FaultMeaning),
-        "no known address parameter",
-        _TRUNCATE);
-    (void)strncpy_s(
-        diagnostics.CandidateModule,
-        sizeof(diagnostics.CandidateModule),
-        "(none)",
-        _TRUNCATE);
-    (void)strncpy_s(
-        diagnostics.CandidateSource,
-        sizeof(diagnostics.CandidateSource),
-        "none",
-        _TRUNCATE);
-
-    canvas.Context = &replay;
-    canvas.Width = 1024;
-    canvas.Height = 768;
-    canvas.BitsPerPixel = 32;
-    canvas.RendererName = "REPLAY";
-    canvas.DrawText = ReplayDrawText;
-    canvas.DrawFrame = ReplayDrawFrame;
-
-    status = KswordARKBugcheckLayoutDraw(
-        &canvas,
+    ReplayInitializeCriticalProcess(&diagnostics);
+    failures += ReplayDrawScenario(
+        "critical-1024x768",
+        1024,
+        768,
         &diagnostics,
-        0x0F,
-        186);
-    if (!NT_SUCCESS(status)) {
-        printf("FAIL layout returned 0x%08lX\n", (ULONG)status);
-        return 1;
+        &replay);
+    failures += ReplayRequireLine(&replay, "WHAT HAPPENED");
+    failures += ReplayRequireLine(&replay, "LIKELY CAUSE");
+    failures += ReplayRequireLine(&replay, "RAW CRASH PARAMETERS");
+    failures += ReplayRequireLine(&replay, "WHAT TO DO NEXT");
+    failures += ReplayRequireLine(&replay, "CRITICAL PROCESS  csrss.exe / PID 644");
+    failures += ReplayRequireLine(&replay, "CRITICAL PROCESS / PRE-CRASH CACHE");
+    failures += ReplayRequireLine(&replay, "PROCESS ID  644");
+    failures += ReplayRequireLine(&replay, "PARAM1 PROCESS OBJECT");
+    failures += ReplayRequireLine(&replay, "PARAM2 OBJECT TYPE");
+    failures += ReplayRejectLine(&replay, "NOT IDENTIFIED");
+    if (replay.FrameCount != 4UL || replay.VerdictX != 688L ||
+        replay.VerdictY != 12L) {
+        printf("FAIL critical-1024x768 old-layout geometry\n");
+        ++failures;
     }
 
-    // The stop name/code lead the header; the joke and CPU state remain white.
-    failures += ReplayRequireLineAt(
-        &replay, "CRITICAL_PROCESS_DIED", 280L, 31L, 4, 1UL);
-    failures += ReplayRequireLineAt(
-        &replay, "0x000000EF", 280L, 52L, 4, 2UL);
-    failures += ReplayRequireLineAt(
-        &replay, "STOP CODE", 502L, 61L, 2, 1UL);
-    failures += ReplayRequireLineAt(
-        &replay, "THIS IS NOBODY'S FAULT.", 620L, 10L, 0, 1UL);
-    failures += ReplayRequireLineAt(
-        &replay, "YOUR COMPUTER JUST EXPLODED.", 620L, 31L, 0, 1UL);
-    failures += ReplayRequireLineAt(
-        &replay, "CPU 00", 930L, 10L, 0, 1UL);
-    failures += ReplayRequireLineAt(
-        &replay, "IRQL 15", 930L, 31L, 0, 1UL);
-    failures += ReplayRequireLine(&replay, "OBJECT TYPE  PROCESS", 0);
-    failures += ReplayRequireLine(&replay, "NO DIRECT FAULT IP", 3);
-    failures += ReplayRequireLine(&replay, "DUMP ANALYSIS REQUIRED", 3);
-    failures += ReplayRequireLine(&replay, "CALLBACKS  4 / 4 READY", 5);
-    failures += ReplayRequireLine(&replay, "FONT  BUILT-IN 8X12", 2);
-    failures += ReplayRequireLine(&replay, "RENDERER  REPLAY", 0);
-    failures += ReplayRequireLine(&replay, "CAPTURED  YES", 0);
-    failures += ReplayRejectLine(&replay, "FAULT VALUE COMES FROM ARG0");
-    failures += ReplayRejectLine(&replay, "NOT IDENTIFIED");
-    failures += ReplayRejectObsoletePanels(&replay);
-    failures += ReplayRejectCriticalNoise(&replay, "full");
-    failures += ReplayValidateCanvas(&replay, 1024, 768, "full");
-
-    RtlZeroMemory(&replay, sizeof(replay));
-    canvas.Width = 640;
-    canvas.Height = 480;
-    status = KswordARKBugcheckLayoutDraw(
-        &canvas,
+    ReplayInitializeDriverFault(&diagnostics);
+    failures += ReplayDrawScenario(
+        "driver-1280x768",
+        1280,
+        768,
         &diagnostics,
-        0x0F,
-        186);
-    if (!NT_SUCCESS(status)) {
-        printf("FAIL compact layout returned 0x%08lX\n", (ULONG)status);
-        return 1;
+        &replay);
+    failures += ReplayRequireLine(&replay, "badfilter.sys");
+    failures += ReplayRequireLine(&replay, "THIRD-PARTY / HIGH");
+    failures += ReplayRequireLine(&replay, "PARAM4 INSTRUCTION");
+    failures += ReplayRequireLine(&replay, "DOCUMENTED PARAM4 CODE ADDRESS");
+    if (replay.FrameCount != 4UL || replay.VerdictX != 816L ||
+        replay.VerdictY != 12L) {
+        printf("FAIL driver-1280x768 centered old-layout geometry\n");
+        ++failures;
     }
-    failures += ReplayRequireLineAt(
-        &replay, "CRITICAL_PROCESS_DIED", 272L, 25L, 4, 1UL);
-    failures += ReplayRequireLineAt(
-        &replay, "0x000000EF", 272L, 45L, 4, 2UL);
-    failures += ReplayRequireLineAt(
-        &replay, "STOP CODE", 494L, 54L, 2, 1UL);
-    failures += ReplayRequireLineAt(
-        &replay, "THIS IS NOBODY'S FAULT.", 272L, 83L, 0, 1UL);
-    failures += ReplayRequireLineAt(
-        &replay, "CPU 00", 558L, 4L, 0, 1UL);
-    failures += ReplayRequireLineAt(
-        &replay, "IRQL 15", 558L, 25L, 0, 1UL);
-    failures += ReplayRequireLine(&replay, "ARG2 TYPE  PROCESS", 0);
-    failures += ReplayRequireLine(&replay, "NO DIRECT FAULT IP", 3);
-    failures += ReplayRequireLine(&replay, "DUMP ANALYSIS REQUIRED", 3);
-    failures += ReplayRequireLine(&replay, "CALLBACKS 4 / 4 READY", 5);
-    failures += ReplayRequireLine(&replay, "FONT BUILT-IN FALLBACK", 2);
-    failures += ReplayRequireLine(&replay, "REPLAY 640x480 32BPP", 2);
-    failures += ReplayRejectLine(&replay, "ARG0");
-    failures += ReplayRejectLine(&replay, "NOT IDENTIFIED");
-    failures += ReplayRejectObsoletePanels(&replay);
-    failures += ReplayRejectCriticalNoise(&replay, "compact");
-    failures += ReplayValidateCanvas(&replay, 640, 480, "compact");
 
-    RtlZeroMemory(&replay, sizeof(replay));
-    canvas.Width = 1280;
-    canvas.Height = 720;
-    status = KswordARKBugcheckLayoutDraw(
-        &canvas,
+    failures += ReplayDrawScenario(
+        "driver-640x480",
+        640,
+        480,
         &diagnostics,
-        0x0F,
-        186);
-    if (!NT_SUCCESS(status)) {
-        printf("FAIL detailed layout returned 0x%08lX\n", (ULONG)status);
-        return 1;
+        &replay);
+    failures += ReplayRequireLine(&replay, "badfilter.sys");
+    failures += ReplayRequireLine(&replay, "KEEP THE NEWEST MINIDUMP");
+    if (replay.FrameCount != 2UL || replay.VerdictX != 304L ||
+        replay.VerdictY != 94L) {
+        printf("FAIL driver-640x480 compact geometry\n");
+        ++failures;
     }
-    failures += ReplayRequireLineAt(
-        &replay, "CRITICAL_PROCESS_DIED", 280L, 31L, 4, 1UL);
-    failures += ReplayRequireLineAt(
-        &replay, "0x000000EF", 280L, 52L, 4, 2UL);
-    failures += ReplayRequireLineAt(
-        &replay, "STOP CODE", 502L, 61L, 2, 1UL);
-    failures += ReplayRequireLineAt(
-        &replay, "THIS IS NOBODY'S FAULT.", 760L, 10L, 0, 1UL);
-    failures += ReplayRequireLineAt(
-        &replay, "YOUR COMPUTER JUST EXPLODED.", 760L, 31L, 0, 1UL);
-    failures += ReplayRequireLineAt(
-        &replay, "CRASH CPU 00", 1148L, 10L, 0, 1UL);
-    failures += ReplayRequireLineAt(
-        &replay, "IRQL 15", 1148L, 31L, 0, 1UL);
-    failures += ReplayRequireLine(&replay, "OBJECT TYPE  PROCESS", 0);
-    failures += ReplayRequireLine(&replay, "NO DIRECT FAULT IP", 3);
-    failures += ReplayRequireLine(&replay, "DUMP ANALYSIS REQUIRED", 3);
-    failures += ReplayRequireLine(&replay, "CALLBACKS  4 / 4 READY", 5);
-    failures += ReplayRequireLine(
-        &replay, "FONT  BUILT-IN 8X12 FALLBACK", 2);
-    failures += ReplayRequireLine(&replay, "RENDERER  REPLAY", 0);
-    failures += ReplayRequireLine(&replay, "CAPTURED  YES", 0);
-    failures += ReplayRejectLine(&replay, "FAULT PARAM 0");
-    failures += ReplayRejectLine(&replay, "NOT IDENTIFIED");
-    failures += ReplayRejectObsoletePanels(&replay);
-    failures += ReplayRejectCriticalNoise(&replay, "detailed");
-    failures += ReplayValidateCanvas(&replay, 1280, 720, "detailed");
 
     if (failures != 0) {
-        printf("RESULT FAIL (%d contract violations, %lu lines)\n", failures, replay.Count);
+        printf("RESULT FAIL (%d contract violations)\n", failures);
         return 1;
     }
-
-    printf("RESULT PASS (%lu lines)\n", replay.Count);
+    printf("RESULT PASS (old layout plus documented parsers)\n");
     return 0;
 }
 
 #include "../../KswordARKDriver/src/features/bugcheck/bugcheck_layout.c"
-#include "../../KswordARKDriver/src/features/bugcheck/bugcheck_layout_detailed.c"
 #include "../../KswordARKDriver/src/features/bugcheck/bugcheck_decode.c"

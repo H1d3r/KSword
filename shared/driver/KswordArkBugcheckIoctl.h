@@ -44,68 +44,66 @@ typedef struct _KSWORD_ARK_BUGCHECK_BITMAP_HEADER
     unsigned long reserved1;
 } KSWORD_ARK_BUGCHECK_BITMAP_HEADER;
 
-// The application rasterizes the current Windows fixed-width UI font into
-// two immutable 8-bit coverage atlases. The driver never opens a font file or
-// calls a user-mode text API from the bugcheck path.
-#define KSWORD_ARK_BUGCHECK_FONT_PROTOCOL_VERSION 1UL
-#define KSWORD_ARK_BUGCHECK_FONT_MAGIC 0x4642534BUL /* 'KSBF' */
-#define KSWORD_ARK_BUGCHECK_FONT_FORMAT_A8 1UL
+// Localized verdict cards are rendered by the Qt client with the system UI
+// font, then parsed into BGP rectangles by the driver at PASSIVE_LEVEL.  The
+// complete English/Chinese set is installed atomically so the crash callback
+// never observes a partially updated resource table.
+#define KSWORD_ARK_BUGCHECK_VERDICT_PROTOCOL_VERSION 1UL
+#define KSWORD_ARK_BUGCHECK_VERDICT_MAGIC 0x5256534BUL /* 'KSVR' */
+#define KSWORD_ARK_BUGCHECK_VERDICT_FORMAT_BGRA32 1UL
 
-#define KSWORD_ARK_BUGCHECK_FONT_ASCII_FIRST 32UL
-#define KSWORD_ARK_BUGCHECK_FONT_ASCII_LAST 126UL
-#define KSWORD_ARK_BUGCHECK_FONT_GLYPH_COUNT \
-    (KSWORD_ARK_BUGCHECK_FONT_ASCII_LAST - \
-     KSWORD_ARK_BUGCHECK_FONT_ASCII_FIRST + 1UL)
+#define KSWORD_ARK_BUGCHECK_VERDICT_LANGUAGE_ENGLISH 0UL
+#define KSWORD_ARK_BUGCHECK_VERDICT_LANGUAGE_CHINESE 1UL
+#define KSWORD_ARK_BUGCHECK_VERDICT_LANGUAGE_COUNT 2UL
 
-#define KSWORD_ARK_BUGCHECK_FONT_BODY_WIDTH 10UL
-#define KSWORD_ARK_BUGCHECK_FONT_BODY_HEIGHT 17UL
-#define KSWORD_ARK_BUGCHECK_FONT_BODY_ADVANCE 11UL
-#define KSWORD_ARK_BUGCHECK_FONT_HERO_WIDTH 20UL
-#define KSWORD_ARK_BUGCHECK_FONT_HERO_HEIGHT 34UL
-#define KSWORD_ARK_BUGCHECK_FONT_HERO_ADVANCE 21UL
+#define KSWORD_ARK_BUGCHECK_VERDICT_CLASS_UNKNOWN 0UL
+#define KSWORD_ARK_BUGCHECK_VERDICT_CLASS_OURS 1UL
+#define KSWORD_ARK_BUGCHECK_VERDICT_CLASS_MICROSOFT 2UL
+#define KSWORD_ARK_BUGCHECK_VERDICT_CLASS_THIRD_PARTY 3UL
+#define KSWORD_ARK_BUGCHECK_VERDICT_CLASS_COUNT 4UL
 
-#define KSWORD_ARK_BUGCHECK_FONT_BODY_BYTES \
-    (KSWORD_ARK_BUGCHECK_FONT_GLYPH_COUNT * \
-     KSWORD_ARK_BUGCHECK_FONT_BODY_WIDTH * \
-     KSWORD_ARK_BUGCHECK_FONT_BODY_HEIGHT)
-#define KSWORD_ARK_BUGCHECK_FONT_HERO_BYTES \
-    (KSWORD_ARK_BUGCHECK_FONT_GLYPH_COUNT * \
-     KSWORD_ARK_BUGCHECK_FONT_HERO_WIDTH * \
-     KSWORD_ARK_BUGCHECK_FONT_HERO_HEIGHT)
-#define KSWORD_ARK_BUGCHECK_FONT_MAX_BYTES \
-    (KSWORD_ARK_BUGCHECK_FONT_BODY_BYTES + \
-     KSWORD_ARK_BUGCHECK_FONT_HERO_BYTES)
+#define KSWORD_ARK_BUGCHECK_VERDICT_RESOURCE_COUNT \
+    (KSWORD_ARK_BUGCHECK_VERDICT_LANGUAGE_COUNT * \
+     KSWORD_ARK_BUGCHECK_VERDICT_CLASS_COUNT)
+#define KSWORD_ARK_BUGCHECK_VERDICT_MAX_WIDTH 320UL
+#define KSWORD_ARK_BUGCHECK_VERDICT_MAX_HEIGHT 128UL
+#define KSWORD_ARK_BUGCHECK_VERDICT_MAX_DATA_BYTES \
+    (KSWORD_ARK_BUGCHECK_VERDICT_RESOURCE_COUNT * \
+     KSWORD_ARK_BUGCHECK_VERDICT_MAX_WIDTH * \
+     KSWORD_ARK_BUGCHECK_VERDICT_MAX_HEIGHT * 4UL)
 
-#define KSWORD_ARK_IOCTL_FUNCTION_SET_BUGCHECK_FONT 0x8FCUL
+#define KSWORD_ARK_IOCTL_FUNCTION_SET_BUGCHECK_VERDICT_RESOURCES 0x8FCUL
 
-#define IOCTL_KSWORD_ARK_SET_BUGCHECK_FONT \
+#define IOCTL_KSWORD_ARK_SET_BUGCHECK_VERDICT_RESOURCES \
     CTL_CODE( \
         KSWORD_ARK_IOCTL_DEVICE_TYPE, \
-        KSWORD_ARK_IOCTL_FUNCTION_SET_BUGCHECK_FONT, \
+        KSWORD_ARK_IOCTL_FUNCTION_SET_BUGCHECK_VERDICT_RESOURCES, \
         METHOD_BUFFERED, \
         FILE_WRITE_ACCESS)
 
-typedef struct _KSWORD_ARK_BUGCHECK_FONT_HEADER
+typedef struct _KSWORD_ARK_BUGCHECK_VERDICT_RESOURCE_HEADER
 {
     unsigned long version;
     unsigned long size;
     unsigned long magic;
-    unsigned long format;
-    unsigned long firstCharacter;
-    unsigned long glyphCount;
-    unsigned long bodyWidth;
-    unsigned long bodyHeight;
-    unsigned long bodyAdvance;
-    unsigned long bodyDataLength;
-    unsigned long heroWidth;
-    unsigned long heroHeight;
-    unsigned long heroAdvance;
-    unsigned long heroDataLength;
-    unsigned long dataLength;
+    unsigned long resourceCount;
+    unsigned long entriesOffset;
+    unsigned long totalSize;
     unsigned long flags;
-    unsigned long reserved0;
-    unsigned long reserved1;
-} KSWORD_ARK_BUGCHECK_FONT_HEADER;
+    unsigned long reserved;
+} KSWORD_ARK_BUGCHECK_VERDICT_RESOURCE_HEADER;
+
+typedef struct _KSWORD_ARK_BUGCHECK_VERDICT_RESOURCE_ENTRY
+{
+    unsigned long language;
+    unsigned long classification;
+    unsigned long width;
+    unsigned long height;
+    unsigned long stride;
+    unsigned long format;
+    unsigned long dataOffset;
+    unsigned long dataLength;
+} KSWORD_ARK_BUGCHECK_VERDICT_RESOURCE_ENTRY;
 
 // The delay guard is deliberately separate from the VMware display panel.
 // On systems where HVCI protects kernel code it uses a supported BugCheck

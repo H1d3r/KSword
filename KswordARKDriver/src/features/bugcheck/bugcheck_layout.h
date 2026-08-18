@@ -14,15 +14,6 @@
 #define KSWORD_ARK_BUGCHECK_LAYOUT_LOGO_HEIGHT 84UL
 #define KSWORD_ARK_BUGCHECK_LAYOUT_LOGO_X 16L
 #define KSWORD_ARK_BUGCHECK_LAYOUT_LOGO_Y 12L
-#define KSWORD_ARK_BUGCHECK_LAYOUT_HERO_SCALE 2UL
-#define KSWORD_ARK_BUGCHECK_LAYOUT_TEXT_ADVANCE \
-    KSWORD_ARK_BUGCHECK_FONT_BODY_ADVANCE
-#define KSWORD_ARK_BUGCHECK_LAYOUT_TEXT_HEIGHT \
-    KSWORD_ARK_BUGCHECK_FONT_BODY_HEIGHT
-#define KSWORD_ARK_BUGCHECK_LAYOUT_HERO_ADVANCE \
-    KSWORD_ARK_BUGCHECK_FONT_HERO_ADVANCE
-#define KSWORD_ARK_BUGCHECK_LAYOUT_HERO_HEIGHT \
-    KSWORD_ARK_BUGCHECK_FONT_HERO_HEIGHT
 
 #define KSWORD_ARK_BUGCHECK_LAYOUT_BACKGROUND_RED 5U
 #define KSWORD_ARK_BUGCHECK_LAYOUT_BACKGROUND_GREEN 15U
@@ -30,24 +21,18 @@
 #define KSWORD_ARK_BUGCHECK_LAYOUT_TEXT_RED 226U
 #define KSWORD_ARK_BUGCHECK_LAYOUT_TEXT_GREEN 232U
 #define KSWORD_ARK_BUGCHECK_LAYOUT_TEXT_BLUE 244U
-#define KSWORD_ARK_BUGCHECK_LAYOUT_ACCENT_RED 92U
-#define KSWORD_ARK_BUGCHECK_LAYOUT_ACCENT_GREEN 146U
-#define KSWORD_ARK_BUGCHECK_LAYOUT_ACCENT_BLUE 220U
+#define KSWORD_ARK_BUGCHECK_LAYOUT_ACCENT_RED 68U
+#define KSWORD_ARK_BUGCHECK_LAYOUT_ACCENT_GREEN 126U
+#define KSWORD_ARK_BUGCHECK_LAYOUT_ACCENT_BLUE 255U
 #define KSWORD_ARK_BUGCHECK_LAYOUT_MUTED_RED 148U
 #define KSWORD_ARK_BUGCHECK_LAYOUT_MUTED_GREEN 163U
 #define KSWORD_ARK_BUGCHECK_LAYOUT_MUTED_BLUE 190U
-#define KSWORD_ARK_BUGCHECK_LAYOUT_WARNING_RED KSWORD_ARK_BUGCHECK_LAYOUT_MUTED_RED
-#define KSWORD_ARK_BUGCHECK_LAYOUT_WARNING_GREEN KSWORD_ARK_BUGCHECK_LAYOUT_MUTED_GREEN
-#define KSWORD_ARK_BUGCHECK_LAYOUT_WARNING_BLUE KSWORD_ARK_BUGCHECK_LAYOUT_MUTED_BLUE
-#define KSWORD_ARK_BUGCHECK_LAYOUT_CRITICAL_RED 255U
-#define KSWORD_ARK_BUGCHECK_LAYOUT_CRITICAL_GREEN 94U
-#define KSWORD_ARK_BUGCHECK_LAYOUT_CRITICAL_BLUE 108U
-#define KSWORD_ARK_BUGCHECK_LAYOUT_SUCCESS_RED KSWORD_ARK_BUGCHECK_LAYOUT_TEXT_RED
-#define KSWORD_ARK_BUGCHECK_LAYOUT_SUCCESS_GREEN KSWORD_ARK_BUGCHECK_LAYOUT_TEXT_GREEN
-#define KSWORD_ARK_BUGCHECK_LAYOUT_SUCCESS_BLUE KSWORD_ARK_BUGCHECK_LAYOUT_TEXT_BLUE
-#define KSWORD_ARK_BUGCHECK_LAYOUT_BORDER_RED 16U
-#define KSWORD_ARK_BUGCHECK_LAYOUT_BORDER_GREEN 30U
-#define KSWORD_ARK_BUGCHECK_LAYOUT_BORDER_BLUE 50U
+#define KSWORD_ARK_BUGCHECK_LAYOUT_WARNING_RED 213U
+#define KSWORD_ARK_BUGCHECK_LAYOUT_WARNING_GREEN 167U
+#define KSWORD_ARK_BUGCHECK_LAYOUT_WARNING_BLUE 91U
+#define KSWORD_ARK_BUGCHECK_LAYOUT_BORDER_RED 24U
+#define KSWORD_ARK_BUGCHECK_LAYOUT_BORDER_GREEN 45U
+#define KSWORD_ARK_BUGCHECK_LAYOUT_BORDER_BLUE 75U
 
 typedef enum _KSWORD_ARK_BUGCHECK_LAYOUT_COLOR
 {
@@ -55,22 +40,13 @@ typedef enum _KSWORD_ARK_BUGCHECK_LAYOUT_COLOR
     KswordArkBugcheckLayoutColorAccent,
     KswordArkBugcheckLayoutColorMuted,
     KswordArkBugcheckLayoutColorWarning,
-    KswordArkBugcheckLayoutColorCritical,
-    KswordArkBugcheckLayoutColorSuccess,
     KswordArkBugcheckLayoutColorCount
 } KSWORD_ARK_BUGCHECK_LAYOUT_COLOR;
 
-typedef enum _KSWORD_ARK_BUGCHECK_LAYOUT_TEXT_STYLE
-{
-    KswordArkBugcheckLayoutTextBody = 0,
-    KswordArkBugcheckLayoutTextHero,
-    KswordArkBugcheckLayoutTextStyleCount
-} KSWORD_ARK_BUGCHECK_LAYOUT_TEXT_STYLE;
-
 typedef enum _KSWORD_ARK_BUGCHECK_LAYOUT_FRAME
 {
-    KswordArkBugcheckLayoutFrameCompactUpper = 0,
-    KswordArkBugcheckLayoutFrameCompactLower,
+    KswordArkBugcheckLayoutFrameCompactColumn = 0,
+    KswordArkBugcheckLayoutFrameCompactWide,
     KswordArkBugcheckLayoutFrameFullTopLeft,
     KswordArkBugcheckLayoutFrameFullTopMiddle,
     KswordArkBugcheckLayoutFrameFullTopRight,
@@ -82,11 +58,14 @@ typedef enum _KSWORD_ARK_BUGCHECK_LAYOUT_FRAME
     KswordArkBugcheckLayoutFrameDetailedTopLeft,
     KswordArkBugcheckLayoutFrameDetailedTopMiddle,
     KswordArkBugcheckLayoutFrameDetailedTopRight,
-    KswordArkBugcheckLayoutFrameDetailedMiddleLeft,
-    KswordArkBugcheckLayoutFrameDetailedMiddleMiddle,
-    KswordArkBugcheckLayoutFrameDetailedMiddleRight,
-    KswordArkBugcheckLayoutFrameDetailedBottomLeft,
-    KswordArkBugcheckLayoutFrameDetailedBottomRight,
+    KswordArkBugcheckLayoutFrameDetailedMiddleThread,
+    KswordArkBugcheckLayoutFrameDetailedMiddleStack,
+    KswordArkBugcheckLayoutFrameDetailedMiddleModule,
+    KswordArkBugcheckLayoutFrameDetailedMiddleBlackbox,
+    KswordArkBugcheckLayoutFrameDetailedBottomCpu,
+    KswordArkBugcheckLayoutFrameDetailedBottomDump,
+    KswordArkBugcheckLayoutFrameDetailedBottomEvent,
+    KswordArkBugcheckLayoutFrameDetailedBottomHelp,
     KswordArkBugcheckLayoutFrameCount
 } KSWORD_ARK_BUGCHECK_LAYOUT_FRAME;
 
@@ -96,8 +75,7 @@ typedef NTSTATUS
     _In_ LONG X,
     _In_ LONG Y,
     _In_z_ PCSTR Text,
-    _In_ ULONG ColorIndex,
-    _In_ KSWORD_ARK_BUGCHECK_LAYOUT_TEXT_STYLE TextStyle
+    _In_ ULONG ColorIndex
     );
 
 typedef NTSTATUS
@@ -108,75 +86,24 @@ typedef NTSTATUS
     _In_ KSWORD_ARK_BUGCHECK_LAYOUT_FRAME Frame
     );
 
+typedef NTSTATUS
+(*PKSWORD_ARK_BUGCHECK_LAYOUT_DRAW_VERDICT)(
+    _In_opt_ PVOID Context,
+    _In_ LONG X,
+    _In_ LONG Y,
+    _In_ ULONG Classification
+    );
+
 typedef struct _KSWORD_ARK_BUGCHECK_LAYOUT_CANVAS
 {
     PVOID Context;
     ULONG Width;
     ULONG Height;
-    ULONG BitsPerPixel;
-    PCSTR RendererName;
     PKSWORD_ARK_BUGCHECK_LAYOUT_DRAW_TEXT DrawText;
     PKSWORD_ARK_BUGCHECK_LAYOUT_DRAW_FRAME DrawFrame;
+    PKSWORD_ARK_BUGCHECK_LAYOUT_DRAW_VERDICT DrawVerdict;
 } KSWORD_ARK_BUGCHECK_LAYOUT_CANVAS,
   *PKSWORD_ARK_BUGCHECK_LAYOUT_CANVAS;
-
-BOOLEAN
-KswordARKBugcheckLayoutHasCandidate(
-    _In_ const KSWORD_ARK_BUGCHECK_DIAGNOSTICS* Diagnostics
-    );
-
-BOOLEAN
-KswordARKBugcheckLayoutHasDirectFaultAddress(
-    _In_ const KSWORD_ARK_BUGCHECK_DIAGNOSTICS* Diagnostics
-    );
-
-PCSTR
-KswordARKBugcheckLayoutCriticalObjectTypeText(
-    _In_ ULONG_PTR Value
-    );
-
-PCSTR
-KswordARKBugcheckLayoutAttributionText(
-    _In_ const KSWORD_ARK_BUGCHECK_DIAGNOSTICS* Diagnostics
-    );
-
-ULONG
-KswordARKBugcheckLayoutAttributionColor(
-    _In_ const KSWORD_ARK_BUGCHECK_DIAGNOSTICS* Diagnostics
-    );
-
-PCSTR
-KswordARKBugcheckLayoutParameterRole(
-    _In_ ULONG BugCheckCode,
-    _In_ ULONG ParameterIndex
-    );
-
-ULONG_PTR
-KswordARKBugcheckLayoutParameterValue(
-    _In_ const KSWORD_ARK_BUGCHECK_DIAGNOSTICS* Diagnostics,
-    _In_ ULONG ParameterIndex
-    );
-
-ULONG
-KswordARKBugcheckLayoutParameterColor(
-    _In_ const KSWORD_ARK_BUGCHECK_DIAGNOSTICS* Diagnostics,
-    _In_ ULONG ParameterIndex
-    );
-
-ULONG
-KswordARKBugcheckLayoutCallbackCount(
-    _In_ ULONG CallbackMask
-    );
-
-BOOLEAN
-KswordARKBugcheckLayoutDumpIsSequential(
-    _In_ const KSWORD_ARK_BUGCHECK_DIAGNOSTICS* Diagnostics
-    );
-
-ULONG
-KswordARKBugcheckLayoutDumpStageColor(
-    _In_ const KSWORD_ARK_BUGCHECK_DIAGNOSTICS* Diagnostics
-    );
 
 BOOLEAN
 KswordARKBugcheckLayoutIsCompact(

@@ -23,15 +23,18 @@ Abstract:
 
 #define KSWORD_ARK_PANEL_POOL_TAG 'lPgK'
 #define KSWORD_ARK_PANEL_BACKGROUND_ARGB 0xFF050F21UL
+#define KSWORD_ARK_PANEL_GLYPH_ADVANCE 9L
 #define KSWORD_ARK_PANEL_GLYPH_BORDER 1UL
-#define KSWORD_ARK_PANEL_HERO_GLYPH_SCALE \
-    KSWORD_ARK_BUGCHECK_LAYOUT_HERO_SCALE
-#define KSWORD_ARK_PANEL_GLYPH_BITMAP_CAPACITY 4096UL
+#define KSWORD_ARK_PANEL_GLYPH_BITMAP_WIDTH \
+    (DRIVERGUI_FONT_WIDTH + (KSWORD_ARK_PANEL_GLYPH_BORDER * 2UL))
+#define KSWORD_ARK_PANEL_GLYPH_BITMAP_HEIGHT \
+    (DRIVERGUI_FONT_HEIGHT + (KSWORD_ARK_PANEL_GLYPH_BORDER * 2UL))
 #define KSWORD_ARK_PANEL_COLOR_COUNT \
     ((ULONG)KswordArkBugcheckLayoutColorCount)
 #define KSWORD_ARK_PANEL_BPP24_INDEX 0UL
 #define KSWORD_ARK_PANEL_BPP32_INDEX 1UL
 #define KSWORD_ARK_PANEL_BPP_VARIANT_COUNT 2UL
+#define KSWORD_ARK_PANEL_VERDICT_SET_COUNT 2UL
 
 #pragma pack(push, 1)
 typedef struct _KSWORD_ARK_PANEL_BITMAP_FILE_HEADER
@@ -64,7 +67,6 @@ typedef struct _KSWORD_ARK_PANEL_VARIANT
     ULONG BitsPerPixel;
     PVOID LogoRectangle;
     PVOID GlyphRectangles[KSWORD_ARK_PANEL_COLOR_COUNT][DRIVERGUI_FONT_COUNT];
-    PVOID HeroGlyphRectangles[DRIVERGUI_FONT_COUNT];
     PVOID FrameHorizontalRectangles[KswordArkBugcheckLayoutFrameCount];
     PVOID FrameVerticalRectangles[KswordArkBugcheckLayoutFrameCount];
     // Keep the source BMPs resident for the lifetime of the parsed glyphs.
@@ -72,26 +74,52 @@ typedef struct _KSWORD_ARK_PANEL_VARIANT
     // A persistent nonpaged backing buffer prevents a small-rectangle parser
     // from retaining a reused preparation stack buffer.
     PUCHAR GlyphBitmaps[KSWORD_ARK_PANEL_COLOR_COUNT][DRIVERGUI_FONT_COUNT];
-    PUCHAR HeroGlyphBitmaps[DRIVERGUI_FONT_COUNT];
     PUCHAR FrameHorizontalBitmaps[KswordArkBugcheckLayoutFrameCount];
     PUCHAR FrameVerticalBitmaps[KswordArkBugcheckLayoutFrameCount];
 } KSWORD_ARK_PANEL_VARIANT, *PKSWORD_ARK_PANEL_VARIANT;
 
+typedef struct _KSWORD_ARK_PANEL_VERDICT_ITEM
+{
+    PVOID Rectangle;
+    PUCHAR BackingBitmap;
+    ULONG Width;
+    ULONG Height;
+} KSWORD_ARK_PANEL_VERDICT_ITEM, *PKSWORD_ARK_PANEL_VERDICT_ITEM;
+
+typedef struct _KSWORD_ARK_PANEL_VERDICT_SET
+{
+    BOOLEAN Complete;
+    KSWORD_ARK_PANEL_VERDICT_ITEM
+        Items[KSWORD_ARK_PANEL_BPP_VARIANT_COUNT]
+             [KSWORD_ARK_BUGCHECK_VERDICT_LANGUAGE_COUNT]
+             [KSWORD_ARK_BUGCHECK_VERDICT_CLASS_COUNT];
+} KSWORD_ARK_PANEL_VERDICT_SET, *PKSWORD_ARK_PANEL_VERDICT_SET;
+
 typedef struct _KSWORD_ARK_PANEL_STATE
 {
     volatile LONG Ready;
-    volatile LONG Readers;
-    volatile LONG Updating;
     volatile LONG ActiveVariant;
+    volatile LONG ActiveVerdictSet;
+    volatile LONG PreferredLanguage;
     KSWORD_ARK_PANEL_VARIANT Variants[KSWORD_ARK_PANEL_BPP_VARIANT_COUNT];
+    KSWORD_ARK_PANEL_VERDICT_SET
+        VerdictSets[KSWORD_ARK_PANEL_VERDICT_SET_COUNT];
 } KSWORD_ARK_PANEL_STATE, *PKSWORD_ARK_PANEL_STATE;
 
 static KSWORD_ARK_PANEL_STATE g_KswordArkPanel;
 
-static VOID
-KswordARKBugcheckPanelReleaseResources(
-    VOID
-    );
+C_ASSERT(
+    KSWORD_ARK_BUGCHECK_VERDICT_CLASS_UNKNOWN ==
+    KSWORD_ARK_BUGCHECK_MODULE_UNKNOWN);
+C_ASSERT(
+    KSWORD_ARK_BUGCHECK_VERDICT_CLASS_OURS ==
+    KSWORD_ARK_BUGCHECK_MODULE_OURS);
+C_ASSERT(
+    KSWORD_ARK_BUGCHECK_VERDICT_CLASS_MICROSOFT ==
+    KSWORD_ARK_BUGCHECK_MODULE_MICROSOFT);
+C_ASSERT(
+    KSWORD_ARK_BUGCHECK_VERDICT_CLASS_THIRD_PARTY ==
+    KSWORD_ARK_BUGCHECK_MODULE_THIRD_PARTY);
 
 static NTSTATUS
 KswordARKBugcheckPanelInitializeBitmap(
@@ -151,6 +179,350 @@ KswordARKBugcheckPanelInitializeBitmap(
     *BitmapStride = (ULONG)stride;
     *PixelBytes = Bitmap + fileHeader->PixelOffset;
     return STATUS_SUCCESS;
+}
+
+typedef NTSTATUS
+(NTAPI *PKSWORD_ARK_ZW_QUERY_DEFAULT_UI_LANGUAGE)(
+    _Out_ PUSHORT DefaultUILanguageId
+    );
+
+static ULONG
+KswordARKBugcheckPanelQueryPreferredLanguage(
+    VOID
+    )
+{
+    UNICODE_STRING routineName;
+    PKSWORD_ARK_ZW_QUERY_DEFAULT_UI_LANGUAGE queryLanguage;
+    USHORT languageId;
+
+    languageId = 0;
+    RtlInitUnicodeString(&routineName, L"ZwQueryDefaultUILanguage");
+    queryLanguage = (PKSWORD_ARK_ZW_QUERY_DEFAULT_UI_LANGUAGE)
+        MmGetSystemRoutineAddress(&routineName);
+    if (queryLanguage != NULL &&
+        NT_SUCCESS(queryLanguage(&languageId)) &&
+        (languageId & 0x03FFU) == 0x0004U) {
+        return KSWORD_ARK_BUGCHECK_VERDICT_LANGUAGE_CHINESE;
+    }
+    return KSWORD_ARK_BUGCHECK_VERDICT_LANGUAGE_ENGLISH;
+}
+
+static VOID
+KswordARKBugcheckPanelReleaseVerdictSet(
+    _Inout_ PKSWORD_ARK_PANEL_VERDICT_SET VerdictSet
+    )
+{
+    ULONG variantIndex;
+
+    if (VerdictSet == NULL) {
+        return;
+    }
+    VerdictSet->Complete = FALSE;
+    for (variantIndex = 0;
+         variantIndex < KSWORD_ARK_PANEL_BPP_VARIANT_COUNT;
+         ++variantIndex) {
+        ULONG language;
+
+        for (language = 0;
+             language < KSWORD_ARK_BUGCHECK_VERDICT_LANGUAGE_COUNT;
+             ++language) {
+            ULONG classification;
+
+            for (classification = 0;
+                 classification < KSWORD_ARK_BUGCHECK_VERDICT_CLASS_COUNT;
+                 ++classification) {
+                PKSWORD_ARK_PANEL_VERDICT_ITEM item;
+
+                item = &VerdictSet->Items[variantIndex]
+                    [language][classification];
+                KswordARKBugcheckBgpDestroyRectangle(item->Rectangle);
+                item->Rectangle = NULL;
+                if (item->BackingBitmap != NULL) {
+                    ExFreePoolWithTag(
+                        item->BackingBitmap,
+                        KSWORD_ARK_PANEL_POOL_TAG);
+                    item->BackingBitmap = NULL;
+                }
+                item->Width = 0;
+                item->Height = 0;
+            }
+        }
+    }
+}
+
+static NTSTATUS
+KswordARKBugcheckPanelValidateVerdictPacket(
+    _In_reads_bytes_(PacketLength) const VOID* Packet,
+    _In_ ULONG PacketLength,
+    _Out_ const KSWORD_ARK_BUGCHECK_VERDICT_RESOURCE_ENTRY** Entries
+    )
+{
+    const KSWORD_ARK_BUGCHECK_VERDICT_RESOURCE_HEADER* header;
+    const KSWORD_ARK_BUGCHECK_VERDICT_RESOURCE_ENTRY* entries;
+    ULONG64 entriesBytes;
+    ULONG64 minimumDataOffset;
+    ULONG64 totalDataBytes;
+    ULONG seenMask;
+    ULONG index;
+
+    if (Packet == NULL || Entries == NULL ||
+        PacketLength < sizeof(*header)) {
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+    *Entries = NULL;
+    header = (const KSWORD_ARK_BUGCHECK_VERDICT_RESOURCE_HEADER*)Packet;
+    entriesBytes =
+        (ULONG64)sizeof(KSWORD_ARK_BUGCHECK_VERDICT_RESOURCE_ENTRY) *
+        KSWORD_ARK_BUGCHECK_VERDICT_RESOURCE_COUNT;
+    minimumDataOffset = (ULONG64)sizeof(*header) + entriesBytes;
+    if (header->version != KSWORD_ARK_BUGCHECK_VERDICT_PROTOCOL_VERSION ||
+        header->size != sizeof(*header) ||
+        header->magic != KSWORD_ARK_BUGCHECK_VERDICT_MAGIC ||
+        header->resourceCount !=
+            KSWORD_ARK_BUGCHECK_VERDICT_RESOURCE_COUNT ||
+        header->entriesOffset != sizeof(*header) ||
+        header->totalSize != PacketLength ||
+        header->flags != 0 || header->reserved != 0 ||
+        minimumDataOffset > PacketLength) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    entries = (const KSWORD_ARK_BUGCHECK_VERDICT_RESOURCE_ENTRY*)(
+        (const UCHAR*)Packet + header->entriesOffset);
+    totalDataBytes = 0;
+    seenMask = 0;
+    for (index = 0;
+         index < KSWORD_ARK_BUGCHECK_VERDICT_RESOURCE_COUNT;
+         ++index) {
+        const KSWORD_ARK_BUGCHECK_VERDICT_RESOURCE_ENTRY* entry;
+        ULONG64 expectedStride;
+        ULONG64 expectedBytes;
+        ULONG64 dataEnd;
+        ULONG bitIndex;
+        ULONG bit;
+
+        entry = &entries[index];
+        expectedStride = (ULONG64)entry->width * 4ULL;
+        expectedBytes = expectedStride * entry->height;
+        dataEnd = (ULONG64)entry->dataOffset + entry->dataLength;
+        if (entry->language >=
+                KSWORD_ARK_BUGCHECK_VERDICT_LANGUAGE_COUNT ||
+            entry->classification >=
+                KSWORD_ARK_BUGCHECK_VERDICT_CLASS_COUNT ||
+            entry->width == 0 || entry->height == 0 ||
+            entry->width > KSWORD_ARK_BUGCHECK_VERDICT_MAX_WIDTH ||
+            entry->height > KSWORD_ARK_BUGCHECK_VERDICT_MAX_HEIGHT ||
+            entry->format != KSWORD_ARK_BUGCHECK_VERDICT_FORMAT_BGRA32 ||
+            expectedStride != entry->stride ||
+            expectedBytes == 0 || expectedBytes != entry->dataLength ||
+            entry->dataOffset < minimumDataOffset ||
+            dataEnd > PacketLength) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        bitIndex = entry->language *
+            KSWORD_ARK_BUGCHECK_VERDICT_CLASS_COUNT +
+            entry->classification;
+        bit = 1UL << bitIndex;
+        if ((seenMask & bit) != 0) {
+            return STATUS_INVALID_PARAMETER;
+        }
+        seenMask |= bit;
+        totalDataBytes += entry->dataLength;
+        if (totalDataBytes >
+            KSWORD_ARK_BUGCHECK_VERDICT_MAX_DATA_BYTES) {
+            return STATUS_INVALID_PARAMETER;
+        }
+    }
+
+    if (seenMask !=
+        ((1UL << KSWORD_ARK_BUGCHECK_VERDICT_RESOURCE_COUNT) - 1UL)) {
+        return STATUS_INVALID_PARAMETER;
+    }
+    *Entries = entries;
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS
+KswordARKBugcheckPanelPrepareVerdictItem(
+    _In_ ULONG BitsPerPixel,
+    _In_ const KSWORD_ARK_BUGCHECK_VERDICT_RESOURCE_ENTRY* Entry,
+    _In_reads_bytes_(Entry->dataLength) const UCHAR* SourcePixels,
+    _Out_ PKSWORD_ARK_PANEL_VERDICT_ITEM Item
+    )
+{
+    PUCHAR bitmap;
+    PUCHAR pixels;
+    ULONG64 bitmapCapacity64;
+    ULONG bitmapCapacity;
+    ULONG bitmapLength;
+    ULONG bitmapStride;
+    ULONG bytesPerPixel;
+    ULONG y;
+    NTSTATUS status;
+
+    if (Entry == NULL || SourcePixels == NULL || Item == NULL ||
+        (BitsPerPixel != 24UL && BitsPerPixel != 32UL)) {
+        return STATUS_INVALID_PARAMETER;
+    }
+    RtlZeroMemory(Item, sizeof(*Item));
+    bitmapCapacity64 =
+        sizeof(KSWORD_ARK_PANEL_BITMAP_FILE_HEADER) +
+        sizeof(KSWORD_ARK_PANEL_BITMAP_INFO_HEADER) +
+        ((((ULONG64)Entry->width * BitsPerPixel + 31ULL) / 32ULL) *
+         4ULL * Entry->height);
+    if (bitmapCapacity64 > MAXULONG) {
+        return STATUS_INTEGER_OVERFLOW;
+    }
+    bitmapCapacity = (ULONG)bitmapCapacity64;
+    bitmap = (PUCHAR)KswordARKAllocateNonPagedPool(
+        bitmapCapacity,
+        KSWORD_ARK_PANEL_POOL_TAG);
+    if (bitmap == NULL) {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    pixels = NULL;
+    status = KswordARKBugcheckPanelInitializeBitmap(
+        bitmap,
+        bitmapCapacity,
+        Entry->width,
+        Entry->height,
+        BitsPerPixel,
+        &bitmapLength,
+        &bitmapStride,
+        &pixels);
+    if (!NT_SUCCESS(status)) {
+        ExFreePoolWithTag(bitmap, KSWORD_ARK_PANEL_POOL_TAG);
+        return status;
+    }
+
+    bytesPerPixel = BitsPerPixel / 8UL;
+    for (y = 0; y < Entry->height; ++y) {
+        const UCHAR* sourceRow;
+        PUCHAR destinationRow;
+        ULONG x;
+
+        sourceRow = SourcePixels + ((SIZE_T)y * Entry->stride);
+        destinationRow = pixels +
+            ((SIZE_T)(Entry->height - 1UL - y) * bitmapStride);
+        for (x = 0; x < Entry->width; ++x) {
+            const UCHAR* sourcePixel;
+            PUCHAR destinationPixel;
+            ULONG alpha;
+
+            sourcePixel = sourceRow + ((SIZE_T)x * 4UL);
+            destinationPixel = destinationRow +
+                ((SIZE_T)x * bytesPerPixel);
+            alpha = sourcePixel[3];
+            destinationPixel[0] = (UCHAR)(
+                (sourcePixel[0] * alpha +
+                 KSWORD_ARK_BUGCHECK_LAYOUT_BACKGROUND_BLUE *
+                    (255UL - alpha)) / 255UL);
+            destinationPixel[1] = (UCHAR)(
+                (sourcePixel[1] * alpha +
+                 KSWORD_ARK_BUGCHECK_LAYOUT_BACKGROUND_GREEN *
+                    (255UL - alpha)) / 255UL);
+            destinationPixel[2] = (UCHAR)(
+                (sourcePixel[2] * alpha +
+                 KSWORD_ARK_BUGCHECK_LAYOUT_BACKGROUND_RED *
+                    (255UL - alpha)) / 255UL);
+            if (bytesPerPixel == 4UL) {
+                destinationPixel[3] = 0xFFU;
+            }
+        }
+    }
+
+    status = KswordARKBugcheckBgpParseBitmap(
+        bitmap,
+        bitmapLength,
+        &Item->Rectangle);
+    if (!NT_SUCCESS(status)) {
+        ExFreePoolWithTag(bitmap, KSWORD_ARK_PANEL_POOL_TAG);
+        return status;
+    }
+    Item->BackingBitmap = bitmap;
+    Item->Width = Entry->width;
+    Item->Height = Entry->height;
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+KswordARKBugcheckPanelInstallVerdictResources(
+    _In_reads_bytes_(PacketLength) const VOID* Packet,
+    _In_ ULONG PacketLength
+    )
+{
+    const KSWORD_ARK_BUGCHECK_VERDICT_RESOURCE_ENTRY* entries;
+    PKSWORD_ARK_PANEL_VERDICT_SET verdictSet;
+    LONG activeSet;
+    ULONG stagingSet;
+    ULONG index;
+    NTSTATUS status;
+
+    if (KeGetCurrentIrql() != PASSIVE_LEVEL) {
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+    if (InterlockedCompareExchange(&g_KswordArkPanel.Ready, 0, 0) == 0) {
+        return STATUS_DEVICE_NOT_READY;
+    }
+    status = KswordARKBugcheckPanelValidateVerdictPacket(
+        Packet,
+        PacketLength,
+        &entries);
+    if (!NT_SUCCESS(status)) {
+        return status;
+    }
+    status = KswordARKBugcheckBgpBeginResourceUpdate();
+    if (!NT_SUCCESS(status)) {
+        return status;
+    }
+
+    activeSet = InterlockedCompareExchange(
+        &g_KswordArkPanel.ActiveVerdictSet,
+        0,
+        0);
+    stagingSet = activeSet == 0 ? 1UL : 0UL;
+    verdictSet = &g_KswordArkPanel.VerdictSets[stagingSet];
+    KswordARKBugcheckPanelReleaseVerdictSet(verdictSet);
+    status = STATUS_SUCCESS;
+    for (index = 0;
+         index < KSWORD_ARK_BUGCHECK_VERDICT_RESOURCE_COUNT &&
+             NT_SUCCESS(status);
+         ++index) {
+        const KSWORD_ARK_BUGCHECK_VERDICT_RESOURCE_ENTRY* entry;
+        ULONG variantIndex;
+
+        entry = &entries[index];
+        for (variantIndex = 0;
+             variantIndex < KSWORD_ARK_PANEL_BPP_VARIANT_COUNT &&
+                 NT_SUCCESS(status);
+             ++variantIndex) {
+            ULONG bitsPerPixel;
+
+            bitsPerPixel = variantIndex == KSWORD_ARK_PANEL_BPP24_INDEX
+                ? 24UL
+                : 32UL;
+            status = KswordARKBugcheckPanelPrepareVerdictItem(
+                bitsPerPixel,
+                entry,
+                (const UCHAR*)Packet + entry->dataOffset,
+                &verdictSet->Items[variantIndex]
+                    [entry->language][entry->classification]);
+        }
+    }
+
+    if (NT_SUCCESS(status)) {
+        verdictSet->Complete = TRUE;
+        KeMemoryBarrier();
+        InterlockedExchange(
+            &g_KswordArkPanel.ActiveVerdictSet,
+            (LONG)stagingSet);
+    } else {
+        KswordARKBugcheckPanelReleaseVerdictSet(verdictSet);
+    }
+    KswordARKBugcheckBgpEndResourceUpdate();
+    return status;
 }
 
 static NTSTATUS
@@ -310,130 +682,41 @@ KswordARKBugcheckPanelWriteGlyphPixel(
     _Out_writes_bytes_(BytesPerPixel) PUCHAR Pixel,
     _In_ ULONG BytesPerPixel,
     _In_ ULONG ColorIndex,
-    _In_ UCHAR Coverage
+    _In_ BOOLEAN Foreground
     )
 {
-    ULONG foregroundBlue;
-    ULONG foregroundGreen;
-    ULONG foregroundRed;
+    if (!Foreground) {
+        // BGP's parsed 32-bit rectangles are rendered as opaque pixels.
+        // Match every padded glyph cell to the dark crash canvas.
+        Pixel[0] = KSWORD_ARK_BUGCHECK_LAYOUT_BACKGROUND_BLUE;
+        Pixel[1] = KSWORD_ARK_BUGCHECK_LAYOUT_BACKGROUND_GREEN;
+        Pixel[2] = KSWORD_ARK_BUGCHECK_LAYOUT_BACKGROUND_RED;
+        if (BytesPerPixel == 4UL) {
+            // BGP requires opaque pixels for reliable 32-bit glyph rendering.
+            Pixel[3] = 0xFFU;
+        }
+        return;
+    }
 
     if (ColorIndex == KswordArkBugcheckLayoutColorAccent) {
-        foregroundBlue = KSWORD_ARK_BUGCHECK_LAYOUT_ACCENT_BLUE;
-        foregroundGreen = KSWORD_ARK_BUGCHECK_LAYOUT_ACCENT_GREEN;
-        foregroundRed = KSWORD_ARK_BUGCHECK_LAYOUT_ACCENT_RED;
+        Pixel[0] = KSWORD_ARK_BUGCHECK_LAYOUT_ACCENT_BLUE;
+        Pixel[1] = KSWORD_ARK_BUGCHECK_LAYOUT_ACCENT_GREEN;
+        Pixel[2] = KSWORD_ARK_BUGCHECK_LAYOUT_ACCENT_RED;
     } else if (ColorIndex == KswordArkBugcheckLayoutColorWarning) {
-        foregroundBlue = KSWORD_ARK_BUGCHECK_LAYOUT_WARNING_BLUE;
-        foregroundGreen = KSWORD_ARK_BUGCHECK_LAYOUT_WARNING_GREEN;
-        foregroundRed = KSWORD_ARK_BUGCHECK_LAYOUT_WARNING_RED;
-    } else if (ColorIndex == KswordArkBugcheckLayoutColorCritical) {
-        foregroundBlue = KSWORD_ARK_BUGCHECK_LAYOUT_CRITICAL_BLUE;
-        foregroundGreen = KSWORD_ARK_BUGCHECK_LAYOUT_CRITICAL_GREEN;
-        foregroundRed = KSWORD_ARK_BUGCHECK_LAYOUT_CRITICAL_RED;
-    } else if (ColorIndex == KswordArkBugcheckLayoutColorSuccess) {
-        foregroundBlue = KSWORD_ARK_BUGCHECK_LAYOUT_SUCCESS_BLUE;
-        foregroundGreen = KSWORD_ARK_BUGCHECK_LAYOUT_SUCCESS_GREEN;
-        foregroundRed = KSWORD_ARK_BUGCHECK_LAYOUT_SUCCESS_RED;
+        Pixel[0] = KSWORD_ARK_BUGCHECK_LAYOUT_WARNING_BLUE;
+        Pixel[1] = KSWORD_ARK_BUGCHECK_LAYOUT_WARNING_GREEN;
+        Pixel[2] = KSWORD_ARK_BUGCHECK_LAYOUT_WARNING_RED;
     } else if (ColorIndex == KswordArkBugcheckLayoutColorMuted) {
-        foregroundBlue = KSWORD_ARK_BUGCHECK_LAYOUT_MUTED_BLUE;
-        foregroundGreen = KSWORD_ARK_BUGCHECK_LAYOUT_MUTED_GREEN;
-        foregroundRed = KSWORD_ARK_BUGCHECK_LAYOUT_MUTED_RED;
+        Pixel[0] = KSWORD_ARK_BUGCHECK_LAYOUT_MUTED_BLUE;
+        Pixel[1] = KSWORD_ARK_BUGCHECK_LAYOUT_MUTED_GREEN;
+        Pixel[2] = KSWORD_ARK_BUGCHECK_LAYOUT_MUTED_RED;
     } else {
-        foregroundBlue = KSWORD_ARK_BUGCHECK_LAYOUT_TEXT_BLUE;
-        foregroundGreen = KSWORD_ARK_BUGCHECK_LAYOUT_TEXT_GREEN;
-        foregroundRed = KSWORD_ARK_BUGCHECK_LAYOUT_TEXT_RED;
+        Pixel[0] = KSWORD_ARK_BUGCHECK_LAYOUT_TEXT_BLUE;
+        Pixel[1] = KSWORD_ARK_BUGCHECK_LAYOUT_TEXT_GREEN;
+        Pixel[2] = KSWORD_ARK_BUGCHECK_LAYOUT_TEXT_RED;
     }
-
-    // BGP rectangles are opaque. Bake each antialiased A8 coverage value
-    // against the exact crash-canvas background during PASSIVE_LEVEL setup.
-    Pixel[0] = (UCHAR)(
-        (foregroundBlue * Coverage +
-         KSWORD_ARK_BUGCHECK_LAYOUT_BACKGROUND_BLUE * (255UL - Coverage) +
-         127UL) / 255UL);
-    Pixel[1] = (UCHAR)(
-        (foregroundGreen * Coverage +
-         KSWORD_ARK_BUGCHECK_LAYOUT_BACKGROUND_GREEN * (255UL - Coverage) +
-         127UL) / 255UL);
-    Pixel[2] = (UCHAR)(
-        (foregroundRed * Coverage +
-         KSWORD_ARK_BUGCHECK_LAYOUT_BACKGROUND_RED * (255UL - Coverage) +
-         127UL) / 255UL);
     if (BytesPerPixel == 4UL) {
         Pixel[3] = 0xFFU;
-    }
-}
-
-static UCHAR
-KswordARKBugcheckPanelGlyphCoverage(
-    _In_opt_ const KSWORD_ARK_BUGCHECK_FONT_HEADER* FontHeader,
-    _In_opt_ const UCHAR* FontCoverage,
-    _In_ ULONG GlyphIndex,
-    _In_ ULONG Scale,
-    _In_ ULONG X,
-    _In_ ULONG Y
-    )
-{
-    ULONG width;
-    ULONG height;
-    const UCHAR* atlas;
-
-    if (FontHeader != NULL && FontCoverage != NULL) {
-        if (Scale == 1UL) {
-            width = FontHeader->bodyWidth;
-            height = FontHeader->bodyHeight;
-            atlas = FontCoverage;
-        } else {
-            width = FontHeader->heroWidth;
-            height = FontHeader->heroHeight;
-            atlas = FontCoverage + FontHeader->bodyDataLength;
-        }
-        if (X >= width || Y >= height) {
-            return 0U;
-        }
-        return atlas[
-            (SIZE_T)GlyphIndex * width * height +
-            (SIZE_T)Y * width + X];
-    }
-
-    // The built-in bitmap is deliberately retained as a dependency-free
-    // fallback. Center it inside the same fixed cells used by the R3 atlas so
-    // all layout geometry remains identical before and after upload.
-    if (Scale == 1UL) {
-        const ULONG offsetX =
-            (KSWORD_ARK_BUGCHECK_FONT_BODY_WIDTH - DRIVERGUI_FONT_WIDTH) / 2UL;
-        const ULONG offsetY =
-            (KSWORD_ARK_BUGCHECK_FONT_BODY_HEIGHT - DRIVERGUI_FONT_HEIGHT) / 2UL;
-        if (X < offsetX || Y < offsetY ||
-            X >= offsetX + DRIVERGUI_FONT_WIDTH ||
-            Y >= offsetY + DRIVERGUI_FONT_HEIGHT) {
-            return 0U;
-        }
-        return (g_DriverGuiFont8x12[GlyphIndex][Y - offsetY] &
-                (UCHAR)(1U << (7UL - (X - offsetX)))) != 0
-            ? 255U
-            : 0U;
-    }
-
-    {
-        const ULONG scaledWidth = DRIVERGUI_FONT_WIDTH * 2UL;
-        const ULONG scaledHeight = DRIVERGUI_FONT_HEIGHT * 2UL;
-        const ULONG offsetX =
-            (KSWORD_ARK_BUGCHECK_FONT_HERO_WIDTH - scaledWidth) / 2UL;
-        const ULONG offsetY =
-            (KSWORD_ARK_BUGCHECK_FONT_HERO_HEIGHT - scaledHeight) / 2UL;
-        ULONG sourceX;
-        ULONG sourceY;
-
-        if (X < offsetX || Y < offsetY ||
-            X >= offsetX + scaledWidth ||
-            Y >= offsetY + scaledHeight) {
-            return 0U;
-        }
-        sourceX = (X - offsetX) / 2UL;
-        sourceY = (Y - offsetY) / 2UL;
-        return (g_DriverGuiFont8x12[GlyphIndex][sourceY] &
-                (UCHAR)(1U << (7UL - sourceX))) != 0
-            ? 255U
-            : 0U;
     }
 }
 
@@ -442,12 +725,7 @@ KswordARKBugcheckPanelPrepareGlyph(
     _In_ ULONG VariantIndex,
     _In_ ULONG BitsPerPixel,
     _In_ ULONG ColorIndex,
-    _In_ ULONG GlyphIndex,
-    _In_ ULONG Scale,
-    _In_opt_ const KSWORD_ARK_BUGCHECK_FONT_HEADER* FontHeader,
-    _In_opt_ const UCHAR* FontCoverage,
-    _Out_ PVOID* Rectangle,
-    _Out_ PUCHAR* BackingBitmap
+    _In_ ULONG GlyphIndex
     )
 {
     PUCHAR bitmap;
@@ -457,35 +735,17 @@ KswordARKBugcheckPanelPrepareGlyph(
     ULONG bytesPerPixel;
     ULONG bitmapRowIndex;
     ULONG bitmapColumnIndex;
-    ULONG bitmapHeight;
-    ULONG bitmapWidth;
-    ULONG glyphHeight;
-    ULONG glyphWidth;
+    ULONG rowIndex;
+    PVOID* rectangle;
     NTSTATUS status;
 
     if (VariantIndex >= KSWORD_ARK_PANEL_BPP_VARIANT_COUNT ||
-        (BitsPerPixel != 24UL && BitsPerPixel != 32UL) ||
-        ColorIndex >= KSWORD_ARK_PANEL_COLOR_COUNT ||
-        GlyphIndex >= DRIVERGUI_FONT_COUNT ||
-        (Scale != 1UL && Scale != KSWORD_ARK_PANEL_HERO_GLYPH_SCALE) ||
-        Rectangle == NULL || BackingBitmap == NULL) {
+        (BitsPerPixel != 24UL && BitsPerPixel != 32UL)) {
         return STATUS_INVALID_PARAMETER;
     }
-    *Rectangle = NULL;
-    *BackingBitmap = NULL;
-    glyphWidth = Scale == 1UL
-        ? KSWORD_ARK_BUGCHECK_FONT_BODY_WIDTH
-        : KSWORD_ARK_BUGCHECK_FONT_HERO_WIDTH;
-    glyphHeight = Scale == 1UL
-        ? KSWORD_ARK_BUGCHECK_FONT_BODY_HEIGHT
-        : KSWORD_ARK_BUGCHECK_FONT_HERO_HEIGHT;
-    bitmapWidth = glyphWidth +
-        (KSWORD_ARK_PANEL_GLYPH_BORDER * 2UL);
-    bitmapHeight = glyphHeight +
-        (KSWORD_ARK_PANEL_GLYPH_BORDER * 2UL);
 
     bitmap = (PUCHAR)KswordARKAllocateNonPagedPool(
-        KSWORD_ARK_PANEL_GLYPH_BITMAP_CAPACITY,
+        1024UL,
         KSWORD_ARK_PANEL_POOL_TAG);
     if (bitmap == NULL) {
         return STATUS_INSUFFICIENT_RESOURCES;
@@ -494,9 +754,9 @@ KswordARKBugcheckPanelPrepareGlyph(
     pixels = NULL;
     status = KswordARKBugcheckPanelInitializeBitmap(
         bitmap,
-        KSWORD_ARK_PANEL_GLYPH_BITMAP_CAPACITY,
-        bitmapWidth,
-        bitmapHeight,
+        1024UL,
+        KSWORD_ARK_PANEL_GLYPH_BITMAP_WIDTH,
+        KSWORD_ARK_PANEL_GLYPH_BITMAP_HEIGHT,
         BitsPerPixel,
         &bitmapLength,
         &bitmapStride,
@@ -509,76 +769,75 @@ KswordARKBugcheckPanelPrepareGlyph(
     bytesPerPixel = BitsPerPixel / 8UL;
     // Paint the complete padded cell before overlaying foreground bits.
     for (bitmapRowIndex = 0;
-         bitmapRowIndex < bitmapHeight;
+         bitmapRowIndex < KSWORD_ARK_PANEL_GLYPH_BITMAP_HEIGHT;
          ++bitmapRowIndex) {
         PUCHAR destinationRow;
 
         destinationRow =
             pixels +
-            ((SIZE_T)(bitmapHeight -
+            ((SIZE_T)(KSWORD_ARK_PANEL_GLYPH_BITMAP_HEIGHT -
                       1UL - bitmapRowIndex) * bitmapStride);
         for (bitmapColumnIndex = 0;
-             bitmapColumnIndex < bitmapWidth;
+             bitmapColumnIndex < KSWORD_ARK_PANEL_GLYPH_BITMAP_WIDTH;
              ++bitmapColumnIndex) {
             KswordARKBugcheckPanelWriteGlyphPixel(
                 destinationRow +
                     ((SIZE_T)bitmapColumnIndex * bytesPerPixel),
                 bytesPerPixel,
                 ColorIndex,
-                0U);
+                FALSE);
         }
     }
-    for (bitmapRowIndex = 0;
-         bitmapRowIndex < glyphHeight;
-         ++bitmapRowIndex) {
+    for (rowIndex = 0;
+         rowIndex < DRIVERGUI_FONT_HEIGHT;
+         ++rowIndex) {
         ULONG columnIndex;
+        UCHAR rowBits;
         PUCHAR destinationRow;
 
-        destinationRow = pixels +
-            ((SIZE_T)(bitmapHeight - 1UL -
-                      (KSWORD_ARK_PANEL_GLYPH_BORDER + bitmapRowIndex)) *
+        rowBits = g_DriverGuiFont8x12[GlyphIndex][rowIndex];
+        destinationRow =
+            pixels +
+            ((SIZE_T)(KSWORD_ARK_PANEL_GLYPH_BITMAP_HEIGHT -
+                      1UL - KSWORD_ARK_PANEL_GLYPH_BORDER - rowIndex) *
              bitmapStride);
         for (columnIndex = 0;
-             columnIndex < glyphWidth;
+             columnIndex < DRIVERGUI_FONT_WIDTH;
              ++columnIndex) {
-            UCHAR coverage;
+            BOOLEAN foreground;
 
-            coverage = KswordARKBugcheckPanelGlyphCoverage(
-                FontHeader,
-                FontCoverage,
-                GlyphIndex,
-                Scale,
-                columnIndex,
-                bitmapRowIndex);
+            foreground =
+                (rowBits & (UCHAR)(1U << (7UL - columnIndex))) != 0;
             KswordARKBugcheckPanelWriteGlyphPixel(
                 destinationRow +
                     ((SIZE_T)(KSWORD_ARK_PANEL_GLYPH_BORDER + columnIndex) *
                      bytesPerPixel),
                 bytesPerPixel,
                 ColorIndex,
-                coverage);
+                foreground);
         }
     }
 
+    rectangle = &g_KswordArkPanel.Variants[VariantIndex]
+        .GlyphRectangles[ColorIndex][GlyphIndex];
     status = KswordARKBugcheckBgpParseBitmap(
         bitmap,
         bitmapLength,
-        Rectangle);
+        rectangle);
     if (!NT_SUCCESS(status)) {
         ExFreePoolWithTag(bitmap, KSWORD_ARK_PANEL_POOL_TAG);
         return status;
     }
 
-    *BackingBitmap = bitmap;
+    g_KswordArkPanel.Variants[VariantIndex]
+        .GlyphBitmaps[ColorIndex][GlyphIndex] = bitmap;
     return STATUS_SUCCESS;
 }
 
 static NTSTATUS
 KswordARKBugcheckPanelPrepareGlyphs(
     _In_ ULONG VariantIndex,
-    _In_ ULONG BitsPerPixel,
-    _In_opt_ const KSWORD_ARK_BUGCHECK_FONT_HEADER* FontHeader,
-    _In_opt_ const UCHAR* FontCoverage
+    _In_ ULONG BitsPerPixel
     )
 {
     ULONG colorIndex;
@@ -597,52 +856,10 @@ KswordARKBugcheckPanelPrepareGlyphs(
                 VariantIndex,
                 BitsPerPixel,
                 colorIndex,
-                glyphIndex,
-                1UL,
-                FontHeader,
-                FontCoverage,
-                &g_KswordArkPanel.Variants[VariantIndex]
-                    .GlyphRectangles[colorIndex][glyphIndex],
-                &g_KswordArkPanel.Variants[VariantIndex]
-                    .GlyphBitmaps[colorIndex][glyphIndex]);
+                glyphIndex);
             if (!NT_SUCCESS(status)) {
                 return status;
             }
-        }
-    }
-
-    return STATUS_SUCCESS;
-}
-
-static NTSTATUS
-KswordARKBugcheckPanelPrepareHeroGlyphs(
-    _In_ ULONG VariantIndex,
-    _In_ ULONG BitsPerPixel,
-    _In_opt_ const KSWORD_ARK_BUGCHECK_FONT_HEADER* FontHeader,
-    _In_opt_ const UCHAR* FontCoverage
-    )
-{
-    ULONG glyphIndex;
-
-    for (glyphIndex = 0;
-         glyphIndex < DRIVERGUI_FONT_COUNT;
-         ++glyphIndex) {
-        NTSTATUS status;
-
-        status = KswordARKBugcheckPanelPrepareGlyph(
-            VariantIndex,
-            BitsPerPixel,
-            KswordArkBugcheckLayoutColorCritical,
-            glyphIndex,
-            KSWORD_ARK_PANEL_HERO_GLYPH_SCALE,
-            FontHeader,
-            FontCoverage,
-            &g_KswordArkPanel.Variants[VariantIndex]
-                .HeroGlyphRectangles[glyphIndex],
-            &g_KswordArkPanel.Variants[VariantIndex]
-                .HeroGlyphBitmaps[glyphIndex]);
-        if (!NT_SUCCESS(status)) {
-            return status;
         }
     }
 
@@ -752,7 +969,7 @@ KswordARKBugcheckPanelPrepareFrames(
         return STATUS_INVALID_PARAMETER;
     }
 
-    for (frame = KswordArkBugcheckLayoutFrameCompactUpper;
+    for (frame = KswordArkBugcheckLayoutFrameCompactColumn;
          frame < KswordArkBugcheckLayoutFrameCount;
          frame = (KSWORD_ARK_BUGCHECK_LAYOUT_FRAME)(frame + 1)) {
         ULONG width;
@@ -792,16 +1009,24 @@ KswordARKBugcheckPanelPrepareFrames(
     return STATUS_SUCCESS;
 }
 
-static NTSTATUS
-KswordARKBugcheckPanelPrepareResources(
-    _In_opt_ const KSWORD_ARK_BUGCHECK_FONT_HEADER* FontHeader,
-    _In_opt_ const UCHAR* FontCoverage
+NTSTATUS
+KswordARKBugcheckPanelInitialize(
+    VOID
     )
 {
     KSWORD_ARK_BGP_SCREEN_INFO screen;
     ULONG variantIndex;
     NTSTATUS status;
 
+    if (KeGetCurrentIrql() != PASSIVE_LEVEL) {
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+
+    RtlZeroMemory(&g_KswordArkPanel, sizeof(g_KswordArkPanel));
+    InterlockedExchange(&g_KswordArkPanel.ActiveVerdictSet, -1);
+    InterlockedExchange(
+        &g_KswordArkPanel.PreferredLanguage,
+        (LONG)KswordARKBugcheckPanelQueryPreferredLanguage());
     KswordARKBugcheckBgpRecordPreparation(
         KswordArkBgpPreparationValidatePanelScreen,
         STATUS_PENDING);
@@ -810,6 +1035,7 @@ KswordARKBugcheckPanelPrepareResources(
         KswordARKBugcheckBgpRecordPreparation(
             KswordArkBgpPreparationValidatePanelScreen,
             status);
+        KswordARKBugcheckBgpRejectPreparation(status);
         return status;
     }
     // Accept the fully hidden pre-ownership mode so both supported rectangle
@@ -822,6 +1048,7 @@ KswordARKBugcheckPanelPrepareResources(
         KswordARKBugcheckBgpRecordPreparation(
             KswordArkBgpPreparationValidatePanelScreen,
             STATUS_NOT_SUPPORTED);
+        KswordARKBugcheckBgpRejectPreparation(STATUS_NOT_SUPPORTED);
         return STATUS_NOT_SUPPORTED;
     }
 
@@ -854,16 +1081,7 @@ KswordARKBugcheckPanelPrepareResources(
                 STATUS_PENDING);
             status = KswordARKBugcheckPanelPrepareGlyphs(
                 variantIndex,
-                bitsPerPixel,
-                FontHeader,
-                FontCoverage);
-            if (NT_SUCCESS(status)) {
-                status = KswordARKBugcheckPanelPrepareHeroGlyphs(
-                    variantIndex,
-                    bitsPerPixel,
-                    FontHeader,
-                    FontCoverage);
-            }
+                bitsPerPixel);
             if (NT_SUCCESS(status)) {
                 // Frames are parsed with glyph resources before the crash.
                 status = KswordARKBugcheckPanelPrepareFrames(
@@ -875,21 +1093,48 @@ KswordARKBugcheckPanelPrepareResources(
                 status);
         }
     }
+    if (NT_SUCCESS(status)) {
+        KswordARKBugcheckBgpRecordPreparation(
+            KswordArkBgpPreparationArm,
+            STATUS_PENDING);
+        status = KswordARKBugcheckBgpArm(
+            KSWORD_ARK_BUGCHECK_LAYOUT_REQUIRED_WIDTH,
+            KSWORD_ARK_BUGCHECK_LAYOUT_REQUIRED_HEIGHT);
+        KswordARKBugcheckBgpRecordPreparation(
+            KswordArkBgpPreparationArm,
+            status);
+    }
     if (!NT_SUCCESS(status)) {
-        KswordARKBugcheckPanelReleaseResources();
+        KswordARKBugcheckPanelShutdown();
+        KswordARKBugcheckBgpRejectPreparation(status);
         return status;
     }
+
+    InterlockedExchange(&g_KswordArkPanel.Ready, 1);
+    KswordARKBugcheckBgpRecordPreparation(
+        KswordArkBgpPreparationComplete,
+        STATUS_SUCCESS);
     return STATUS_SUCCESS;
 }
 
-static VOID
-KswordARKBugcheckPanelReleaseResources(
+VOID
+KswordARKBugcheckPanelShutdown(
     VOID
     )
 {
     ULONG variantIndex;
     ULONG colorIndex;
+    ULONG verdictSetIndex;
 
+    InterlockedExchange(&g_KswordArkPanel.Ready, 0);
+    InterlockedExchange(&g_KswordArkPanel.ActiveVariant, 0);
+    InterlockedExchange(&g_KswordArkPanel.ActiveVerdictSet, -1);
+    for (verdictSetIndex = 0;
+         verdictSetIndex < KSWORD_ARK_PANEL_VERDICT_SET_COUNT;
+         ++verdictSetIndex) {
+        KswordARKBugcheckPanelReleaseVerdictSet(
+            &g_KswordArkPanel.VerdictSets[verdictSetIndex]);
+    }
     for (variantIndex = 0;
          variantIndex < KSWORD_ARK_PANEL_BPP_VARIANT_COUNT;
          ++variantIndex) {
@@ -921,31 +1166,9 @@ KswordARKBugcheckPanelReleaseResources(
             }
         }
         {
-            ULONG glyphIndex;
-
-            for (glyphIndex = 0;
-                 glyphIndex < DRIVERGUI_FONT_COUNT;
-                 ++glyphIndex) {
-                KswordARKBugcheckBgpDestroyRectangle(
-                    g_KswordArkPanel.Variants[variantIndex]
-                        .HeroGlyphRectangles[glyphIndex]);
-                g_KswordArkPanel.Variants[variantIndex]
-                    .HeroGlyphRectangles[glyphIndex] = NULL;
-                if (g_KswordArkPanel.Variants[variantIndex]
-                        .HeroGlyphBitmaps[glyphIndex] != NULL) {
-                    ExFreePoolWithTag(
-                        g_KswordArkPanel.Variants[variantIndex]
-                            .HeroGlyphBitmaps[glyphIndex],
-                        KSWORD_ARK_PANEL_POOL_TAG);
-                    g_KswordArkPanel.Variants[variantIndex]
-                        .HeroGlyphBitmaps[glyphIndex] = NULL;
-                }
-            }
-        }
-        {
             KSWORD_ARK_BUGCHECK_LAYOUT_FRAME frame;
 
-            for (frame = KswordArkBugcheckLayoutFrameCompactUpper;
+            for (frame = KswordArkBugcheckLayoutFrameCompactColumn;
                  frame < KswordArkBugcheckLayoutFrameCount;
                  frame = (KSWORD_ARK_BUGCHECK_LAYOUT_FRAME)(frame + 1)) {
                 KswordARKBugcheckBgpDestroyRectangle(
@@ -979,142 +1202,6 @@ KswordARKBugcheckPanelReleaseResources(
             }
         }
     }
-    RtlZeroMemory(
-        g_KswordArkPanel.Variants,
-        sizeof(g_KswordArkPanel.Variants));
-}
-
-NTSTATUS
-KswordARKBugcheckPanelInitialize(
-    VOID
-    )
-{
-    NTSTATUS status;
-
-    if (KeGetCurrentIrql() != PASSIVE_LEVEL) {
-        return STATUS_INVALID_DEVICE_STATE;
-    }
-
-    RtlZeroMemory(&g_KswordArkPanel, sizeof(g_KswordArkPanel));
-    status = KswordARKBugcheckPanelPrepareResources(NULL, NULL);
-    if (NT_SUCCESS(status)) {
-        KswordARKBugcheckBgpRecordPreparation(
-            KswordArkBgpPreparationArm,
-            STATUS_PENDING);
-        status = KswordARKBugcheckBgpArm(
-            KSWORD_ARK_BUGCHECK_LAYOUT_REQUIRED_WIDTH,
-            KSWORD_ARK_BUGCHECK_LAYOUT_REQUIRED_HEIGHT);
-        KswordARKBugcheckBgpRecordPreparation(
-            KswordArkBgpPreparationArm,
-            status);
-    }
-    if (!NT_SUCCESS(status)) {
-        KswordARKBugcheckPanelReleaseResources();
-        KswordARKBugcheckBgpRejectPreparation(status);
-        return status;
-    }
-
-    InterlockedExchange(&g_KswordArkPanel.Ready, 1);
-    KswordARKBugcheckBgpRecordPreparation(
-        KswordArkBgpPreparationComplete,
-        STATUS_SUCCESS);
-    return STATUS_SUCCESS;
-}
-
-VOID
-KswordARKBugcheckPanelShutdown(
-    VOID
-    )
-{
-    InterlockedExchange(&g_KswordArkPanel.Ready, 0);
-    KeMemoryBarrier();
-    KswordARKBugcheckPanelReleaseResources();
-    InterlockedExchange(&g_KswordArkPanel.ActiveVariant, 0);
-}
-
-NTSTATUS
-KswordARKBugcheckPanelInstallFont(
-    _In_ const KSWORD_ARK_BUGCHECK_FONT_HEADER* Header,
-    _In_reads_bytes_(KSWORD_ARK_BUGCHECK_FONT_MAX_BYTES) const UCHAR* Coverage
-    )
-{
-    NTSTATUS fallbackStatus;
-    NTSTATUS status;
-
-    if (Header == NULL || Coverage == NULL) {
-        return STATUS_INVALID_PARAMETER;
-    }
-    if (KeGetCurrentIrql() != PASSIVE_LEVEL) {
-        return STATUS_INVALID_DEVICE_STATE;
-    }
-    if (InterlockedCompareExchange(
-            &g_KswordArkPanel.Updating,
-            1,
-            0) != 0) {
-        return STATUS_DEVICE_BUSY;
-    }
-
-    // A machine without an armed BGP panel can still consume the same atlas
-    // through the direct SVGA renderer, so lack of BGP is not an upload error.
-    if (InterlockedCompareExchange(
-            &g_KswordArkPanel.Ready,
-            0,
-            0) == 0) {
-        InterlockedExchange(&g_KswordArkPanel.Updating, 0);
-        return STATUS_SUCCESS;
-    }
-
-    InterlockedExchange(&g_KswordArkPanel.Ready, 0);
-    KeMemoryBarrier();
-    if (InterlockedCompareExchange(
-            &g_KswordArkPanel.Readers,
-            0,
-            0) != 0) {
-        InterlockedExchange(&g_KswordArkPanel.Ready, 1);
-        InterlockedExchange(&g_KswordArkPanel.Updating, 0);
-        return STATUS_DEVICE_BUSY;
-    }
-
-    status = KswordARKBugcheckBgpBeginPanelUpdate();
-    if (!NT_SUCCESS(status)) {
-        InterlockedExchange(&g_KswordArkPanel.Ready, 1);
-        InterlockedExchange(&g_KswordArkPanel.Updating, 0);
-        return status;
-    }
-
-    KswordARKBugcheckPanelReleaseResources();
-    status = KswordARKBugcheckPanelPrepareResources(Header, Coverage);
-    if (NT_SUCCESS(status)) {
-        status = KswordARKBugcheckBgpArm(
-            KSWORD_ARK_BUGCHECK_LAYOUT_REQUIRED_WIDTH,
-            KSWORD_ARK_BUGCHECK_LAYOUT_REQUIRED_HEIGHT);
-    }
-    if (NT_SUCCESS(status)) {
-        KeMemoryBarrier();
-        InterlockedExchange(&g_KswordArkPanel.Ready, 1);
-        InterlockedExchange(&g_KswordArkPanel.Updating, 0);
-        return STATUS_SUCCESS;
-    }
-
-    // A malformed or too-expensive custom atlas must never remove the
-    // dependency-free crash panel. Rebuild the original bitmap font before
-    // reporting the custom-font failure to R3.
-    KswordARKBugcheckPanelReleaseResources();
-    fallbackStatus = KswordARKBugcheckPanelPrepareResources(NULL, NULL);
-    if (NT_SUCCESS(fallbackStatus)) {
-        fallbackStatus = KswordARKBugcheckBgpArm(
-            KSWORD_ARK_BUGCHECK_LAYOUT_REQUIRED_WIDTH,
-            KSWORD_ARK_BUGCHECK_LAYOUT_REQUIRED_HEIGHT);
-    }
-    if (NT_SUCCESS(fallbackStatus)) {
-        KeMemoryBarrier();
-        InterlockedExchange(&g_KswordArkPanel.Ready, 1);
-    } else {
-        KswordARKBugcheckPanelReleaseResources();
-        KswordARKBugcheckBgpRejectPreparation(fallbackStatus);
-    }
-    InterlockedExchange(&g_KswordArkPanel.Updating, 0);
-    return status;
 }
 
 static NTSTATUS
@@ -1123,18 +1210,14 @@ KswordARKBugcheckPanelDrawText(
     _In_ LONG X,
     _In_ LONG Y,
     _In_z_ PCSTR Text,
-    _In_ ULONG ColorIndex,
-    _In_ KSWORD_ARK_BUGCHECK_LAYOUT_TEXT_STYLE TextStyle
+    _In_ ULONG ColorIndex
     )
 {
     LONG activeVariant;
     LONG cursorX;
 
     UNREFERENCED_PARAMETER(Context);
-    if (Text == NULL || ColorIndex >= KSWORD_ARK_PANEL_COLOR_COUNT ||
-        TextStyle >= KswordArkBugcheckLayoutTextStyleCount ||
-        (TextStyle == KswordArkBugcheckLayoutTextHero &&
-         ColorIndex != KswordArkBugcheckLayoutColorCritical)) {
+    if (Text == NULL || ColorIndex >= KSWORD_ARK_PANEL_COLOR_COUNT) {
         return STATUS_INVALID_PARAMETER;
     }
 
@@ -1160,26 +1243,16 @@ KswordARKBugcheckPanelDrawText(
         }
         glyphIndex = character - DRIVERGUI_FONT_FIRST;
         if (character != (UCHAR)' ') {
-            if (TextStyle == KswordArkBugcheckLayoutTextHero) {
-                status = KswordARKBugcheckBgpDrawRectangle(
-                    g_KswordArkPanel.Variants[activeVariant]
-                        .HeroGlyphRectangles[glyphIndex],
-                    cursorX - (LONG)KSWORD_ARK_PANEL_GLYPH_BORDER,
-                    Y - (LONG)KSWORD_ARK_PANEL_GLYPH_BORDER);
-            } else {
-                status = KswordARKBugcheckBgpDrawRectangle(
-                    g_KswordArkPanel.Variants[activeVariant]
-                        .GlyphRectangles[ColorIndex][glyphIndex],
-                    cursorX - (LONG)KSWORD_ARK_PANEL_GLYPH_BORDER,
-                    Y - (LONG)KSWORD_ARK_PANEL_GLYPH_BORDER);
-            }
+            status = KswordARKBugcheckBgpDrawRectangle(
+                g_KswordArkPanel.Variants[activeVariant]
+                    .GlyphRectangles[ColorIndex][glyphIndex],
+                cursorX - (LONG)KSWORD_ARK_PANEL_GLYPH_BORDER,
+                Y - (LONG)KSWORD_ARK_PANEL_GLYPH_BORDER);
             if (!NT_SUCCESS(status)) {
                 return status;
             }
         }
-        cursorX += TextStyle == KswordArkBugcheckLayoutTextHero
-            ? (LONG)KSWORD_ARK_BUGCHECK_FONT_HERO_ADVANCE
-            : (LONG)KSWORD_ARK_BUGCHECK_FONT_BODY_ADVANCE;
+        cursorX += KSWORD_ARK_PANEL_GLYPH_ADVANCE;
         ++Text;
     }
 
@@ -1246,6 +1319,61 @@ KswordARKBugcheckPanelDrawFrame(
     return status;
 }
 
+static NTSTATUS
+KswordARKBugcheckPanelDrawVerdict(
+    _In_opt_ PVOID Context,
+    _In_ LONG X,
+    _In_ LONG Y,
+    _In_ ULONG Classification
+    )
+{
+    LONG activeSet;
+    LONG activeVariant;
+    LONG preferredLanguage;
+    PKSWORD_ARK_PANEL_VERDICT_SET verdictSet;
+    PKSWORD_ARK_PANEL_VERDICT_ITEM item;
+
+    UNREFERENCED_PARAMETER(Context);
+    activeSet = InterlockedCompareExchange(
+        &g_KswordArkPanel.ActiveVerdictSet,
+        0,
+        0);
+    activeVariant = InterlockedCompareExchange(
+        &g_KswordArkPanel.ActiveVariant,
+        0,
+        0);
+    preferredLanguage = InterlockedCompareExchange(
+        &g_KswordArkPanel.PreferredLanguage,
+        0,
+        0);
+    if (activeSet < 0 ||
+        activeSet >= (LONG)KSWORD_ARK_PANEL_VERDICT_SET_COUNT ||
+        activeVariant < 0 ||
+        activeVariant >= (LONG)KSWORD_ARK_PANEL_BPP_VARIANT_COUNT) {
+        return STATUS_NOT_FOUND;
+    }
+    if (preferredLanguage < 0 ||
+        preferredLanguage >=
+            (LONG)KSWORD_ARK_BUGCHECK_VERDICT_LANGUAGE_COUNT) {
+        preferredLanguage =
+            KSWORD_ARK_BUGCHECK_VERDICT_LANGUAGE_ENGLISH;
+    }
+    if (Classification >= KSWORD_ARK_BUGCHECK_VERDICT_CLASS_COUNT) {
+        Classification = KSWORD_ARK_BUGCHECK_VERDICT_CLASS_UNKNOWN;
+    }
+
+    verdictSet = &g_KswordArkPanel.VerdictSets[activeSet];
+    if (!verdictSet->Complete) {
+        return STATUS_NOT_FOUND;
+    }
+    item = &verdictSet->Items[activeVariant]
+        [preferredLanguage][Classification];
+    if (item->Rectangle == NULL) {
+        return STATUS_NOT_FOUND;
+    }
+    return KswordARKBugcheckBgpDrawRectangle(item->Rectangle, X, Y);
+}
+
 NTSTATUS
 KswordARKBugcheckPanelDraw(
     _In_ const KSWORD_ARK_BUGCHECK_DIAGNOSTICS* Diagnostics,
@@ -1263,19 +1391,9 @@ KswordARKBugcheckPanelDraw(
         InterlockedCompareExchange(&g_KswordArkPanel.Ready, 0, 0) == 0) {
         return STATUS_DEVICE_NOT_READY;
     }
-    InterlockedIncrement(&g_KswordArkPanel.Readers);
-    KeMemoryBarrier();
-    if (InterlockedCompareExchange(
-            &g_KswordArkPanel.Ready,
-            0,
-            0) == 0) {
-        InterlockedDecrement(&g_KswordArkPanel.Readers);
-        return STATUS_DEVICE_NOT_READY;
-    }
 
     status = KswordARKBugcheckBgpBeginDraw();
     if (!NT_SUCCESS(status)) {
-        InterlockedDecrement(&g_KswordArkPanel.Readers);
         return status;
     }
 
@@ -1301,10 +1419,9 @@ KswordARKBugcheckPanelDraw(
         RtlZeroMemory(&canvas, sizeof(canvas));
         canvas.Width = bgpState.ScreenWidth;
         canvas.Height = bgpState.ScreenHeight;
-        canvas.BitsPerPixel = bgpState.ScreenBpp;
-        canvas.RendererName = "BGP";
         canvas.DrawText = KswordARKBugcheckPanelDrawText;
         canvas.DrawFrame = KswordARKBugcheckPanelDrawFrame;
+        canvas.DrawVerdict = KswordARKBugcheckPanelDrawVerdict;
         status = KswordARKBugcheckLayoutDraw(
             &canvas,
             Diagnostics,
@@ -1313,6 +1430,5 @@ KswordARKBugcheckPanelDraw(
     }
 
     KswordARKBugcheckBgpFinishDraw(status);
-    InterlockedDecrement(&g_KswordArkPanel.Readers);
     return status;
 }

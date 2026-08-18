@@ -591,113 +591,47 @@ KswordARKSvgaFillRect(
 }
 
 static VOID
-KswordARKSvgaLayoutColorRgb(
-    _In_ ULONG ColorIndex,
-    _Out_ UCHAR* Red,
-    _Out_ UCHAR* Green,
-    _Out_ UCHAR* Blue
-    )
-{
-    if (ColorIndex == KswordArkBugcheckLayoutColorAccent) {
-        *Red = KSWORD_ARK_BUGCHECK_LAYOUT_ACCENT_RED;
-        *Green = KSWORD_ARK_BUGCHECK_LAYOUT_ACCENT_GREEN;
-        *Blue = KSWORD_ARK_BUGCHECK_LAYOUT_ACCENT_BLUE;
-    } else if (ColorIndex == KswordArkBugcheckLayoutColorWarning) {
-        *Red = KSWORD_ARK_BUGCHECK_LAYOUT_WARNING_RED;
-        *Green = KSWORD_ARK_BUGCHECK_LAYOUT_WARNING_GREEN;
-        *Blue = KSWORD_ARK_BUGCHECK_LAYOUT_WARNING_BLUE;
-    } else if (ColorIndex == KswordArkBugcheckLayoutColorCritical) {
-        *Red = KSWORD_ARK_BUGCHECK_LAYOUT_CRITICAL_RED;
-        *Green = KSWORD_ARK_BUGCHECK_LAYOUT_CRITICAL_GREEN;
-        *Blue = KSWORD_ARK_BUGCHECK_LAYOUT_CRITICAL_BLUE;
-    } else if (ColorIndex == KswordArkBugcheckLayoutColorSuccess) {
-        *Red = KSWORD_ARK_BUGCHECK_LAYOUT_SUCCESS_RED;
-        *Green = KSWORD_ARK_BUGCHECK_LAYOUT_SUCCESS_GREEN;
-        *Blue = KSWORD_ARK_BUGCHECK_LAYOUT_SUCCESS_BLUE;
-    } else if (ColorIndex == KswordArkBugcheckLayoutColorMuted) {
-        *Red = KSWORD_ARK_BUGCHECK_LAYOUT_MUTED_RED;
-        *Green = KSWORD_ARK_BUGCHECK_LAYOUT_MUTED_GREEN;
-        *Blue = KSWORD_ARK_BUGCHECK_LAYOUT_MUTED_BLUE;
-    } else {
-        *Red = KSWORD_ARK_BUGCHECK_LAYOUT_TEXT_RED;
-        *Green = KSWORD_ARK_BUGCHECK_LAYOUT_TEXT_GREEN;
-        *Blue = KSWORD_ARK_BUGCHECK_LAYOUT_TEXT_BLUE;
-    }
-}
-
-static UCHAR
-KswordARKSvgaGlyphCoverage(
-    _In_ ULONG GlyphIndex,
-    _In_ KSWORD_ARK_BUGCHECK_LAYOUT_TEXT_STYLE TextStyle,
+KswordARKSvgaDrawCharacter(
+    _In_ PKSWORD_ARK_SVGA_CONTEXT Context,
     _In_ ULONG X,
-    _In_ ULONG Y
+    _In_ ULONG Y,
+    _In_ CHAR Character,
+    _In_ ULONG Color,
+    _In_ ULONG Scale
     )
 {
-    if (InterlockedCompareExchange(
-            &g_KswordArkBugcheckState.Font.Valid,
-            1,
-            1) != 0) {
-        ULONG width;
-        ULONG height;
-        const UCHAR* atlas;
+    ULONG row;
+    ULONG column;
+    ULONG dx;
+    ULONG dy;
+    UCHAR bits;
+    ULONG glyphIndex;
 
-        if (TextStyle == KswordArkBugcheckLayoutTextHero) {
-            width = g_KswordArkBugcheckState.Font.HeroWidth;
-            height = g_KswordArkBugcheckState.Font.HeroHeight;
-            atlas = g_KswordArkBugcheckFontCoverage +
-                g_KswordArkBugcheckState.Font.BodyDataLength;
-        } else {
-            width = g_KswordArkBugcheckState.Font.BodyWidth;
-            height = g_KswordArkBugcheckState.Font.BodyHeight;
-            atlas = g_KswordArkBugcheckFontCoverage;
-        }
-        if (X >= width || Y >= height) {
-            return 0U;
-        }
-        return atlas[
-            (SIZE_T)GlyphIndex * width * height +
-            (SIZE_T)Y * width + X];
+    if ((UCHAR)Character < KSWORD_ARK_BUGCHECK_FONT_FIRST ||
+        (UCHAR)Character > KSWORD_ARK_BUGCHECK_FONT_LAST) {
+        Character = '?';
+    }
+    if (Scale == 0) {
+        Scale = 1;
     }
 
-    if (TextStyle == KswordArkBugcheckLayoutTextBody) {
-        const ULONG offsetX =
-            (KSWORD_ARK_BUGCHECK_FONT_BODY_WIDTH -
-             KSWORD_ARK_BUGCHECK_FONT_WIDTH) / 2UL;
-        const ULONG offsetY =
-            (KSWORD_ARK_BUGCHECK_FONT_BODY_HEIGHT -
-             KSWORD_ARK_BUGCHECK_FONT_HEIGHT) / 2UL;
-        if (X < offsetX || Y < offsetY ||
-            X >= offsetX + KSWORD_ARK_BUGCHECK_FONT_WIDTH ||
-            Y >= offsetY + KSWORD_ARK_BUGCHECK_FONT_HEIGHT) {
-            return 0U;
+    glyphIndex = (UCHAR)Character - KSWORD_ARK_BUGCHECK_FONT_FIRST;
+    for (row = 0; row < KSWORD_ARK_BUGCHECK_FONT_HEIGHT; ++row) {
+        bits = g_KswordArkBugcheckFont8x12[glyphIndex][row];
+        for (column = 0; column < KSWORD_ARK_BUGCHECK_FONT_WIDTH; ++column) {
+            if ((bits & (0x80U >> column)) == 0) {
+                continue;
+            }
+            for (dy = 0; dy < Scale; ++dy) {
+                for (dx = 0; dx < Scale; ++dx) {
+                    KswordARKSvgaWritePixel(
+                        Context,
+                        X + column * Scale + dx,
+                        Y + row * Scale + dy,
+                        Color);
+                }
+            }
         }
-        return (g_KswordArkBugcheckFont8x12[GlyphIndex][Y - offsetY] &
-                (0x80U >> (X - offsetX))) != 0
-            ? 255U
-            : 0U;
-    }
-
-    {
-        const ULONG scaledWidth = KSWORD_ARK_BUGCHECK_FONT_WIDTH * 2UL;
-        const ULONG scaledHeight = KSWORD_ARK_BUGCHECK_FONT_HEIGHT * 2UL;
-        const ULONG offsetX =
-            (KSWORD_ARK_BUGCHECK_FONT_HERO_WIDTH - scaledWidth) / 2UL;
-        const ULONG offsetY =
-            (KSWORD_ARK_BUGCHECK_FONT_HERO_HEIGHT - scaledHeight) / 2UL;
-        ULONG sourceX;
-        ULONG sourceY;
-
-        if (X < offsetX || Y < offsetY ||
-            X >= offsetX + scaledWidth ||
-            Y >= offsetY + scaledHeight) {
-            return 0U;
-        }
-        sourceX = (X - offsetX) / 2UL;
-        sourceY = (Y - offsetY) / 2UL;
-        return (g_KswordArkBugcheckFont8x12[GlyphIndex][sourceY] &
-                (0x80U >> sourceX)) != 0
-            ? 255U
-            : 0U;
     }
 }
 
@@ -707,89 +641,18 @@ KswordARKSvgaDrawText(
     _In_ ULONG X,
     _In_ ULONG Y,
     _In_z_ PCSTR Text,
-    _In_ ULONG ColorIndex,
-    _In_ KSWORD_ARK_BUGCHECK_LAYOUT_TEXT_STYLE TextStyle
+    _In_ ULONG Color,
+    _In_ ULONG Scale
     )
 {
-    UCHAR foregroundBlue;
-    UCHAR foregroundGreen;
-    UCHAR foregroundRed;
-    ULONG cursor;
-    ULONG glyphHeight;
-    ULONG glyphWidth;
-    ULONG glyphAdvance;
+    ULONG cursor = X;
 
-    if (Context == NULL || Text == NULL ||
-        ColorIndex >= KswordArkBugcheckLayoutColorCount ||
-        TextStyle >= KswordArkBugcheckLayoutTextStyleCount) {
+    if (Text == NULL) {
         return;
     }
-
-    KswordARKSvgaLayoutColorRgb(
-        ColorIndex,
-        &foregroundRed,
-        &foregroundGreen,
-        &foregroundBlue);
-    glyphWidth = TextStyle == KswordArkBugcheckLayoutTextHero
-        ? KSWORD_ARK_BUGCHECK_FONT_HERO_WIDTH
-        : KSWORD_ARK_BUGCHECK_FONT_BODY_WIDTH;
-    glyphHeight = TextStyle == KswordArkBugcheckLayoutTextHero
-        ? KSWORD_ARK_BUGCHECK_FONT_HERO_HEIGHT
-        : KSWORD_ARK_BUGCHECK_FONT_BODY_HEIGHT;
-    glyphAdvance = TextStyle == KswordArkBugcheckLayoutTextHero
-        ? KSWORD_ARK_BUGCHECK_FONT_HERO_ADVANCE
-        : KSWORD_ARK_BUGCHECK_FONT_BODY_ADVANCE;
-    cursor = X;
     while (*Text != '\0') {
-        UCHAR character;
-        ULONG glyphIndex;
-        ULONG row;
-
-        character = (UCHAR)*Text;
-        if (character < KSWORD_ARK_BUGCHECK_FONT_FIRST ||
-            character > KSWORD_ARK_BUGCHECK_FONT_LAST) {
-            character = (UCHAR)'?';
-        }
-        glyphIndex = character - KSWORD_ARK_BUGCHECK_FONT_FIRST;
-        for (row = 0; row < glyphHeight; ++row) {
-            ULONG column;
-
-            for (column = 0; column < glyphWidth; ++column) {
-                UCHAR coverage;
-                UCHAR blue;
-                UCHAR green;
-                UCHAR red;
-                ULONG pixel;
-
-                coverage = KswordARKSvgaGlyphCoverage(
-                    glyphIndex,
-                    TextStyle,
-                    column,
-                    row);
-                if (coverage == 0U) {
-                    continue;
-                }
-                red = (UCHAR)(
-                    (foregroundRed * coverage +
-                     KSWORD_ARK_BUGCHECK_LAYOUT_BACKGROUND_RED *
-                         (255UL - coverage) + 127UL) / 255UL);
-                green = (UCHAR)(
-                    (foregroundGreen * coverage +
-                     KSWORD_ARK_BUGCHECK_LAYOUT_BACKGROUND_GREEN *
-                         (255UL - coverage) + 127UL) / 255UL);
-                blue = (UCHAR)(
-                    (foregroundBlue * coverage +
-                     KSWORD_ARK_BUGCHECK_LAYOUT_BACKGROUND_BLUE *
-                         (255UL - coverage) + 127UL) / 255UL);
-                pixel = KswordARKSvgaPixelFromRgb(Context, red, green, blue);
-                KswordARKSvgaWritePixel(
-                    Context,
-                    cursor + column,
-                    Y + row,
-                    pixel);
-            }
-        }
-        cursor += glyphAdvance;
+        KswordARKSvgaDrawCharacter(Context, cursor, Y, *Text, Color, Scale);
+        cursor += (KSWORD_ARK_BUGCHECK_FONT_WIDTH + 1UL) * Scale;
         if (cursor >= Context->Width) {
             break;
         }
@@ -874,6 +737,7 @@ KswordARKSvgaDrawBitmap(
 typedef struct _KSWORD_ARK_SVGA_LAYOUT_CONTEXT
 {
     PKSWORD_ARK_SVGA_CONTEXT Svga;
+    ULONG Colors[KswordArkBugcheckLayoutColorCount];
     ULONG Border;
 } KSWORD_ARK_SVGA_LAYOUT_CONTEXT, *PKSWORD_ARK_SVGA_LAYOUT_CONTEXT;
 
@@ -883,8 +747,7 @@ KswordARKSvgaLayoutDrawText(
     _In_ LONG X,
     _In_ LONG Y,
     _In_z_ PCSTR Text,
-    _In_ ULONG ColorIndex,
-    _In_ KSWORD_ARK_BUGCHECK_LAYOUT_TEXT_STYLE TextStyle
+    _In_ ULONG ColorIndex
     )
 {
     PKSWORD_ARK_SVGA_LAYOUT_CONTEXT layout;
@@ -892,8 +755,7 @@ KswordARKSvgaLayoutDrawText(
     layout = (PKSWORD_ARK_SVGA_LAYOUT_CONTEXT)Context;
     if (layout == NULL || layout->Svga == NULL || Text == NULL ||
         X < 0 || Y < 0 ||
-        ColorIndex >= (ULONG)KswordArkBugcheckLayoutColorCount ||
-        TextStyle >= KswordArkBugcheckLayoutTextStyleCount) {
+        ColorIndex >= (ULONG)KswordArkBugcheckLayoutColorCount) {
         return STATUS_INVALID_PARAMETER;
     }
 
@@ -902,8 +764,8 @@ KswordARKSvgaLayoutDrawText(
         (ULONG)X,
         (ULONG)Y,
         Text,
-        ColorIndex,
-        TextStyle);
+        layout->Colors[ColorIndex],
+        1UL);
     return STATUS_SUCCESS;
 }
 
@@ -991,6 +853,30 @@ KswordARKBugcheckSvgaDrawPanelNoLog(
         KSWORD_ARK_BUGCHECK_LAYOUT_BACKGROUND_RED,
         KSWORD_ARK_BUGCHECK_LAYOUT_BACKGROUND_GREEN,
         KSWORD_ARK_BUGCHECK_LAYOUT_BACKGROUND_BLUE);
+    layout.Colors[KswordArkBugcheckLayoutColorText] =
+        KswordARKSvgaPixelFromRgb(
+            svga,
+            KSWORD_ARK_BUGCHECK_LAYOUT_TEXT_RED,
+            KSWORD_ARK_BUGCHECK_LAYOUT_TEXT_GREEN,
+            KSWORD_ARK_BUGCHECK_LAYOUT_TEXT_BLUE);
+    layout.Colors[KswordArkBugcheckLayoutColorAccent] =
+        KswordARKSvgaPixelFromRgb(
+            svga,
+            KSWORD_ARK_BUGCHECK_LAYOUT_ACCENT_RED,
+            KSWORD_ARK_BUGCHECK_LAYOUT_ACCENT_GREEN,
+            KSWORD_ARK_BUGCHECK_LAYOUT_ACCENT_BLUE);
+    layout.Colors[KswordArkBugcheckLayoutColorMuted] =
+        KswordARKSvgaPixelFromRgb(
+            svga,
+            KSWORD_ARK_BUGCHECK_LAYOUT_MUTED_RED,
+            KSWORD_ARK_BUGCHECK_LAYOUT_MUTED_GREEN,
+            KSWORD_ARK_BUGCHECK_LAYOUT_MUTED_BLUE);
+    layout.Colors[KswordArkBugcheckLayoutColorWarning] =
+        KswordARKSvgaPixelFromRgb(
+            svga,
+            KSWORD_ARK_BUGCHECK_LAYOUT_WARNING_RED,
+            KSWORD_ARK_BUGCHECK_LAYOUT_WARNING_GREEN,
+            KSWORD_ARK_BUGCHECK_LAYOUT_WARNING_BLUE);
     layout.Border = KswordARKSvgaPixelFromRgb(
         svga,
         KSWORD_ARK_BUGCHECK_LAYOUT_BORDER_RED,
@@ -1019,15 +905,15 @@ KswordARKBugcheckSvgaDrawPanelNoLog(
             (ULONG)(originX + KSWORD_ARK_BUGCHECK_LAYOUT_LOGO_X),
             KSWORD_ARK_BUGCHECK_LAYOUT_LOGO_Y + 18UL,
             "KSWORDDEV",
-            KswordArkBugcheckLayoutColorAccent,
-            KswordArkBugcheckLayoutTextHero);
+            layout.Colors[KswordArkBugcheckLayoutColorAccent],
+            2UL);
         KswordARKSvgaDrawText(
             svga,
             (ULONG)(originX + KSWORD_ARK_BUGCHECK_LAYOUT_LOGO_X),
             KSWORD_ARK_BUGCHECK_LAYOUT_LOGO_Y + 50UL,
             "KERNEL TOOLKIT",
-            KswordArkBugcheckLayoutColorMuted,
-            KswordArkBugcheckLayoutTextBody);
+            layout.Colors[KswordArkBugcheckLayoutColorMuted],
+            1UL);
     }
 
     callbackMask = 0UL;
@@ -1048,8 +934,6 @@ KswordARKBugcheckSvgaDrawPanelNoLog(
     canvas.Context = &layout;
     canvas.Width = svga->Width;
     canvas.Height = svga->Height;
-    canvas.BitsPerPixel = svga->Bpp;
-    canvas.RendererName = "SVGA";
     canvas.DrawText = KswordARKSvgaLayoutDrawText;
     canvas.DrawFrame = KswordARKSvgaLayoutDrawFrame;
     (VOID)KswordARKBugcheckLayoutDraw(

@@ -26,7 +26,7 @@
 #include <QFileInfo>
 #include <QFont>
 #include <QFontDatabase>
-#include <QFontMetricsF>
+#include <QFontMetrics>
 #include <QGuiApplication>
 #include <QHeaderView>
 #include <QScreen>
@@ -207,102 +207,6 @@ namespace
     constexpr QRgb kBugcheckBitmapBackground = qRgba(5, 15, 33, 255);
     constexpr QRgb kBugcheckBitmapLightText = qRgba(226, 232, 244, 255);
 
-    QFont bugcheckSystemMonospaceFont(const int cellWidth, const int cellHeight)
-    {
-        QFont font = QFontDatabase::systemFont(QFontDatabase::FixedFont);
-
-        font.setStyleHint(QFont::Monospace, QFont::PreferQuality);
-        font.setFixedPitch(true);
-        font.setKerning(false);
-        font.setWeight(QFont::Medium);
-
-        // Pick the largest pixel size whose complete printable ASCII set fits
-        // the fixed crash-time cell. Metrics are evaluated by Qt while the
-        // system font is available; R0 receives pixels only.
-        for (int pixelSize = cellHeight; pixelSize >= 6; --pixelSize)
-        {
-            font.setPixelSize(pixelSize);
-            const QFontMetricsF metrics(font);
-            qreal widestAdvance = 0.0;
-            for (uint character = KSWORD_ARK_BUGCHECK_FONT_ASCII_FIRST;
-                 character <= KSWORD_ARK_BUGCHECK_FONT_ASCII_LAST;
-                 ++character)
-            {
-                widestAdvance = std::max(
-                    widestAdvance,
-                    metrics.horizontalAdvance(QChar(character)));
-            }
-            if (widestAdvance <= static_cast<qreal>(cellWidth) &&
-                metrics.height() <= static_cast<qreal>(cellHeight))
-            {
-                break;
-            }
-        }
-        return font;
-    }
-
-    std::vector<std::uint8_t> rasterizeBugcheckFontCoverage(
-        const int cellWidth,
-        const int cellHeight)
-    {
-        if (cellWidth <= 0 || cellHeight <= 0)
-        {
-            return {};
-        }
-
-        const QFont font = bugcheckSystemMonospaceFont(cellWidth, cellHeight);
-        const QFontMetricsF metrics(font);
-        const std::size_t glyphBytes =
-            static_cast<std::size_t>(cellWidth) *
-            static_cast<std::size_t>(cellHeight);
-        std::vector<std::uint8_t> coverage(
-            glyphBytes * KSWORD_ARK_BUGCHECK_FONT_GLYPH_COUNT);
-        QImage glyph(cellWidth, cellHeight, QImage::Format_ARGB32_Premultiplied);
-        if (glyph.isNull())
-        {
-            return {};
-        }
-
-        for (uint character = KSWORD_ARK_BUGCHECK_FONT_ASCII_FIRST;
-             character <= KSWORD_ARK_BUGCHECK_FONT_ASCII_LAST;
-             ++character)
-        {
-            glyph.fill(Qt::transparent);
-            {
-                QPainter painter(&glyph);
-                painter.setRenderHint(QPainter::TextAntialiasing, true);
-                painter.setRenderHint(QPainter::Antialiasing, true);
-                painter.setFont(font);
-                painter.setPen(Qt::white);
-                const QString text{
-                    QChar::fromLatin1(static_cast<char>(character))};
-                const qreal originX =
-                    (static_cast<qreal>(cellWidth) -
-                     metrics.horizontalAdvance(text)) / 2.0;
-                const qreal baseline =
-                    (static_cast<qreal>(cellHeight) - metrics.height()) / 2.0 +
-                    metrics.ascent();
-                painter.drawText(QPointF(originX, baseline), text);
-            }
-
-            const std::size_t glyphOffset =
-                static_cast<std::size_t>(
-                    character - KSWORD_ARK_BUGCHECK_FONT_ASCII_FIRST) * glyphBytes;
-            for (int y = 0; y < cellHeight; ++y)
-            {
-                const QRgb* const row =
-                    reinterpret_cast<const QRgb*>(glyph.constScanLine(y));
-                for (int x = 0; x < cellWidth; ++x)
-                {
-                    coverage[glyphOffset +
-                        static_cast<std::size_t>(y) * cellWidth + x] =
-                        static_cast<std::uint8_t>(qAlpha(row[x]));
-                }
-            }
-        }
-        return coverage;
-    }
-
     std::uint32_t detectBugcheckBrandColor(const QImage& image)
     {
         std::uint64_t redTotal = 0;
@@ -338,31 +242,12 @@ namespace
             static_cast<std::uint32_t>(blueTotal / sampleCount);
     }
 
-    void queueBugcheckAssetsUpload()
+    [[maybe_unused]] void queueBugcheckBitmapUpload()
     {
-        // Font discovery and rasterization deliberately happen in R3 while
-        // Windows and Qt font services are available. The worker performs only
-        // bounded driver I/O and optional branding decoding.
-        std::vector<std::uint8_t> bodyCoverage =
-            rasterizeBugcheckFontCoverage(
-                KSWORD_ARK_BUGCHECK_FONT_BODY_WIDTH,
-                KSWORD_ARK_BUGCHECK_FONT_BODY_HEIGHT);
-        std::vector<std::uint8_t> heroCoverage =
-            rasterizeBugcheckFontCoverage(
-                KSWORD_ARK_BUGCHECK_FONT_HERO_WIDTH,
-                KSWORD_ARK_BUGCHECK_FONT_HERO_HEIGHT);
-        QThreadPool::globalInstance()->start([
-            bodyCoverage = std::move(bodyCoverage),
-            heroCoverage = std::move(heroCoverage)]()
+        // The branding packet is optional. Keep decoding and driver I/O away
+        // from the UI thread and intentionally discard every failure result.
+        QThreadPool::globalInstance()->start([]()
         {
-            if (bodyCoverage.size() == KSWORD_ARK_BUGCHECK_FONT_BODY_BYTES &&
-                heroCoverage.size() == KSWORD_ARK_BUGCHECK_FONT_HERO_BYTES)
-            {
-                (void)ksword::ark::DriverClient().setBugcheckFont(
-                    bodyCoverage,
-                    heroCoverage);
-            }
-
             QImage source(QStringLiteral(":/Image/Resource/Logo/KswordHome-En.png"));
             if (source.isNull())
             {
@@ -442,6 +327,157 @@ namespace
                 stride,
                 brandColor,
                 pixels);
+        });
+    }
+
+    constexpr int kBugcheckVerdictWidth =
+        static_cast<int>(KSWORD_ARK_BUGCHECK_VERDICT_MAX_WIDTH);
+    constexpr int kBugcheckVerdictMaxHeight =
+        static_cast<int>(KSWORD_ARK_BUGCHECK_VERDICT_MAX_HEIGHT);
+    constexpr int kBugcheckVerdictPadding = 8;
+
+    QImage renderBugcheckVerdictCard(const QString& text, const QFont& systemFont)
+    {
+        constexpr int textFlags =
+            Qt::AlignLeft | Qt::AlignVCenter | Qt::TextWordWrap;
+        QFont verdictFont = systemFont;
+        QRect textBounds;
+
+        verdictFont.setWeight(QFont::DemiBold);
+        for (int pixelSize = 18; pixelSize >= 12; --pixelSize)
+        {
+            verdictFont.setPixelSize(pixelSize);
+            const QFontMetrics metrics(verdictFont);
+            textBounds = metrics.boundingRect(
+                QRect(
+                    0,
+                    0,
+                    kBugcheckVerdictWidth - kBugcheckVerdictPadding * 2,
+                    2048),
+                textFlags,
+                text);
+            if (textBounds.height() + kBugcheckVerdictPadding * 2 <=
+                kBugcheckVerdictMaxHeight)
+            {
+                break;
+            }
+        }
+
+        const int cardHeight = std::clamp(
+            textBounds.height() + kBugcheckVerdictPadding * 2,
+            48,
+            kBugcheckVerdictMaxHeight);
+        QImage card(
+            kBugcheckVerdictWidth,
+            cardHeight,
+            QImage::Format_ARGB32);
+        if (card.isNull())
+        {
+            return {};
+        }
+
+        card.fill(kBugcheckBitmapBackground);
+        QPainter painter(&card);
+        painter.setRenderHint(QPainter::TextAntialiasing, true);
+        painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
+        painter.setFont(verdictFont);
+        painter.setPen(QColor::fromRgba(kBugcheckBitmapLightText));
+        painter.drawText(
+            QRect(
+                kBugcheckVerdictPadding,
+                kBugcheckVerdictPadding,
+                card.width() - kBugcheckVerdictPadding * 2,
+                card.height() - kBugcheckVerdictPadding * 2),
+            textFlags,
+            text);
+        painter.end();
+        return card;
+    }
+
+    bool appendBugcheckVerdictBitmap(
+        std::vector<ksword::ark::BugcheckVerdictBitmap>& resources,
+        const std::uint32_t language,
+        const std::uint32_t classification,
+        const QString& text,
+        const QFont& systemFont)
+    {
+        const QImage card = renderBugcheckVerdictCard(text, systemFont);
+        if (card.isNull())
+        {
+            return false;
+        }
+
+        ksword::ark::BugcheckVerdictBitmap resource;
+        resource.language = language;
+        resource.classification = classification;
+        resource.width = static_cast<std::uint32_t>(card.width());
+        resource.height = static_cast<std::uint32_t>(card.height());
+        resource.stride = resource.width * 4U;
+        if (card.bytesPerLine() < static_cast<qsizetype>(resource.stride))
+        {
+            return false;
+        }
+        resource.bgraPixels.resize(
+            static_cast<std::size_t>(resource.stride) * resource.height);
+        for (std::uint32_t y = 0; y < resource.height; ++y)
+        {
+            std::memcpy(
+                resource.bgraPixels.data() +
+                    static_cast<std::size_t>(y) * resource.stride,
+                card.constScanLine(static_cast<int>(y)),
+                resource.stride);
+        }
+        resources.push_back(std::move(resource));
+        return true;
+    }
+
+    void queueBugcheckVerdictResourceUpload()
+    {
+        const QFont systemFont =
+            QFontDatabase::systemFont(QFontDatabase::GeneralFont);
+        QThreadPool::globalInstance()->start([systemFont]()
+        {
+            const std::array<std::uint32_t, 4> classifications{
+                KSWORD_ARK_BUGCHECK_VERDICT_CLASS_OURS,
+                KSWORD_ARK_BUGCHECK_VERDICT_CLASS_MICROSOFT,
+                KSWORD_ARK_BUGCHECK_VERDICT_CLASS_THIRD_PARTY,
+                KSWORD_ARK_BUGCHECK_VERDICT_CLASS_UNKNOWN
+            };
+            const std::array<QString, 4> chineseTexts{
+                QStringLiteral("这是KswordARK的问题，我们非常抱歉。请您尽快将MiniDump发送给开发者以取得修复。"),
+                QStringLiteral("这不是KswordARK的问题，而是微软的屎山代码发力了。向技术人员发送MiniDump或此页面的照片。"),
+                QStringLiteral("这不是KswordARK的问题，也不是微软的问题，而是第三方驱动程序的问题。向技术人员发送MiniDump或此页面的照片。"),
+                QStringLiteral("这不是任何人的问题，你电脑就是炸了。重启、重装、重买。")
+            };
+            const std::array<QString, 4> englishTexts{
+                QStringLiteral("This is a KswordARK problem. We are very sorry. Please send the MiniDump to the developers as soon as possible so it can be fixed."),
+                QStringLiteral("This is not a KswordARK problem. Microsoft's spaghetti code struck again. Send the MiniDump or a photo of this page to technical support."),
+                QStringLiteral("This is neither a KswordARK nor a Microsoft problem. A third-party driver is responsible. Send the MiniDump or a photo of this page to technical support."),
+                QStringLiteral("This is nobody's fault. Your computer just exploded. Restart it, reinstall it, or buy a new one.")
+            };
+
+            std::vector<ksword::ark::BugcheckVerdictBitmap> resources;
+            resources.reserve(KSWORD_ARK_BUGCHECK_VERDICT_RESOURCE_COUNT);
+            for (std::size_t index = 0; index < classifications.size(); ++index)
+            {
+                if (!appendBugcheckVerdictBitmap(
+                        resources,
+                        KSWORD_ARK_BUGCHECK_VERDICT_LANGUAGE_CHINESE,
+                        classifications[index],
+                        chineseTexts[index],
+                        systemFont) ||
+                    !appendBugcheckVerdictBitmap(
+                        resources,
+                        KSWORD_ARK_BUGCHECK_VERDICT_LANGUAGE_ENGLISH,
+                        classifications[index],
+                        englishTexts[index],
+                        systemFont))
+                {
+                    return;
+                }
+            }
+            (void)ksword::ark::DriverClient().setBugcheckVerdictResources(
+                resources);
         });
     }
 
@@ -8559,7 +8595,7 @@ void MainWindow::startR0RuntimeConsumersAfterServiceStart()
         return;
     }
 
-    queueBugcheckAssetsUpload();
+    queueBugcheckVerdictResourceUpload();
     startR0DriverLogPoller();
 
     if (CallbackPromptManager* callbackPromptManager = CallbackPromptManager::ensureGlobalManager(this))
