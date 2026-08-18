@@ -25,6 +25,8 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QFont>
+#include <QFontDatabase>
+#include <QFontMetricsF>
 #include <QGuiApplication>
 #include <QHeaderView>
 #include <QScreen>
@@ -205,6 +207,102 @@ namespace
     constexpr QRgb kBugcheckBitmapBackground = qRgba(5, 15, 33, 255);
     constexpr QRgb kBugcheckBitmapLightText = qRgba(226, 232, 244, 255);
 
+    QFont bugcheckSystemMonospaceFont(const int cellWidth, const int cellHeight)
+    {
+        QFont font = QFontDatabase::systemFont(QFontDatabase::FixedFont);
+
+        font.setStyleHint(QFont::Monospace, QFont::PreferQuality);
+        font.setFixedPitch(true);
+        font.setKerning(false);
+        font.setWeight(QFont::Medium);
+
+        // Pick the largest pixel size whose complete printable ASCII set fits
+        // the fixed crash-time cell. Metrics are evaluated by Qt while the
+        // system font is available; R0 receives pixels only.
+        for (int pixelSize = cellHeight; pixelSize >= 6; --pixelSize)
+        {
+            font.setPixelSize(pixelSize);
+            const QFontMetricsF metrics(font);
+            qreal widestAdvance = 0.0;
+            for (uint character = KSWORD_ARK_BUGCHECK_FONT_ASCII_FIRST;
+                 character <= KSWORD_ARK_BUGCHECK_FONT_ASCII_LAST;
+                 ++character)
+            {
+                widestAdvance = std::max(
+                    widestAdvance,
+                    metrics.horizontalAdvance(QChar(character)));
+            }
+            if (widestAdvance <= static_cast<qreal>(cellWidth) &&
+                metrics.height() <= static_cast<qreal>(cellHeight))
+            {
+                break;
+            }
+        }
+        return font;
+    }
+
+    std::vector<std::uint8_t> rasterizeBugcheckFontCoverage(
+        const int cellWidth,
+        const int cellHeight)
+    {
+        if (cellWidth <= 0 || cellHeight <= 0)
+        {
+            return {};
+        }
+
+        const QFont font = bugcheckSystemMonospaceFont(cellWidth, cellHeight);
+        const QFontMetricsF metrics(font);
+        const std::size_t glyphBytes =
+            static_cast<std::size_t>(cellWidth) *
+            static_cast<std::size_t>(cellHeight);
+        std::vector<std::uint8_t> coverage(
+            glyphBytes * KSWORD_ARK_BUGCHECK_FONT_GLYPH_COUNT);
+        QImage glyph(cellWidth, cellHeight, QImage::Format_ARGB32_Premultiplied);
+        if (glyph.isNull())
+        {
+            return {};
+        }
+
+        for (uint character = KSWORD_ARK_BUGCHECK_FONT_ASCII_FIRST;
+             character <= KSWORD_ARK_BUGCHECK_FONT_ASCII_LAST;
+             ++character)
+        {
+            glyph.fill(Qt::transparent);
+            {
+                QPainter painter(&glyph);
+                painter.setRenderHint(QPainter::TextAntialiasing, true);
+                painter.setRenderHint(QPainter::Antialiasing, true);
+                painter.setFont(font);
+                painter.setPen(Qt::white);
+                const QString text{
+                    QChar::fromLatin1(static_cast<char>(character))};
+                const qreal originX =
+                    (static_cast<qreal>(cellWidth) -
+                     metrics.horizontalAdvance(text)) / 2.0;
+                const qreal baseline =
+                    (static_cast<qreal>(cellHeight) - metrics.height()) / 2.0 +
+                    metrics.ascent();
+                painter.drawText(QPointF(originX, baseline), text);
+            }
+
+            const std::size_t glyphOffset =
+                static_cast<std::size_t>(
+                    character - KSWORD_ARK_BUGCHECK_FONT_ASCII_FIRST) * glyphBytes;
+            for (int y = 0; y < cellHeight; ++y)
+            {
+                const QRgb* const row =
+                    reinterpret_cast<const QRgb*>(glyph.constScanLine(y));
+                for (int x = 0; x < cellWidth; ++x)
+                {
+                    coverage[glyphOffset +
+                        static_cast<std::size_t>(y) * cellWidth + x] =
+                        static_cast<std::uint8_t>(qAlpha(row[x]));
+                }
+            }
+        }
+        return coverage;
+    }
+
     std::uint32_t detectBugcheckBrandColor(const QImage& image)
     {
         std::uint64_t redTotal = 0;
@@ -240,12 +338,31 @@ namespace
             static_cast<std::uint32_t>(blueTotal / sampleCount);
     }
 
-    void queueBugcheckBitmapUpload()
+    void queueBugcheckAssetsUpload()
     {
-        // The branding packet is optional. Keep decoding and driver I/O away
-        // from the UI thread and intentionally discard every failure result.
-        QThreadPool::globalInstance()->start([]()
+        // Font discovery and rasterization deliberately happen in R3 while
+        // Windows and Qt font services are available. The worker performs only
+        // bounded driver I/O and optional branding decoding.
+        std::vector<std::uint8_t> bodyCoverage =
+            rasterizeBugcheckFontCoverage(
+                KSWORD_ARK_BUGCHECK_FONT_BODY_WIDTH,
+                KSWORD_ARK_BUGCHECK_FONT_BODY_HEIGHT);
+        std::vector<std::uint8_t> heroCoverage =
+            rasterizeBugcheckFontCoverage(
+                KSWORD_ARK_BUGCHECK_FONT_HERO_WIDTH,
+                KSWORD_ARK_BUGCHECK_FONT_HERO_HEIGHT);
+        QThreadPool::globalInstance()->start([
+            bodyCoverage = std::move(bodyCoverage),
+            heroCoverage = std::move(heroCoverage)]()
         {
+            if (bodyCoverage.size() == KSWORD_ARK_BUGCHECK_FONT_BODY_BYTES &&
+                heroCoverage.size() == KSWORD_ARK_BUGCHECK_FONT_HERO_BYTES)
+            {
+                (void)ksword::ark::DriverClient().setBugcheckFont(
+                    bodyCoverage,
+                    heroCoverage);
+            }
+
             QImage source(QStringLiteral(":/Image/Resource/Logo/KswordHome-En.png"));
             if (source.isNull())
             {
@@ -8442,7 +8559,7 @@ void MainWindow::startR0RuntimeConsumersAfterServiceStart()
         return;
     }
 
-    queueBugcheckBitmapUpload();
+    queueBugcheckAssetsUpload();
     startR0DriverLogPoller();
 
     if (CallbackPromptManager* callbackPromptManager = CallbackPromptManager::ensureGlobalManager(this))

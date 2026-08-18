@@ -15,8 +15,14 @@
 #define KSWORD_ARK_BUGCHECK_LAYOUT_LOGO_X 16L
 #define KSWORD_ARK_BUGCHECK_LAYOUT_LOGO_Y 12L
 #define KSWORD_ARK_BUGCHECK_LAYOUT_HERO_SCALE 2UL
-#define KSWORD_ARK_BUGCHECK_LAYOUT_HERO_ADVANCE 18UL
-#define KSWORD_ARK_BUGCHECK_LAYOUT_HERO_HEIGHT 24UL
+#define KSWORD_ARK_BUGCHECK_LAYOUT_TEXT_ADVANCE \
+    KSWORD_ARK_BUGCHECK_FONT_BODY_ADVANCE
+#define KSWORD_ARK_BUGCHECK_LAYOUT_TEXT_HEIGHT \
+    KSWORD_ARK_BUGCHECK_FONT_BODY_HEIGHT
+#define KSWORD_ARK_BUGCHECK_LAYOUT_HERO_ADVANCE \
+    KSWORD_ARK_BUGCHECK_FONT_HERO_ADVANCE
+#define KSWORD_ARK_BUGCHECK_LAYOUT_HERO_HEIGHT \
+    KSWORD_ARK_BUGCHECK_FONT_HERO_HEIGHT
 
 #define KSWORD_ARK_BUGCHECK_LAYOUT_BACKGROUND_RED 5U
 #define KSWORD_ARK_BUGCHECK_LAYOUT_BACKGROUND_GREEN 15U
@@ -54,6 +60,13 @@ typedef enum _KSWORD_ARK_BUGCHECK_LAYOUT_COLOR
     KswordArkBugcheckLayoutColorCount
 } KSWORD_ARK_BUGCHECK_LAYOUT_COLOR;
 
+typedef enum _KSWORD_ARK_BUGCHECK_LAYOUT_TEXT_STYLE
+{
+    KswordArkBugcheckLayoutTextBody = 0,
+    KswordArkBugcheckLayoutTextHero,
+    KswordArkBugcheckLayoutTextStyleCount
+} KSWORD_ARK_BUGCHECK_LAYOUT_TEXT_STYLE;
+
 typedef enum _KSWORD_ARK_BUGCHECK_LAYOUT_FRAME
 {
     KswordArkBugcheckLayoutFrameCompactUpper = 0,
@@ -69,14 +82,11 @@ typedef enum _KSWORD_ARK_BUGCHECK_LAYOUT_FRAME
     KswordArkBugcheckLayoutFrameDetailedTopLeft,
     KswordArkBugcheckLayoutFrameDetailedTopMiddle,
     KswordArkBugcheckLayoutFrameDetailedTopRight,
-    KswordArkBugcheckLayoutFrameDetailedMiddleThread,
-    KswordArkBugcheckLayoutFrameDetailedMiddleStack,
-    KswordArkBugcheckLayoutFrameDetailedMiddleModule,
-    KswordArkBugcheckLayoutFrameDetailedMiddleBlackbox,
-    KswordArkBugcheckLayoutFrameDetailedBottomCpu,
-    KswordArkBugcheckLayoutFrameDetailedBottomDump,
-    KswordArkBugcheckLayoutFrameDetailedBottomEvent,
-    KswordArkBugcheckLayoutFrameDetailedBottomHelp,
+    KswordArkBugcheckLayoutFrameDetailedMiddleLeft,
+    KswordArkBugcheckLayoutFrameDetailedMiddleMiddle,
+    KswordArkBugcheckLayoutFrameDetailedMiddleRight,
+    KswordArkBugcheckLayoutFrameDetailedBottomLeft,
+    KswordArkBugcheckLayoutFrameDetailedBottomRight,
     KswordArkBugcheckLayoutFrameCount
 } KSWORD_ARK_BUGCHECK_LAYOUT_FRAME;
 
@@ -86,7 +96,8 @@ typedef NTSTATUS
     _In_ LONG X,
     _In_ LONG Y,
     _In_z_ PCSTR Text,
-    _In_ ULONG ColorIndex
+    _In_ ULONG ColorIndex,
+    _In_ KSWORD_ARK_BUGCHECK_LAYOUT_TEXT_STYLE TextStyle
     );
 
 typedef NTSTATUS
@@ -102,8 +113,9 @@ typedef struct _KSWORD_ARK_BUGCHECK_LAYOUT_CANVAS
     PVOID Context;
     ULONG Width;
     ULONG Height;
+    ULONG BitsPerPixel;
+    PCSTR RendererName;
     PKSWORD_ARK_BUGCHECK_LAYOUT_DRAW_TEXT DrawText;
-    PKSWORD_ARK_BUGCHECK_LAYOUT_DRAW_TEXT DrawHeroText;
     PKSWORD_ARK_BUGCHECK_LAYOUT_DRAW_FRAME DrawFrame;
 } KSWORD_ARK_BUGCHECK_LAYOUT_CANVAS,
   *PKSWORD_ARK_BUGCHECK_LAYOUT_CANVAS;

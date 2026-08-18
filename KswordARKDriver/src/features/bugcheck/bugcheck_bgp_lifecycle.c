@@ -204,6 +204,32 @@ KswordARKBugcheckBgpArm(
     return STATUS_SUCCESS;
 }
 
+NTSTATUS
+KswordARKBugcheckBgpBeginPanelUpdate(
+    VOID
+    )
+{
+    if (KeGetCurrentIrql() != PASSIVE_LEVEL) {
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+    if (InterlockedCompareExchange(
+            &g_KswordArkBgp.DrawStarted,
+            0,
+            0) != 0) {
+        return STATUS_DEVICE_BUSY;
+    }
+    if (InterlockedCompareExchange(
+            &g_KswordArkBgp.State,
+            KswordArkBgpStateReady,
+            KswordArkBgpStateArmed) != KswordArkBgpStateArmed) {
+        return STATUS_DEVICE_NOT_READY;
+    }
+
+    g_KswordArkBgp.RequiredWidth = 0;
+    g_KswordArkBgp.RequiredHeight = 0;
+    return STATUS_SUCCESS;
+}
+
 VOID
 KswordARKBugcheckBgpRejectPreparation(
     _In_ NTSTATUS Status

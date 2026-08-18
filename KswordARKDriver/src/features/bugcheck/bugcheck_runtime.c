@@ -41,6 +41,7 @@ typedef struct _KSWORD_ARK_BUGCHECK_SECONDARY_DATA
 
 KSWORD_ARK_BUGCHECK_STATE g_KswordArkBugcheckState;
 UCHAR g_KswordArkBugcheckBitmapPixels[KSWORD_ARK_BUGCHECK_BITMAP_MAX_BYTES];
+UCHAR g_KswordArkBugcheckFontCoverage[KSWORD_ARK_BUGCHECK_FONT_MAX_BYTES];
 
 static UCHAR g_KswordArkBugcheckComponent[] = "KswordARK";
 static KSWORD_ARK_BUGCHECK_SECONDARY_DATA g_KswordArkBugcheckSecondaryData;
@@ -737,6 +738,7 @@ KswordARKBugcheckUninitialize(
 {
     InterlockedExchange(&g_KswordArkBugcheckState.Active, 0);
     InterlockedExchange(&g_KswordArkBugcheckState.Bitmap.Valid, 0);
+    InterlockedExchange(&g_KswordArkBugcheckState.Font.Valid, 0);
 
     if (g_KswordArkBugcheckState.TriageRegistered) {
         (VOID)KeDeregisterBugCheckReasonCallback(

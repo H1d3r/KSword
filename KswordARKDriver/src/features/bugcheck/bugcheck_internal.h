@@ -100,6 +100,21 @@ typedef struct _KSWORD_ARK_BUGCHECK_BITMAP_CACHE
     ULONG DataLength;
 } KSWORD_ARK_BUGCHECK_BITMAP_CACHE, *PKSWORD_ARK_BUGCHECK_BITMAP_CACHE;
 
+typedef struct _KSWORD_ARK_BUGCHECK_FONT_CACHE
+{
+    volatile LONG Valid;
+    volatile LONG Uploading;
+    ULONG BodyWidth;
+    ULONG BodyHeight;
+    ULONG BodyAdvance;
+    ULONG BodyDataLength;
+    ULONG HeroWidth;
+    ULONG HeroHeight;
+    ULONG HeroAdvance;
+    ULONG HeroDataLength;
+    ULONG DataLength;
+} KSWORD_ARK_BUGCHECK_FONT_CACHE, *PKSWORD_ARK_BUGCHECK_FONT_CACHE;
+
 typedef struct _KSWORD_ARK_BUGCHECK_STATE
 {
     volatile LONG Active;
@@ -117,6 +132,7 @@ typedef struct _KSWORD_ARK_BUGCHECK_STATE
     BOOLEAN DumpIoRegistered;
     BOOLEAN TriageRegistered;
     KSWORD_ARK_BUGCHECK_BITMAP_CACHE Bitmap;
+    KSWORD_ARK_BUGCHECK_FONT_CACHE Font;
     KSWORD_ARK_BUGCHECK_MODULE_ENTRY Modules[KSWORD_ARK_BUGCHECK_MODULE_CACHE_COUNT];
     ULONG ModuleCount;
     KSWORD_ARK_BUGCHECK_DIAGNOSTICS Diagnostics;
@@ -125,6 +141,7 @@ typedef struct _KSWORD_ARK_BUGCHECK_STATE
 
 extern KSWORD_ARK_BUGCHECK_STATE g_KswordArkBugcheckState;
 extern UCHAR g_KswordArkBugcheckBitmapPixels[KSWORD_ARK_BUGCHECK_BITMAP_MAX_BYTES];
+extern UCHAR g_KswordArkBugcheckFontCoverage[KSWORD_ARK_BUGCHECK_FONT_MAX_BYTES];
 
 NTSTATUS
 KswordARKBugcheckSvgaInitialize(

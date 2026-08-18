@@ -133,6 +133,13 @@ KswordARKBugcheckBgpArm(
     _In_ ULONG RequiredHeight
     );
 
+// Return an armed but not-yet-used renderer to PASSIVE_LEVEL preparation.
+// Callers must first block all panel readers; a live crash draw is never reset.
+NTSTATUS
+KswordARKBugcheckBgpBeginPanelUpdate(
+    VOID
+    );
+
 VOID
 KswordARKBugcheckBgpRejectPreparation(
     _In_ NTSTATUS Status

@@ -48,6 +48,12 @@ namespace ksword::ark
             std::uint32_t brandColorRgb,
             const std::vector<std::uint8_t>& bgraPixels) const;
 
+        // Upload immutable A8 coverage atlases rasterized from the current
+        // Windows fixed-width font. No font file is shipped to or opened by R0.
+        IoResult setBugcheckFont(
+            const std::vector<std::uint8_t>& bodyCoverage,
+            const std::vector<std::uint8_t>& heroCoverage) const;
+
 
         // Confirmation-gated control/status path for the one-shot KeBugCheckEx delay guard.
         BugcheckGuardResult configureBugcheckGuard(

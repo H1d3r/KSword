@@ -111,19 +111,8 @@ ReplayDrawText(
     _In_ LONG X,
     _In_ LONG Y,
     _In_z_ PCSTR Text,
-    _In_ ULONG ColorIndex
-    )
-{
-    return ReplayRecordText(Context, X, Y, Text, ColorIndex, 1UL);
-}
-
-static NTSTATUS
-ReplayDrawHeroText(
-    _In_opt_ PVOID Context,
-    _In_ LONG X,
-    _In_ LONG Y,
-    _In_z_ PCSTR Text,
-    _In_ ULONG ColorIndex
+    _In_ ULONG ColorIndex,
+    _In_ KSWORD_ARK_BUGCHECK_LAYOUT_TEXT_STYLE TextStyle
     )
 {
     return ReplayRecordText(
@@ -132,7 +121,9 @@ ReplayDrawHeroText(
         Y,
         Text,
         ColorIndex,
-        KSWORD_ARK_BUGCHECK_LAYOUT_HERO_SCALE);
+        TextStyle == KswordArkBugcheckLayoutTextHero
+            ? KSWORD_ARK_BUGCHECK_LAYOUT_HERO_SCALE
+            : 1UL);
 }
 
 static NTSTATUS
@@ -304,6 +295,32 @@ ReplayRejectLine(
 }
 
 static int
+ReplayRejectObsoletePanels(
+    _In_ const REPLAY_CONTEXT* Replay
+    )
+{
+    static const PCSTR fragments[] = {
+        "DUMP STATUS",
+        "DUMP INFO",
+        "DUMP ONLY",
+        "NOT CAPTURED",
+        "REQUIRES MEMORY.DMP",
+        "STACK TRACE",
+        "BLACKBOX",
+        "CURRENT THREAD",
+        "EVENT INFO",
+        "FAULTING INSTRUCTION"
+    };
+    ULONG index;
+    int failures = 0;
+
+    for (index = 0; index < RTL_NUMBER_OF(fragments); ++index) {
+        failures += ReplayRejectLine(Replay, fragments[index]);
+    }
+    return failures;
+}
+
+static int
 ReplayValidateCanvas(
     _In_ const REPLAY_CONTEXT* Replay,
     _In_ ULONG Width,
@@ -317,16 +334,20 @@ ReplayValidateCanvas(
     for (index = 0; index < Replay->Count; ++index) {
         const REPLAY_LINE* line = &Replay->Lines[index];
         ULONG other;
+        ULONG textAdvance;
+        ULONG textHeight;
         SIZE_T length = strlen(line->Text);
 
+        textAdvance = line->Scale == KSWORD_ARK_BUGCHECK_LAYOUT_HERO_SCALE
+            ? KSWORD_ARK_BUGCHECK_LAYOUT_HERO_ADVANCE
+            : KSWORD_ARK_BUGCHECK_LAYOUT_TEXT_ADVANCE;
+        textHeight = line->Scale == KSWORD_ARK_BUGCHECK_LAYOUT_HERO_SCALE
+            ? KSWORD_ARK_BUGCHECK_LAYOUT_HERO_HEIGHT
+            : KSWORD_ARK_BUGCHECK_LAYOUT_TEXT_HEIGHT;
+
         if (line->X < 0 || line->Y < 0 ||
-            (ULONG)line->X +
-                (ULONG)(length * KSWORD_ARK_BUGCHECK_LAYOUT_HERO_ADVANCE *
-                        line->Scale /
-                        KSWORD_ARK_BUGCHECK_LAYOUT_HERO_SCALE) > Width ||
-            (ULONG)line->Y +
-                KSWORD_ARK_BUGCHECK_LAYOUT_HERO_HEIGHT * line->Scale /
-                KSWORD_ARK_BUGCHECK_LAYOUT_HERO_SCALE > Height) {
+            (ULONG)line->X + (ULONG)(length * textAdvance) > Width ||
+            (ULONG)line->Y + textHeight > Height) {
             printf(
                 "FAIL %s bounds: x=%ld y=%ld text=%s\n",
                 Name,
@@ -504,8 +525,9 @@ main(void)
     canvas.Context = &replay;
     canvas.Width = 1024;
     canvas.Height = 768;
+    canvas.BitsPerPixel = 32;
+    canvas.RendererName = "REPLAY";
     canvas.DrawText = ReplayDrawText;
-    canvas.DrawHeroText = ReplayDrawHeroText;
     canvas.DrawFrame = ReplayDrawFrame;
 
     status = KswordARKBugcheckLayoutDraw(
@@ -520,25 +542,29 @@ main(void)
 
     // The stop name/code lead the header; the joke and CPU state remain white.
     failures += ReplayRequireLineAt(
-        &replay, "CRITICAL_PROCESS_DIED", 280L, 34L, 4, 1UL);
+        &replay, "CRITICAL_PROCESS_DIED", 280L, 31L, 4, 1UL);
     failures += ReplayRequireLineAt(
-        &replay, "0x000000EF", 280L, 54L, 4, 2UL);
+        &replay, "0x000000EF", 280L, 52L, 4, 2UL);
     failures += ReplayRequireLineAt(
-        &replay, "STOP CODE", 480L, 56L, 2, 1UL);
+        &replay, "STOP CODE", 502L, 61L, 2, 1UL);
     failures += ReplayRequireLineAt(
-        &replay, "THIS IS NOBODY'S FAULT.", 616L, 18L, 0, 1UL);
+        &replay, "THIS IS NOBODY'S FAULT.", 620L, 10L, 0, 1UL);
     failures += ReplayRequireLineAt(
-        &replay, "YOUR COMPUTER JUST EXPLODED.", 616L, 38L, 0, 1UL);
+        &replay, "YOUR COMPUTER JUST EXPLODED.", 620L, 31L, 0, 1UL);
     failures += ReplayRequireLineAt(
-        &replay, "CRASH CPU 00", 904L, 18L, 0, 1UL);
+        &replay, "CPU 00", 930L, 10L, 0, 1UL);
     failures += ReplayRequireLineAt(
-        &replay, "IRQL 15", 904L, 38L, 0, 1UL);
+        &replay, "IRQL 15", 930L, 31L, 0, 1UL);
     failures += ReplayRequireLine(&replay, "OBJECT TYPE  PROCESS", 0);
     failures += ReplayRequireLine(&replay, "NO DIRECT FAULT IP", 3);
-    failures += ReplayRequireLine(&replay, "DIAGNOSTICS CAPTURED", 5);
-    failures += ReplayRequireLine(&replay, "ATTRIBUTION  DUMP REQUIRED", 2);
+    failures += ReplayRequireLine(&replay, "DUMP ANALYSIS REQUIRED", 3);
+    failures += ReplayRequireLine(&replay, "CALLBACKS  4 / 4 READY", 5);
+    failures += ReplayRequireLine(&replay, "FONT  BUILT-IN 8X12", 2);
+    failures += ReplayRequireLine(&replay, "RENDERER  REPLAY", 0);
+    failures += ReplayRequireLine(&replay, "CAPTURED  YES", 0);
     failures += ReplayRejectLine(&replay, "FAULT VALUE COMES FROM ARG0");
     failures += ReplayRejectLine(&replay, "NOT IDENTIFIED");
+    failures += ReplayRejectObsoletePanels(&replay);
     failures += ReplayRejectCriticalNoise(&replay, "full");
     failures += ReplayValidateCanvas(&replay, 1024, 768, "full");
 
@@ -555,23 +581,26 @@ main(void)
         return 1;
     }
     failures += ReplayRequireLineAt(
-        &replay, "CRITICAL_PROCESS_DIED", 272L, 28L, 4, 1UL);
+        &replay, "CRITICAL_PROCESS_DIED", 272L, 25L, 4, 1UL);
     failures += ReplayRequireLineAt(
-        &replay, "0x000000EF", 272L, 48L, 4, 2UL);
+        &replay, "0x000000EF", 272L, 45L, 4, 2UL);
     failures += ReplayRequireLineAt(
-        &replay, "STOP CODE", 460L, 50L, 2, 1UL);
+        &replay, "STOP CODE", 494L, 54L, 2, 1UL);
     failures += ReplayRequireLineAt(
-        &replay, "THIS IS NOBODY'S FAULT.", 272L, 86L, 0, 1UL);
+        &replay, "THIS IS NOBODY'S FAULT.", 272L, 83L, 0, 1UL);
     failures += ReplayRequireLineAt(
-        &replay, "CPU 00", 559L, 12L, 0, 1UL);
+        &replay, "CPU 00", 558L, 4L, 0, 1UL);
     failures += ReplayRequireLineAt(
-        &replay, "IRQL 15", 559L, 32L, 0, 1UL);
-    failures += ReplayRequireLine(&replay, "OBJECT TYPE  PROCESS", 0);
+        &replay, "IRQL 15", 558L, 25L, 0, 1UL);
+    failures += ReplayRequireLine(&replay, "ARG2 TYPE  PROCESS", 0);
     failures += ReplayRequireLine(&replay, "NO DIRECT FAULT IP", 3);
-    failures += ReplayRequireLine(&replay, "DIAGNOSTICS CAPTURED", 5);
-    failures += ReplayRequireLine(&replay, "ATTRIBUTION  DUMP REQUIRED", 2);
+    failures += ReplayRequireLine(&replay, "DUMP ANALYSIS REQUIRED", 3);
+    failures += ReplayRequireLine(&replay, "CALLBACKS 4 / 4 READY", 5);
+    failures += ReplayRequireLine(&replay, "FONT BUILT-IN FALLBACK", 2);
+    failures += ReplayRequireLine(&replay, "REPLAY 640x480 32BPP", 2);
     failures += ReplayRejectLine(&replay, "ARG0");
     failures += ReplayRejectLine(&replay, "NOT IDENTIFIED");
+    failures += ReplayRejectObsoletePanels(&replay);
     failures += ReplayRejectCriticalNoise(&replay, "compact");
     failures += ReplayValidateCanvas(&replay, 640, 480, "compact");
 
@@ -588,25 +617,30 @@ main(void)
         return 1;
     }
     failures += ReplayRequireLineAt(
-        &replay, "CRITICAL_PROCESS_DIED", 280L, 34L, 4, 1UL);
+        &replay, "CRITICAL_PROCESS_DIED", 280L, 31L, 4, 1UL);
     failures += ReplayRequireLineAt(
-        &replay, "0x000000EF", 280L, 54L, 4, 2UL);
+        &replay, "0x000000EF", 280L, 52L, 4, 2UL);
     failures += ReplayRequireLineAt(
-        &replay, "STOP CODE", 480L, 56L, 2, 1UL);
+        &replay, "STOP CODE", 502L, 61L, 2, 1UL);
     failures += ReplayRequireLineAt(
-        &replay, "THIS IS NOBODY'S FAULT.", 800L, 18L, 0, 1UL);
+        &replay, "THIS IS NOBODY'S FAULT.", 760L, 10L, 0, 1UL);
     failures += ReplayRequireLineAt(
-        &replay, "YOUR COMPUTER JUST EXPLODED.", 800L, 38L, 0, 1UL);
+        &replay, "YOUR COMPUTER JUST EXPLODED.", 760L, 31L, 0, 1UL);
     failures += ReplayRequireLineAt(
-        &replay, "CRASH CPU 00", 1160L, 18L, 0, 1UL);
+        &replay, "CRASH CPU 00", 1148L, 10L, 0, 1UL);
     failures += ReplayRequireLineAt(
-        &replay, "IRQL 15", 1160L, 38L, 0, 1UL);
+        &replay, "IRQL 15", 1148L, 31L, 0, 1UL);
     failures += ReplayRequireLine(&replay, "OBJECT TYPE  PROCESS", 0);
     failures += ReplayRequireLine(&replay, "NO DIRECT FAULT IP", 3);
-    failures += ReplayRequireLine(&replay, "DIAGNOSTICS CAPTURED", 5);
-    failures += ReplayRequireLine(&replay, "ATTRIBUTION  DUMP REQUIRED", 2);
+    failures += ReplayRequireLine(&replay, "DUMP ANALYSIS REQUIRED", 3);
+    failures += ReplayRequireLine(&replay, "CALLBACKS  4 / 4 READY", 5);
+    failures += ReplayRequireLine(
+        &replay, "FONT  BUILT-IN 8X12 FALLBACK", 2);
+    failures += ReplayRequireLine(&replay, "RENDERER  REPLAY", 0);
+    failures += ReplayRequireLine(&replay, "CAPTURED  YES", 0);
     failures += ReplayRejectLine(&replay, "FAULT PARAM 0");
     failures += ReplayRejectLine(&replay, "NOT IDENTIFIED");
+    failures += ReplayRejectObsoletePanels(&replay);
     failures += ReplayRejectCriticalNoise(&replay, "detailed");
     failures += ReplayValidateCanvas(&replay, 1280, 720, "detailed");
 
