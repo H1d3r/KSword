@@ -158,6 +158,91 @@ ReplayRequireLine(
 }
 
 static int
+ReplayRequireLineAt(
+    _In_ const REPLAY_CONTEXT* Replay,
+    _In_z_ PCSTR Fragment,
+    _In_ LONG ExpectedX,
+    _In_ LONG ExpectedY,
+    _In_ ULONG ExpectedColor
+    )
+{
+    const REPLAY_LINE* line = ReplayFindLine(Replay, Fragment);
+
+    if (line == NULL) {
+        printf("FAIL missing positioned line: %s\n", Fragment);
+        return 1;
+    }
+    if (line->X != ExpectedX || line->Y != ExpectedY ||
+        line->Color != ExpectedColor) {
+        printf(
+            "FAIL wrong placement: %s (actual=%ld,%ld,%lu expected=%ld,%ld,%lu)\n",
+            Fragment,
+            line->X,
+            line->Y,
+            line->Color,
+            ExpectedX,
+            ExpectedY,
+            ExpectedColor);
+        return 1;
+    }
+    return 0;
+}
+
+static int
+ReplayRejectCriticalNoise(
+    _In_ const REPLAY_CONTEXT* Replay,
+    _In_z_ PCSTR Name
+    )
+{
+    ULONG index;
+    int failures = 0;
+
+    for (index = 0; index < Replay->Count; ++index) {
+        const REPLAY_LINE* line = &Replay->Lines[index];
+
+        if (line->Color == KswordArkBugcheckLayoutColorCritical &&
+            strstr(line->Text, "CRITICAL_PROCESS_DIED") == NULL &&
+            strstr(line->Text, "0x000000EF") == NULL) {
+            printf("FAIL %s competing critical text: %s\n", Name, line->Text);
+            ++failures;
+        }
+    }
+    return failures;
+}
+
+static int
+ReplayValidateRestrainedPalette(void)
+{
+    const UCHAR warning[3] = {
+        KSWORD_ARK_BUGCHECK_LAYOUT_WARNING_RED,
+        KSWORD_ARK_BUGCHECK_LAYOUT_WARNING_GREEN,
+        KSWORD_ARK_BUGCHECK_LAYOUT_WARNING_BLUE
+    };
+    const UCHAR muted[3] = {
+        KSWORD_ARK_BUGCHECK_LAYOUT_MUTED_RED,
+        KSWORD_ARK_BUGCHECK_LAYOUT_MUTED_GREEN,
+        KSWORD_ARK_BUGCHECK_LAYOUT_MUTED_BLUE
+    };
+    const UCHAR success[3] = {
+        KSWORD_ARK_BUGCHECK_LAYOUT_SUCCESS_RED,
+        KSWORD_ARK_BUGCHECK_LAYOUT_SUCCESS_GREEN,
+        KSWORD_ARK_BUGCHECK_LAYOUT_SUCCESS_BLUE
+    };
+    const UCHAR text[3] = {
+        KSWORD_ARK_BUGCHECK_LAYOUT_TEXT_RED,
+        KSWORD_ARK_BUGCHECK_LAYOUT_TEXT_GREEN,
+        KSWORD_ARK_BUGCHECK_LAYOUT_TEXT_BLUE
+    };
+
+    if (memcmp(warning, muted, sizeof(warning)) != 0 ||
+        memcmp(success, text, sizeof(success)) != 0) {
+        printf("FAIL warning/success colors still compete with the stop code\n");
+        return 1;
+    }
+    return 0;
+}
+
+static int
 ReplayRejectLine(
     _In_ const REPLAY_CONTEXT* Replay,
     _In_z_ PCSTR Fragment
@@ -275,6 +360,8 @@ main(void)
     NTSTATUS status;
     int failures = 0;
 
+    failures += ReplayValidateRestrainedPalette();
+
     failures += ReplayCheckDecoder(
         0x000000EF,
         0xFFFFFA5887F26E80ULL,
@@ -377,14 +464,25 @@ main(void)
         return 1;
     }
 
-    // Color 4 is the critical stop-code role; color 5 is healthy/captured.
-    failures += ReplayRequireLine(&replay, "CRITICAL_PROCESS_DIED", 4);
-    failures += ReplayRequireLine(&replay, "OBJECT TYPE  PROCESS", -1);
+    // The stop name/code lead the header; the joke and CPU state remain white.
+    failures += ReplayRequireLineAt(
+        &replay, "CRITICAL_PROCESS_DIED", 280L, 40L, 4);
+    failures += ReplayRequireLineAt(
+        &replay, "STOP CODE 0x000000EF", 280L, 60L, 4);
+    failures += ReplayRequireLineAt(
+        &replay, "THIS IS NOBODY'S FAULT.", 616L, 18L, 0);
+    failures += ReplayRequireLineAt(
+        &replay, "YOUR COMPUTER JUST EXPLODED.", 616L, 38L, 0);
+    failures += ReplayRequireLineAt(
+        &replay, "CRASH CPU 00", 904L, 18L, 0);
+    failures += ReplayRequireLineAt(&replay, "IRQL 15", 904L, 38L, 0);
+    failures += ReplayRequireLine(&replay, "OBJECT TYPE  PROCESS", 0);
     failures += ReplayRequireLine(&replay, "NO DIRECT FAULT IP", 3);
     failures += ReplayRequireLine(&replay, "DIAGNOSTICS CAPTURED", 5);
-    failures += ReplayRequireLine(&replay, "ATTRIBUTION  DUMP REQUIRED", 3);
+    failures += ReplayRequireLine(&replay, "ATTRIBUTION  DUMP REQUIRED", 2);
     failures += ReplayRejectLine(&replay, "FAULT VALUE COMES FROM ARG0");
     failures += ReplayRejectLine(&replay, "NOT IDENTIFIED");
+    failures += ReplayRejectCriticalNoise(&replay, "full");
     failures += ReplayValidateCanvas(&replay, 1024, 768, "full");
 
     RtlZeroMemory(&replay, sizeof(replay));
@@ -399,13 +497,22 @@ main(void)
         printf("FAIL compact layout returned 0x%08lX\n", (ULONG)status);
         return 1;
     }
-    failures += ReplayRequireLine(&replay, "CRITICAL_PROCESS_DIED", 4);
-    failures += ReplayRequireLine(&replay, "OBJECT TYPE  PROCESS", 4);
+    failures += ReplayRequireLineAt(
+        &replay, "CRITICAL_PROCESS_DIED", 272L, 38L, 4);
+    failures += ReplayRequireLineAt(
+        &replay, "STOP CODE 0x000000EF", 272L, 56L, 4);
+    failures += ReplayRequireLineAt(
+        &replay, "THIS IS NOBODY'S FAULT.", 272L, 88L, 0);
+    failures += ReplayRequireLineAt(
+        &replay, "CPU 00", 559L, 16L, 0);
+    failures += ReplayRequireLineAt(&replay, "IRQL 15", 559L, 36L, 0);
+    failures += ReplayRequireLine(&replay, "OBJECT TYPE  PROCESS", 0);
     failures += ReplayRequireLine(&replay, "NO DIRECT FAULT IP", 3);
     failures += ReplayRequireLine(&replay, "DIAGNOSTICS CAPTURED", 5);
-    failures += ReplayRequireLine(&replay, "ATTRIBUTION  DUMP REQUIRED", 3);
+    failures += ReplayRequireLine(&replay, "ATTRIBUTION  DUMP REQUIRED", 2);
     failures += ReplayRejectLine(&replay, "ARG0");
     failures += ReplayRejectLine(&replay, "NOT IDENTIFIED");
+    failures += ReplayRejectCriticalNoise(&replay, "compact");
     failures += ReplayValidateCanvas(&replay, 640, 480, "compact");
 
     RtlZeroMemory(&replay, sizeof(replay));
@@ -420,13 +527,24 @@ main(void)
         printf("FAIL detailed layout returned 0x%08lX\n", (ULONG)status);
         return 1;
     }
-    failures += ReplayRequireLine(&replay, "CRITICAL_PROCESS_DIED", 4);
-    failures += ReplayRequireLine(&replay, "OBJECT TYPE  PROCESS", 4);
+    failures += ReplayRequireLineAt(
+        &replay, "CRITICAL_PROCESS_DIED", 280L, 40L, 4);
+    failures += ReplayRequireLineAt(
+        &replay, "STOP CODE 0x000000EF", 280L, 60L, 4);
+    failures += ReplayRequireLineAt(
+        &replay, "THIS IS NOBODY'S FAULT.", 800L, 18L, 0);
+    failures += ReplayRequireLineAt(
+        &replay, "YOUR COMPUTER JUST EXPLODED.", 800L, 38L, 0);
+    failures += ReplayRequireLineAt(
+        &replay, "CRASH CPU 00", 1160L, 18L, 0);
+    failures += ReplayRequireLineAt(&replay, "IRQL 15", 1160L, 38L, 0);
+    failures += ReplayRequireLine(&replay, "OBJECT TYPE  PROCESS", 0);
     failures += ReplayRequireLine(&replay, "NO DIRECT FAULT IP", 3);
     failures += ReplayRequireLine(&replay, "DIAGNOSTICS CAPTURED", 5);
-    failures += ReplayRequireLine(&replay, "ATTRIBUTION  DUMP REQUIRED", 3);
+    failures += ReplayRequireLine(&replay, "ATTRIBUTION  DUMP REQUIRED", 2);
     failures += ReplayRejectLine(&replay, "FAULT PARAM 0");
     failures += ReplayRejectLine(&replay, "NOT IDENTIFIED");
+    failures += ReplayRejectCriticalNoise(&replay, "detailed");
     failures += ReplayValidateCanvas(&replay, 1280, 720, "detailed");
 
     if (failures != 0) {
