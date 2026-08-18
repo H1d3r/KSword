@@ -590,7 +590,7 @@ KswordARKBugcheckPanelPrepareFrames(
         return STATUS_INVALID_PARAMETER;
     }
 
-    for (frame = KswordArkBugcheckLayoutFrameCompactColumn;
+    for (frame = KswordArkBugcheckLayoutFrameCompactUpper;
          frame < KswordArkBugcheckLayoutFrameCount;
          frame = (KSWORD_ARK_BUGCHECK_LAYOUT_FRAME)(frame + 1)) {
         ULONG width;
@@ -777,7 +777,7 @@ KswordARKBugcheckPanelShutdown(
         {
             KSWORD_ARK_BUGCHECK_LAYOUT_FRAME frame;
 
-            for (frame = KswordArkBugcheckLayoutFrameCompactColumn;
+            for (frame = KswordArkBugcheckLayoutFrameCompactUpper;
                  frame < KswordArkBugcheckLayoutFrameCount;
                  frame = (KSWORD_ARK_BUGCHECK_LAYOUT_FRAME)(frame + 1)) {
                 KswordARKBugcheckBgpDestroyRectangle(

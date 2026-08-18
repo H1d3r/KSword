@@ -45,8 +45,8 @@ typedef enum _KSWORD_ARK_BUGCHECK_LAYOUT_COLOR
 
 typedef enum _KSWORD_ARK_BUGCHECK_LAYOUT_FRAME
 {
-    KswordArkBugcheckLayoutFrameCompactColumn = 0,
-    KswordArkBugcheckLayoutFrameCompactWide,
+    KswordArkBugcheckLayoutFrameCompactUpper = 0,
+    KswordArkBugcheckLayoutFrameCompactLower,
     KswordArkBugcheckLayoutFrameFullTopLeft,
     KswordArkBugcheckLayoutFrameFullTopMiddle,
     KswordArkBugcheckLayoutFrameFullTopRight,
