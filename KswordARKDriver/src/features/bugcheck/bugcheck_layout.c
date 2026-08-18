@@ -230,6 +230,50 @@ KswordARKBugcheckLayoutWriteFormatted(
 }
 
 static VOID
+KswordARKBugcheckLayoutWriteHeroFormatted(
+    _Inout_ KSWORD_ARK_BUGCHECK_LAYOUT_WRITER* Writer,
+    _In_ LONG X,
+    _In_ LONG Y,
+    _In_ ULONG ColorIndex,
+    _In_ ULONG MaximumCharacters,
+    _In_z_ _Printf_format_string_ PCSTR Format,
+    ...
+    )
+{
+    PKSWORD_ARK_BUGCHECK_LAYOUT_DRAW_TEXT drawText;
+    va_list arguments;
+
+    if (Writer == NULL || !NT_SUCCESS(Writer->Status)) {
+        return;
+    }
+
+    va_start(arguments, Format);
+    Writer->Status = RtlStringCbVPrintfA(
+        Writer->Line,
+        sizeof(Writer->Line),
+        Format,
+        arguments);
+    va_end(arguments);
+    if (!NT_SUCCESS(Writer->Status)) {
+        return;
+    }
+
+    KswordARKBugcheckLayoutClipLine(
+        Writer->Line,
+        (ULONG)RTL_NUMBER_OF(Writer->Line),
+        MaximumCharacters);
+    drawText = Writer->Canvas->DrawHeroText != NULL
+        ? Writer->Canvas->DrawHeroText
+        : Writer->Canvas->DrawText;
+    Writer->Status = drawText(
+        Writer->Canvas->Context,
+        Writer->OriginX + X,
+        Y,
+        Writer->Line,
+        ColorIndex);
+}
+
+static VOID
 KswordARKBugcheckLayoutWriteFrame(
     _Inout_ KSWORD_ARK_BUGCHECK_LAYOUT_WRITER* Writer,
     _In_ LONG X,
@@ -601,31 +645,34 @@ KswordARKBugcheckLayoutWriteHeader(
 {
     if (Compact) {
         KswordARKBugcheckLayoutWriteFormatted(
-            Writer, 272L, 16L, KswordArkBugcheckLayoutColorAccent, 31UL,
+            Writer, 272L, 8L, KswordArkBugcheckLayoutColorAccent, 31UL,
             "KSWORD ARK CRASH DIAGNOSTICS");
         KswordARKBugcheckLayoutWriteFormatted(
-            Writer, 272L, 38L, KswordArkBugcheckLayoutColorCritical, 31UL,
+            Writer, 272L, 28L, KswordArkBugcheckLayoutColorCritical, 31UL,
             "%s", KswordARKBugcheckName(Diagnostics->BugCheckCode));
+        KswordARKBugcheckLayoutWriteHeroFormatted(
+            Writer, 272L, 48L, KswordArkBugcheckLayoutColorCritical, 10UL,
+            "0x%08lX", Diagnostics->BugCheckCode);
         KswordARKBugcheckLayoutWriteFormatted(
-            Writer, 272L, 56L, KswordArkBugcheckLayoutColorCritical, 31UL,
-            "STOP CODE 0x%08lX", Diagnostics->BugCheckCode);
+            Writer, 460L, 50L, KswordArkBugcheckLayoutColorMuted, 9UL,
+            "STOP CODE");
         KswordARKBugcheckLayoutWriteFormatted(
-            Writer, 272L, 74L, KswordArkBugcheckLayoutColorMuted, 31UL,
-            "PRESERVE THE NEWEST CRASH DUMP.");
+            Writer, 460L, 68L, KswordArkBugcheckLayoutColorMuted, 9UL,
+            "DUMP LIVE");
         KswordARKBugcheckLayoutWriteFormatted(
-            Writer, 272L, 88L, KswordArkBugcheckLayoutColorText, 31UL,
+            Writer, 272L, 86L, KswordArkBugcheckLayoutColorText, 31UL,
             "THIS IS NOBODY'S FAULT.");
         // Keep the captured runtime counters in the narrow area to the right
         // of the header copy.  X=559 accounts for the BGP glyph's one-pixel
         // backing border as well as the shared renderer's 9-pixel advance.
         KswordARKBugcheckLayoutWriteFormatted(
-            Writer, 559L, 16L, KswordArkBugcheckLayoutColorText, 9UL,
+            Writer, 559L, 12L, KswordArkBugcheckLayoutColorText, 9UL,
             "CPU %02lu", Diagnostics->Cpu);
         KswordARKBugcheckLayoutWriteFormatted(
-            Writer, 559L, 36L, KswordArkBugcheckLayoutColorText, 9UL,
+            Writer, 559L, 32L, KswordArkBugcheckLayoutColorText, 9UL,
             "IRQL %lu", Diagnostics->Irql);
         KswordARKBugcheckLayoutWriteFormatted(
-            Writer, 559L, 54L, KswordArkBugcheckLayoutColorSuccess, 9UL,
+            Writer, 559L, 52L, KswordArkBugcheckLayoutColorSuccess, 9UL,
             "CB 0x%02lX", CallbackMask & 0x0FUL);
         KswordARKBugcheckLayoutWriteFormatted(
             Writer, 559L, 72L, KswordArkBugcheckLayoutColorMuted, 9UL,
@@ -634,17 +681,20 @@ KswordARKBugcheckLayoutWriteHeader(
     }
 
     KswordARKBugcheckLayoutWriteFormatted(
-        Writer, 280L, 18L, KswordArkBugcheckLayoutColorAccent, 50UL,
+        Writer, 280L, 14L, KswordArkBugcheckLayoutColorAccent, 36UL,
         "KSWORD ARK CRASH DIAGNOSTICS");
     KswordARKBugcheckLayoutWriteFormatted(
-        Writer, 280L, 40L, KswordArkBugcheckLayoutColorCritical, 48UL,
+        Writer, 280L, 34L, KswordArkBugcheckLayoutColorCritical, 36UL,
         "%s", KswordARKBugcheckName(Diagnostics->BugCheckCode));
+    KswordARKBugcheckLayoutWriteHeroFormatted(
+        Writer, 280L, 54L, KswordArkBugcheckLayoutColorCritical, 10UL,
+        "0x%08lX", Diagnostics->BugCheckCode);
     KswordARKBugcheckLayoutWriteFormatted(
-        Writer, 280L, 60L, KswordArkBugcheckLayoutColorCritical, 48UL,
-        "STOP CODE 0x%08lX", Diagnostics->BugCheckCode);
+        Writer, 480L, 56L, KswordArkBugcheckLayoutColorMuted, 13UL,
+        "STOP CODE");
     KswordARKBugcheckLayoutWriteFormatted(
-        Writer, 280L, 78L, KswordArkBugcheckLayoutColorMuted, 36UL,
-        "SYSTEM HALTED; CRASH CONTEXT PRESERVED.");
+        Writer, 480L, 76L, KswordArkBugcheckLayoutColorMuted, 13UL,
+        "DUMP CAPTURE");
     if (!KswordARKBugcheckLayoutHasCandidate(Diagnostics)) {
         KswordARKBugcheckLayoutWriteFormatted(
             Writer, 616L, 18L, KswordArkBugcheckLayoutColorText, 31UL,
@@ -726,10 +776,10 @@ KswordARKBugcheckLayoutDrawCompact(
         Writer, 28L, 114L, KswordArkBugcheckLayoutColorMuted, 29UL,
         "BUGCHECK");
     KswordARKBugcheckLayoutWriteFormatted(
-        Writer, 28L, 132L, KswordArkBugcheckLayoutColorCritical, 29UL,
+        Writer, 28L, 132L, KswordArkBugcheckLayoutColorText, 29UL,
         "%s", KswordARKBugcheckName(Diagnostics->BugCheckCode));
     KswordARKBugcheckLayoutWriteFormatted(
-        Writer, 28L, 148L, KswordArkBugcheckLayoutColorCritical, 29UL,
+        Writer, 28L, 148L, KswordArkBugcheckLayoutColorMuted, 29UL,
         "CODE  0x%08lX", Diagnostics->BugCheckCode);
     KswordARKBugcheckLayoutWriteParameter(
         Writer, 28L, 164L, 29UL, Diagnostics, 1UL);
@@ -931,10 +981,10 @@ KswordARKBugcheckLayoutDrawFull(
         Writer, 28L, 122L, KswordArkBugcheckLayoutColorMuted, 35UL,
         "BUGCHECK");
     KswordARKBugcheckLayoutWriteFormatted(
-        Writer, 28L, 144L, KswordArkBugcheckLayoutColorCritical, 35UL,
+        Writer, 28L, 144L, KswordArkBugcheckLayoutColorText, 35UL,
         "%s", KswordARKBugcheckName(Diagnostics->BugCheckCode));
     KswordARKBugcheckLayoutWriteFormatted(
-        Writer, 28L, 164L, KswordArkBugcheckLayoutColorCritical, 35UL,
+        Writer, 28L, 164L, KswordArkBugcheckLayoutColorMuted, 35UL,
         "0x%08lX", Diagnostics->BugCheckCode);
     KswordARKBugcheckLayoutWriteFormatted(
         Writer, 28L, 190L, KswordArkBugcheckLayoutColorText, 35UL,

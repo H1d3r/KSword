@@ -617,6 +617,16 @@
   <ItemGroup>
     <FilesToPackage Include="$(TargetPath)" />
   </ItemGroup>
+  <Target Name="KswordArkSyncDeployableDriverAfterLink" AfterTargets="Link" Condition="'$(Configuration)|$(Platform)'=='Release|x64' and Exists('$(TargetPath)')">
+    <PropertyGroup>
+      <KswordArkDeployableDriverDir>$(TargetDir)KswordARKDriver\</KswordArkDeployableDriverDir>
+    </PropertyGroup>
+    <MakeDir Directories="$(KswordArkDeployableDriverDir)" />
+    <Copy SourceFiles="$(TargetPath)" DestinationFiles="$(KswordArkDeployableDriverDir)KswordARK.sys" SkipUnchangedFiles="false" />
+    <Copy SourceFiles="$(TargetDir)KswordARK.pdb" DestinationFiles="$(KswordArkDeployableDriverDir)KswordARK.pdb" SkipUnchangedFiles="false" Condition="Exists('$(TargetDir)KswordARK.pdb')" />
+    <Copy SourceFiles="$(TargetDir)KswordARKDriver.inf" DestinationFiles="$(KswordArkDeployableDriverDir)KswordARKDriver.inf" SkipUnchangedFiles="false" Condition="Exists('$(TargetDir)KswordARKDriver.inf')" />
+    <Message Importance="High" Text="KswordARK: synchronized deployable driver payload to $(KswordArkDeployableDriverDir)" />
+  </Target>
   <Target Name="KswordArkCopyCleanDriverBeforeVariantSign" BeforeTargets="KswordArkAutoVariantSignAfterBuild" Condition="'$(ConfigurationType)'=='Driver' and Exists('$(TargetPath)') and '$(KswordArkSkipAutoVariantSign)'!='true' and '$(KswordArkSkipAutoTestSign)'!='true'">
     <PropertyGroup>
       <KswordArkCleanDriverPath>$(TargetDir)KswordARK_Clean$(TargetExt)</KswordArkCleanDriverPath>
@@ -636,6 +646,14 @@
     <Message Importance="High" Text="KswordARK: applying post-build driver variant signing for $(TargetPath). Set /p:KswordArkSkipAutoVariantSign=true to skip." />
     <Exec Command="&quot;$(KswordArkPowerShellExe)&quot; -NoProfile -ExecutionPolicy Bypass -File &quot;$(KswordArkSignScript)&quot; -DriverPath &quot;$(TargetPath)&quot;$(KswordArkSignStrictArg)" IgnoreStandardErrorWarningFormat="true" Condition="Exists('$(KswordArkSignScript)')" />
     <Error Condition="!Exists('$(KswordArkSignScript)')" Text="KswordARK driver variant signing script was not found: $(KswordArkSignScript)" />
+  </Target>
+  <Target Name="KswordArkResyncDeployableDriverAfterVariantSign" AfterTargets="KswordArkAutoVariantSignAfterBuild" Condition="'$(Configuration)|$(Platform)'=='Release|x64' and Exists('$(TargetPath)')">
+    <PropertyGroup>
+      <KswordArkDeployableDriverDir Condition="'$(KswordArkDeployableDriverDir)'==''">$(TargetDir)KswordARKDriver\</KswordArkDeployableDriverDir>
+    </PropertyGroup>
+    <MakeDir Directories="$(KswordArkDeployableDriverDir)" />
+    <Copy SourceFiles="$(TargetPath)" DestinationFiles="$(KswordArkDeployableDriverDir)KswordARK.sys" SkipUnchangedFiles="false" />
+    <Message Importance="High" Text="KswordARK: refreshed deployable driver payload after variant signing." />
   </Target>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets" />

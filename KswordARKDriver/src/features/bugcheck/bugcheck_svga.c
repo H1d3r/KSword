@@ -770,6 +770,34 @@ KswordARKSvgaLayoutDrawText(
 }
 
 static NTSTATUS
+KswordARKSvgaLayoutDrawHeroText(
+    _In_opt_ PVOID Context,
+    _In_ LONG X,
+    _In_ LONG Y,
+    _In_z_ PCSTR Text,
+    _In_ ULONG ColorIndex
+    )
+{
+    PKSWORD_ARK_SVGA_LAYOUT_CONTEXT layout;
+
+    layout = (PKSWORD_ARK_SVGA_LAYOUT_CONTEXT)Context;
+    if (layout == NULL || layout->Svga == NULL || Text == NULL ||
+        X < 0 || Y < 0 ||
+        ColorIndex >= (ULONG)KswordArkBugcheckLayoutColorCount) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    KswordARKSvgaDrawText(
+        layout->Svga,
+        (ULONG)X,
+        (ULONG)Y,
+        Text,
+        layout->Colors[ColorIndex],
+        KSWORD_ARK_BUGCHECK_LAYOUT_HERO_SCALE);
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS
 KswordARKSvgaLayoutDrawFrame(
     _In_opt_ PVOID Context,
     _In_ LONG X,
@@ -947,6 +975,7 @@ KswordARKBugcheckSvgaDrawPanelNoLog(
     canvas.Width = svga->Width;
     canvas.Height = svga->Height;
     canvas.DrawText = KswordARKSvgaLayoutDrawText;
+    canvas.DrawHeroText = KswordARKSvgaLayoutDrawHeroText;
     canvas.DrawFrame = KswordARKSvgaLayoutDrawFrame;
     (VOID)KswordARKBugcheckLayoutDraw(
         &canvas,

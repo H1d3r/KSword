@@ -13,6 +13,7 @@ typedef struct _REPLAY_LINE
     LONG X;
     LONG Y;
     ULONG Color;
+    ULONG Scale;
     CHAR Text[KSWORD_ARK_BUGCHECK_PANEL_LINE_CHARS];
 } REPLAY_LINE;
 
@@ -79,12 +80,13 @@ KswordARKBugcheckDumpTypeText(
 }
 
 static NTSTATUS
-ReplayDrawText(
+ReplayRecordText(
     _In_opt_ PVOID Context,
     _In_ LONG X,
     _In_ LONG Y,
     _In_z_ PCSTR Text,
-    _In_ ULONG ColorIndex
+    _In_ ULONG ColorIndex,
+    _In_ ULONG Scale
     )
 {
     REPLAY_CONTEXT* replay = (REPLAY_CONTEXT*)Context;
@@ -98,8 +100,39 @@ ReplayDrawText(
     line->X = X;
     line->Y = Y;
     line->Color = ColorIndex;
+    line->Scale = Scale;
     (void)strncpy_s(line->Text, sizeof(line->Text), Text, _TRUNCATE);
     return STATUS_SUCCESS;
+}
+
+static NTSTATUS
+ReplayDrawText(
+    _In_opt_ PVOID Context,
+    _In_ LONG X,
+    _In_ LONG Y,
+    _In_z_ PCSTR Text,
+    _In_ ULONG ColorIndex
+    )
+{
+    return ReplayRecordText(Context, X, Y, Text, ColorIndex, 1UL);
+}
+
+static NTSTATUS
+ReplayDrawHeroText(
+    _In_opt_ PVOID Context,
+    _In_ LONG X,
+    _In_ LONG Y,
+    _In_z_ PCSTR Text,
+    _In_ ULONG ColorIndex
+    )
+{
+    return ReplayRecordText(
+        Context,
+        X,
+        Y,
+        Text,
+        ColorIndex,
+        KSWORD_ARK_BUGCHECK_LAYOUT_HERO_SCALE);
 }
 
 static NTSTATUS
@@ -163,7 +196,8 @@ ReplayRequireLineAt(
     _In_z_ PCSTR Fragment,
     _In_ LONG ExpectedX,
     _In_ LONG ExpectedY,
-    _In_ ULONG ExpectedColor
+    _In_ ULONG ExpectedColor,
+    _In_ ULONG ExpectedScale
     )
 {
     const REPLAY_LINE* line = ReplayFindLine(Replay, Fragment);
@@ -173,16 +207,18 @@ ReplayRequireLineAt(
         return 1;
     }
     if (line->X != ExpectedX || line->Y != ExpectedY ||
-        line->Color != ExpectedColor) {
+        line->Color != ExpectedColor || line->Scale != ExpectedScale) {
         printf(
-            "FAIL wrong placement: %s (actual=%ld,%ld,%lu expected=%ld,%ld,%lu)\n",
+            "FAIL wrong placement: %s (actual=%ld,%ld,%lu,x%lu expected=%ld,%ld,%lu,x%lu)\n",
             Fragment,
             line->X,
             line->Y,
             line->Color,
+            line->Scale,
             ExpectedX,
             ExpectedY,
-            ExpectedColor);
+            ExpectedColor,
+            ExpectedScale);
         return 1;
     }
     return 0;
@@ -195,17 +231,29 @@ ReplayRejectCriticalNoise(
     )
 {
     ULONG index;
+    ULONG criticalCount = 0UL;
     int failures = 0;
 
     for (index = 0; index < Replay->Count; ++index) {
         const REPLAY_LINE* line = &Replay->Lines[index];
 
-        if (line->Color == KswordArkBugcheckLayoutColorCritical &&
-            strstr(line->Text, "CRITICAL_PROCESS_DIED") == NULL &&
-            strstr(line->Text, "0x000000EF") == NULL) {
-            printf("FAIL %s competing critical text: %s\n", Name, line->Text);
-            ++failures;
+        if (line->Color == KswordArkBugcheckLayoutColorCritical) {
+            ++criticalCount;
+            if (!((strstr(line->Text, "CRITICAL_PROCESS_DIED") != NULL &&
+                   line->Scale == 1UL) ||
+                  (strstr(line->Text, "0x000000EF") != NULL &&
+                   line->Scale == KSWORD_ARK_BUGCHECK_LAYOUT_HERO_SCALE))) {
+                printf("FAIL %s competing critical text: %s\n", Name, line->Text);
+                ++failures;
+            }
         }
+    }
+    if (criticalCount != 2UL) {
+        printf(
+            "FAIL %s critical hierarchy count: %lu (expected 2)\n",
+            Name,
+            criticalCount);
+        ++failures;
     }
     return failures;
 }
@@ -272,8 +320,13 @@ ReplayValidateCanvas(
         SIZE_T length = strlen(line->Text);
 
         if (line->X < 0 || line->Y < 0 ||
-            (ULONG)line->X + (ULONG)(length * 9UL) > Width ||
-            (ULONG)line->Y + 12UL > Height) {
+            (ULONG)line->X +
+                (ULONG)(length * KSWORD_ARK_BUGCHECK_LAYOUT_HERO_ADVANCE *
+                        line->Scale /
+                        KSWORD_ARK_BUGCHECK_LAYOUT_HERO_SCALE) > Width ||
+            (ULONG)line->Y +
+                KSWORD_ARK_BUGCHECK_LAYOUT_HERO_HEIGHT * line->Scale /
+                KSWORD_ARK_BUGCHECK_LAYOUT_HERO_SCALE > Height) {
             printf(
                 "FAIL %s bounds: x=%ld y=%ld text=%s\n",
                 Name,
@@ -452,6 +505,7 @@ main(void)
     canvas.Width = 1024;
     canvas.Height = 768;
     canvas.DrawText = ReplayDrawText;
+    canvas.DrawHeroText = ReplayDrawHeroText;
     canvas.DrawFrame = ReplayDrawFrame;
 
     status = KswordARKBugcheckLayoutDraw(
@@ -466,16 +520,19 @@ main(void)
 
     // The stop name/code lead the header; the joke and CPU state remain white.
     failures += ReplayRequireLineAt(
-        &replay, "CRITICAL_PROCESS_DIED", 280L, 40L, 4);
+        &replay, "CRITICAL_PROCESS_DIED", 280L, 34L, 4, 1UL);
     failures += ReplayRequireLineAt(
-        &replay, "STOP CODE 0x000000EF", 280L, 60L, 4);
+        &replay, "0x000000EF", 280L, 54L, 4, 2UL);
     failures += ReplayRequireLineAt(
-        &replay, "THIS IS NOBODY'S FAULT.", 616L, 18L, 0);
+        &replay, "STOP CODE", 480L, 56L, 2, 1UL);
     failures += ReplayRequireLineAt(
-        &replay, "YOUR COMPUTER JUST EXPLODED.", 616L, 38L, 0);
+        &replay, "THIS IS NOBODY'S FAULT.", 616L, 18L, 0, 1UL);
     failures += ReplayRequireLineAt(
-        &replay, "CRASH CPU 00", 904L, 18L, 0);
-    failures += ReplayRequireLineAt(&replay, "IRQL 15", 904L, 38L, 0);
+        &replay, "YOUR COMPUTER JUST EXPLODED.", 616L, 38L, 0, 1UL);
+    failures += ReplayRequireLineAt(
+        &replay, "CRASH CPU 00", 904L, 18L, 0, 1UL);
+    failures += ReplayRequireLineAt(
+        &replay, "IRQL 15", 904L, 38L, 0, 1UL);
     failures += ReplayRequireLine(&replay, "OBJECT TYPE  PROCESS", 0);
     failures += ReplayRequireLine(&replay, "NO DIRECT FAULT IP", 3);
     failures += ReplayRequireLine(&replay, "DIAGNOSTICS CAPTURED", 5);
@@ -498,14 +555,17 @@ main(void)
         return 1;
     }
     failures += ReplayRequireLineAt(
-        &replay, "CRITICAL_PROCESS_DIED", 272L, 38L, 4);
+        &replay, "CRITICAL_PROCESS_DIED", 272L, 28L, 4, 1UL);
     failures += ReplayRequireLineAt(
-        &replay, "STOP CODE 0x000000EF", 272L, 56L, 4);
+        &replay, "0x000000EF", 272L, 48L, 4, 2UL);
     failures += ReplayRequireLineAt(
-        &replay, "THIS IS NOBODY'S FAULT.", 272L, 88L, 0);
+        &replay, "STOP CODE", 460L, 50L, 2, 1UL);
     failures += ReplayRequireLineAt(
-        &replay, "CPU 00", 559L, 16L, 0);
-    failures += ReplayRequireLineAt(&replay, "IRQL 15", 559L, 36L, 0);
+        &replay, "THIS IS NOBODY'S FAULT.", 272L, 86L, 0, 1UL);
+    failures += ReplayRequireLineAt(
+        &replay, "CPU 00", 559L, 12L, 0, 1UL);
+    failures += ReplayRequireLineAt(
+        &replay, "IRQL 15", 559L, 32L, 0, 1UL);
     failures += ReplayRequireLine(&replay, "OBJECT TYPE  PROCESS", 0);
     failures += ReplayRequireLine(&replay, "NO DIRECT FAULT IP", 3);
     failures += ReplayRequireLine(&replay, "DIAGNOSTICS CAPTURED", 5);
@@ -528,16 +588,19 @@ main(void)
         return 1;
     }
     failures += ReplayRequireLineAt(
-        &replay, "CRITICAL_PROCESS_DIED", 280L, 40L, 4);
+        &replay, "CRITICAL_PROCESS_DIED", 280L, 34L, 4, 1UL);
     failures += ReplayRequireLineAt(
-        &replay, "STOP CODE 0x000000EF", 280L, 60L, 4);
+        &replay, "0x000000EF", 280L, 54L, 4, 2UL);
     failures += ReplayRequireLineAt(
-        &replay, "THIS IS NOBODY'S FAULT.", 800L, 18L, 0);
+        &replay, "STOP CODE", 480L, 56L, 2, 1UL);
     failures += ReplayRequireLineAt(
-        &replay, "YOUR COMPUTER JUST EXPLODED.", 800L, 38L, 0);
+        &replay, "THIS IS NOBODY'S FAULT.", 800L, 18L, 0, 1UL);
     failures += ReplayRequireLineAt(
-        &replay, "CRASH CPU 00", 1160L, 18L, 0);
-    failures += ReplayRequireLineAt(&replay, "IRQL 15", 1160L, 38L, 0);
+        &replay, "YOUR COMPUTER JUST EXPLODED.", 800L, 38L, 0, 1UL);
+    failures += ReplayRequireLineAt(
+        &replay, "CRASH CPU 00", 1160L, 18L, 0, 1UL);
+    failures += ReplayRequireLineAt(
+        &replay, "IRQL 15", 1160L, 38L, 0, 1UL);
     failures += ReplayRequireLine(&replay, "OBJECT TYPE  PROCESS", 0);
     failures += ReplayRequireLine(&replay, "NO DIRECT FAULT IP", 3);
     failures += ReplayRequireLine(&replay, "DIAGNOSTICS CAPTURED", 5);
