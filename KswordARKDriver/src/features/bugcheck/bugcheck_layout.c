@@ -35,7 +35,7 @@ typedef struct _KSWORD_ARK_BUGCHECK_LAYOUT_WRITER
 static const KSWORD_ARK_BUGCHECK_LAYOUT_FRAME_METRICS
     g_KswordArkBugcheckLayoutFrames[KswordArkBugcheckLayoutFrameCount] = {
         { 296UL, 112UL },
-        { 608UL, 126UL },
+        { 608UL, 138UL },
         { 344UL, 184UL },
         { 312UL, 184UL },
         { 328UL, 184UL },
@@ -249,6 +249,8 @@ static VOID
 KswordARKBugcheckLayoutWriteHeader(
     _Inout_ KSWORD_ARK_BUGCHECK_LAYOUT_WRITER* Writer,
     _In_ const KSWORD_ARK_BUGCHECK_DIAGNOSTICS* Diagnostics,
+    _In_ ULONG CallbackMask,
+    _In_ ULONG ModuleCount,
     _In_ BOOLEAN Compact
     )
 {
@@ -265,6 +267,21 @@ KswordARKBugcheckLayoutWriteHeader(
         KswordARKBugcheckLayoutWriteFormatted(
             Writer, 280L, 72L, KswordArkBugcheckLayoutColorMuted, 37UL,
             "PRESERVE THE NEWEST DUMP.");
+        // The compact canvas has a narrow right-hand header column.  These
+        // fields are already captured at bugcheck time, so they add useful
+        // context without encroaching on Windows' dump-progress band.
+        KswordARKBugcheckLayoutWriteFormatted(
+            Writer, 560L, 18L, KswordArkBugcheckLayoutColorText, 9UL,
+            "CPU %02lu", Diagnostics->Cpu);
+        KswordARKBugcheckLayoutWriteFormatted(
+            Writer, 560L, 36L, KswordArkBugcheckLayoutColorText, 9UL,
+            "IRQL %lu", Diagnostics->Irql);
+        KswordARKBugcheckLayoutWriteFormatted(
+            Writer, 560L, 54L, KswordArkBugcheckLayoutColorText, 9UL,
+            "CB 0x%02lX", CallbackMask & 0x0FUL);
+        KswordARKBugcheckLayoutWriteFormatted(
+            Writer, 560L, 72L, KswordArkBugcheckLayoutColorMuted, 9UL,
+            "MOD %lu", ModuleCount);
         return;
     }
 
@@ -373,6 +390,13 @@ KswordARKBugcheckLayoutDrawCompact(
     KswordARKBugcheckLayoutWriteFormatted(
         Writer, 28L, 384L, KswordArkBugcheckLayoutColorText, 32UL,
         "ADDR  0x%p", (PVOID)Diagnostics->CandidateAddress);
+    KswordARKBugcheckLayoutWriteFormatted(
+        Writer, 28L, 400L, KswordArkBugcheckLayoutColorText, 32UL,
+        "SOURCE %s", Diagnostics->CandidateSource);
+    KswordARKBugcheckLayoutWriteFormatted(
+        Writer, 28L, 416L, KswordArkBugcheckLayoutColorText, 32UL,
+        "CLASS  %s",
+        KswordARKBugcheckModuleClassText(Diagnostics->CandidateClass));
 
     KswordARKBugcheckLayoutWriteFormatted(
         Writer, 340L, 302L, KswordArkBugcheckLayoutColorMuted, 30UL,
@@ -392,9 +416,15 @@ KswordARKBugcheckLayoutDrawCompact(
     KswordARKBugcheckLayoutWriteFormatted(
         Writer, 340L, 384L, KswordArkBugcheckLayoutColorText, 30UL,
         "ACTION  PRESERVE NEWEST DUMP");
+    KswordARKBugcheckLayoutWriteFormatted(
+        Writer, 340L, 400L, KswordArkBugcheckLayoutColorText, 30UL,
+        "PROGRESS WINDOWS MANAGED");
+    KswordARKBugcheckLayoutWriteFormatted(
+        Writer, 340L, 416L, KswordArkBugcheckLayoutColorMuted, 30UL,
+        "RESTART WINDOWS CONTROLLED");
 
     KswordARKBugcheckLayoutWriteFormatted(
-        Writer, 16L, 442L, KswordArkBugcheckLayoutColorMuted, 68UL,
+        Writer, 16L, 452L, KswordArkBugcheckLayoutColorMuted, 68UL,
         "WINDOWS IS WRITING THE CRASH DUMP. DO NOT POWER OFF.");
 }
 
@@ -650,7 +680,12 @@ KswordARKBugcheckLayoutDraw(
             CallbackMask,
             ModuleCount);
     }
-    KswordARKBugcheckLayoutWriteHeader(&writer, Diagnostics, compact);
+    KswordARKBugcheckLayoutWriteHeader(
+        &writer,
+        Diagnostics,
+        CallbackMask,
+        ModuleCount,
+        compact);
     if (compact) {
         KswordARKBugcheckLayoutDrawCompact(
             &writer,
