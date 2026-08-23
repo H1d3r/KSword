@@ -185,6 +185,13 @@ def validate() -> list[str]:
         )
     if "m_articleView->document()->setMarkdown(" not in tab_source:
         errors.append("KernelKnowledgeTab Markdown document rendering call is missing")
+    if (
+        "QTextDocument::MarkdownFeatures(QTextDocument::MarkdownDialectGitHub)"
+        not in tab_source
+    ):
+        errors.append(
+            "KernelKnowledgeTab must construct MarkdownFeatures before combining flags"
+        )
     categories = CATEGORY_RE.findall(source)
     topics = TOPIC_RE.findall(source)
 
