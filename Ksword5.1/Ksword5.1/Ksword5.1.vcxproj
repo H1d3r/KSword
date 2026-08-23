@@ -205,6 +205,8 @@
     <ClCompile Include="ksword\scanner\macho_scanner.cpp" />
     <ClCompile Include="ksword\profile\ProfileJsonLoader.cpp" />
     <ClCompile Include="KernelDock\KernelDock.cpp" />
+    <ClCompile Include="KernelDock\KernelKnowledgeCatalog.cpp" />
+    <ClCompile Include="KernelDock\KernelKnowledgeTab.cpp" />
     <ClCompile Include="KernelDock\KernelDock.CallbackIntercept.cpp" />
     <ClCompile Include="KernelDock\KernelDock.CallbackPromptManager.cpp" />
     <ClCompile Include="KernelDock\KernelDock.CallbackRuleSerializer.cpp" />
@@ -516,6 +518,7 @@
     <ClCompile Include="ArkDriverClient\ArkDriverDebugOutput.cpp" />
     <ClCompile Include="ArkDriverClient\ArkDriverBugcheck.cpp" />
     <ClCompile Include="ArkDriverClient\ArkDriverSystemTime.cpp" />
+    <ClCompile Include="ArkDriverClient\ArkDriverResearch.cpp" />
     <ClCompile Include="ArkDriverClient\ArkStorageControllerClient.cpp" />
     <ClCompile Include="..\..\third_party\zstd\zstd.c">
       <CompileAs>CompileAsC</CompileAs>
@@ -546,6 +549,8 @@
     <ClInclude Include="Framework\ProgressDockWidget.h" />
     <ClInclude Include="Framework\StartupSplash.h" />
     <ClInclude Include="KernelDock\KernelDockAtomWorker.h" />
+    <ClInclude Include="KernelDock\KernelKnowledgeCatalog.h" />
+    <ClInclude Include="KernelDock\KernelKnowledgeTab.h" />
     <ClInclude Include="KernelDock\KernelDock.CallbackIntercept.h" />
     <ClInclude Include="KernelDock\KernelBaseNamedObjectsTab.h" />
     <ClInclude Include="KernelDock\KernelBaseNamedObjectsWorker.h" />

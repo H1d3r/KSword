@@ -53,6 +53,7 @@
 #include "../../../shared/driver/KswordArkBugcheckIoctl.h"
 #include "../../../shared/driver/KswordArkUnloadedDriverIoctl.h"
 #include "../../../shared/driver/KswordArkSystemTimeIoctl.h"
+#include "../../../shared/driver/KswordArkResearchIoctl.h"
 
 namespace ksword::ark
 {
@@ -66,6 +67,16 @@ namespace ksword::ark
         long ntStatus = 0;
         std::string message;
         unsigned long bytesReturned = 0;
+    };
+
+    // ResearchTopicQueryResult：保留《第二规划》专题的 R0 现场上下文
+    // 和经中央注册表核实的业务 IOCTL 证据行。
+    struct ResearchTopicQueryResult
+    {
+        IoResult io;
+        bool unsupported = false;
+        KSWORD_ARK_QUERY_RESEARCH_TOPIC_RESPONSE response{};
+        std::vector<KSWORD_ARK_RESEARCH_EVIDENCE_ENTRY> entries;
     };
 
     // HwidDispatchResult：

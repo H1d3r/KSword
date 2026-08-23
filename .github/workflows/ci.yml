@@ -238,6 +238,9 @@ jobs:
           --zh-pack Ksword5.1/Ksword5.1/languages/zh-CN.json
           --en-pack Ksword5.1/Ksword5.1/languages/en-US.json
 
+      - name: Validate kernel knowledge research chain
+        run: python tools/validate_kernel_knowledge.py
+
       - name: Audit IOCTL registry and access policy
         run: >-
           python tools/ioctl_audit/ksword_ioctl_audit.py

@@ -267,6 +267,7 @@
     <ClCompile Include="src\features\hwid\hwid_dispatch_ioctl.c" />
     <ClCompile Include="src\features\cpu_power\cpu_power_runtime.c" />
     <ClCompile Include="src\features\cpu_power\cpu_power_ioctl.c" />
+    <ClCompile Include="src\features\research\research_topic_ioctl.c" />
     <ClCompile Include="src\features\rxpf\image_protection_manager.c" />
     <ClCompile Include="src\features\rxpf\page_fault_manager.c" />
     <ClCompile Include="src\features\rxpf\page_state_table.c" />
@@ -423,6 +424,7 @@
     <ClInclude Include="..\shared\driver\KswordArkCpuPowerIoctl.h" />
     <ClInclude Include="src\features\cpu_power\cpu_power_runtime.h" />
     <ClInclude Include="..\shared\driver\KswordArkRxPfIoctl.h" />
+    <ClInclude Include="..\shared\driver\KswordArkResearchIoctl.h" />
     <ClInclude Include="src\features\rxpf\image_protection_manager.h" />
     <ClInclude Include="src\features\rxpf\page_fault_manager.h" />
     <ClInclude Include="src\features\rxpf\page_state_table.h" />

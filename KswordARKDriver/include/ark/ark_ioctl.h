@@ -45,3 +45,7 @@
 #include "driver/KswordArkUnloadedDriverIoctl.h"
 #include "driver/KswordArkSystemTimeIoctl.h"
 #include "driver/KswordArkRxPfIoctl.h"
+#include "driver/KswordArkI8042AuditIoctl.h"
+#include "driver/KswordArkMutationIoctl.h"
+#include "driver/KswordArkProcessProtectIoctl.h"
+#include "driver/KswordArkResearchIoctl.h"

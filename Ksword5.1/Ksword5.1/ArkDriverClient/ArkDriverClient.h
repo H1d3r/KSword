@@ -366,6 +366,11 @@ namespace ksword::ark
             bool uiConfirmed) const;
         // queryIoctlRegistry：查询 KswordARK 统一 dispatch 注册表，只读返回元数据。
         IoctlRegistryQueryResult queryIoctlRegistry(unsigned long flags = KSWORD_ARK_IOCTL_REGISTRY_FLAG_INCLUDE_HANDLER, unsigned long maxEntries = KSWORD_ARK_IOCTL_REGISTRY_MAX_ENTRIES) const;
+
+        // queryResearchTopic：查询一个内核知识专题的版本化 R0 现场证据与来源映射。
+        ResearchTopicQueryResult queryResearchTopic(
+            unsigned long topicId,
+            unsigned long maxEntries = KSWORD_ARK_RESEARCH_DEFAULT_MAX_ENTRIES) const;
         // queryDriverIntegrity：
         // - 输入：可选 DriverObject 名称、模块基址和采集预算。
         // - 处理：调用统一驱动完整性 IOCTL，聚合 DriverObject/LDR/FastIo/CPU/IDT 证据。

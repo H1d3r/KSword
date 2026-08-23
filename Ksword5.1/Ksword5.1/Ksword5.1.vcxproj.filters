@@ -245,6 +245,12 @@
     <ClCompile Include="KernelDock\KernelDock.CallbackRuleValidator.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="KernelDock\KernelKnowledgeCatalog.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="KernelDock\KernelKnowledgeTab.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="KernelDock\KernelDock.CallbackEnum.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -1096,6 +1102,9 @@
     <ClCompile Include="ArkDriverClient\ArkDriverSystemTime.cpp">
       <Filter>Source Files\ArkDriverClient</Filter>
     </ClCompile>
+    <ClCompile Include="ArkDriverClient\ArkDriverResearch.cpp">
+      <Filter>Source Files\ArkDriverClient</Filter>
+    </ClCompile>
     <ClCompile Include="ArkDriverClient\ArkStorageControllerClient.cpp">
       <Filter>Source Files\ArkDriverClient</Filter>
     </ClCompile>    <ClCompile Include="HardwareDock\MemoryCompositionHistoryWidget.cpp">
@@ -1541,6 +1550,12 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="KernelDock\KernelDockQueryWorker.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="KernelDock\KernelKnowledgeCatalog.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="KernelDock\KernelKnowledgeTab.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="KernelDock\KernelDock.CallbackIntercept.h">
