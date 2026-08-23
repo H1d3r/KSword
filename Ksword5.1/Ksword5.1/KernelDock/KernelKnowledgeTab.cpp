@@ -570,7 +570,7 @@ void KernelKnowledgeTab::showTopic(const int topicIndex)
         articleMarkdown += QStringLiteral("\n\n---\n\n[%1](%2)")
             .arg(uiText("reference.microsoft"), m_currentReferenceUrl);
     }
-    m_articleView->setMarkdown(
+    m_articleView->document()->setMarkdown(
         articleMarkdown,
         QTextDocument::MarkdownDialectGitHub | QTextDocument::MarkdownNoHTML);
     QTextCursor topCursor = m_articleView->textCursor();

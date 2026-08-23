@@ -178,6 +178,13 @@ def validate() -> list[str]:
             errors.append(
                 f"{source_path}: dynamic semantic keys must not use key as the zh-CN fallback"
             )
+    if "m_articleView->setMarkdown(" in tab_source:
+        errors.append(
+            "KernelKnowledgeTab must pass MarkdownFeatures through "
+            "QTextDocument::setMarkdown, not QTextEdit::setMarkdown"
+        )
+    if "m_articleView->document()->setMarkdown(" not in tab_source:
+        errors.append("KernelKnowledgeTab Markdown document rendering call is missing")
     categories = CATEGORY_RE.findall(source)
     topics = TOPIC_RE.findall(source)
 
