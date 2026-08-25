@@ -7500,6 +7500,25 @@ void MainWindow::showSettingsPanelFromMenu(bool showLanguageTab)
         [this](const ks::settings::AppearanceSettings& settings) {
             applyAppearanceSettings(settings, QStringLiteral("顶部菜单设置变更"));
         });
+    connect(
+        settingsPanel,
+        &SettingsDock::bugcheckDiagnosticsAutoInstallChanged,
+        this,
+        [this](const bool enabled)
+        {
+            m_currentAppearanceSettings.bugcheckDiagnosticsAutoInstallEnabled = enabled;
+            updateBugcheckDiagnosticsEntryVisibility();
+        });
+    connect(
+        settingsPanel,
+        &SettingsDock::bugcheckDiagnosticsInstalledForSession,
+        this,
+        [this]()
+        {
+            m_bugcheckDiagnosticsInstalledForSession = true;
+            updateBugcheckDiagnosticsEntryVisibility();
+            queueBugcheckVerdictResourceUpload();
+        });
     dialogLayout.addWidget(settingsScrollArea, 1);
 
     // 固定操作栏不放入滚动区域，保证“应用/取消”始终可见。
@@ -8632,6 +8651,81 @@ void MainWindow::stopR0RuntimeConsumersBeforeServiceStop()
     }
 }
 
+void MainWindow::updateBugcheckDiagnosticsEntryVisibility()
+{
+    const bool shouldShowEntry =
+        m_currentAppearanceSettings.bugcheckDiagnosticsAutoInstallEnabled ||
+        m_bugcheckDiagnosticsInstalledForSession;
+    if (m_miscWidget != nullptr)
+    {
+        // 杂项页使用隐藏而非删除的 Tab，自动安装取消后已构造页面仍能安全析构。
+        m_miscWidget->setBugcheckDiagnosticsVisible(shouldShowEntry);
+    }
+}
+
+void MainWindow::installBugcheckDiagnosticsAfterServiceStart()
+{
+    if (!m_r0DriverServiceRunning ||
+        !m_currentAppearanceSettings.bugcheckDiagnosticsAutoInstallEnabled)
+    {
+        return;
+    }
+
+    // BGP 解析和预生成可能耗时，自动安装与手动安装都在工作线程等待 R0 IOCTL。
+    const QPointer<MainWindow> guardedSelf(this);
+    QThreadPool::globalInstance()->start(
+        [guardedSelf]()
+        {
+            const ksword::ark::BugcheckDiagnosticsResult result =
+                ksword::ark::DriverClient().configureBugcheckDiagnostics(
+                    KSWORD_ARK_BUGCHECK_DIAGNOSTICS_ACTION_INSTALL);
+            QCoreApplication* const application = QCoreApplication::instance();
+            if (application == nullptr)
+            {
+                return;
+            }
+
+            QMetaObject::invokeMethod(
+                application,
+                [guardedSelf, result]()
+                {
+                    if (guardedSelf == nullptr)
+                    {
+                        return;
+                    }
+
+                    kLogEvent logEvent;
+                    if (result.io.ok &&
+                        result.response.status ==
+                            KSWORD_ARK_BUGCHECK_DIAGNOSTICS_STATUS_OK)
+                    {
+                        guardedSelf->m_bugcheckDiagnosticsInstalledForSession = true;
+                        guardedSelf->updateBugcheckDiagnosticsEntryVisibility();
+                        queueBugcheckVerdictResourceUpload();
+                        info << logEvent
+                            << "[MainWindow][R0] 已按配置安装蓝屏诊断, callbackMask=0x"
+                            << std::hex
+                            << result.response.callbackMask
+                            << std::dec
+                            << eol;
+                    }
+                    else
+                    {
+                        warn << logEvent
+                            << "[MainWindow][R0] 自动安装蓝屏诊断失败, win32="
+                            << result.io.win32Error
+                            << ", protocol="
+                            << result.response.status
+                            << ", ntstatus=0x"
+                            << std::hex
+                            << static_cast<unsigned long>(result.response.lastStatus)
+                            << std::dec
+                            << eol;
+                    }
+                });
+        });
+}
+
 void MainWindow::startR0RuntimeConsumersAfterServiceStart()
 {
     // R0 启动或确认运行后恢复本进程运行时消费者：
@@ -8647,7 +8741,8 @@ void MainWindow::startR0RuntimeConsumersAfterServiceStart()
         return;
     }
 
-    queueBugcheckVerdictResourceUpload();
+    // 蓝屏诊断资源只能在诊断安装成功后上传，避免默认启动触碰未初始化的 BGP 路径。
+    installBugcheckDiagnosticsAfterServiceStart();
     startR0DriverLogPoller();
 
     if (CallbackPromptManager* callbackPromptManager = CallbackPromptManager::ensureGlobalManager(this))
@@ -8975,6 +9070,9 @@ bool MainWindow::stopR0DriverService(const bool suppressErrorDialog)
             if (operationOutcome.succeeded)
             {
                 guardedSelf->m_r0DriverServiceRunning = false;
+                // 本次安装只绑定当前内核驱动映像，服务卸载成功后入口随之恢复配置态可见性。
+                guardedSelf->m_bugcheckDiagnosticsInstalledForSession = false;
+                guardedSelf->updateBugcheckDiagnosticsEntryVisibility();
                 kLogEvent logEvent;
                 info << logEvent << "[MainWindow][R0] 已停止并删除 KswordARK 驱动服务。" << eol;
                 guardedSelf->refreshPrivilegeStatusButtons();
@@ -9755,6 +9853,9 @@ void MainWindow::ensureDockContentInitialized(ads::CDockWidget* dockWidget)
         // 扫描器 / 转储分析 / 插件已并入杂项页，不再各自占用顶层 Dock，
         // 它们随杂项页内部的页签懒加载，这里只需构造杂项容器本身。
         if (m_miscWidget == nullptr) { m_miscWidget = new MiscDock(this); }
+        m_miscWidget->setBugcheckDiagnosticsVisible(
+            m_currentAppearanceSettings.bugcheckDiagnosticsAutoInstallEnabled ||
+            m_bugcheckDiagnosticsInstalledForSession);
         realWidget = m_miscWidget;
     }
     if (realWidget == nullptr)
@@ -10273,7 +10374,11 @@ void MainWindow::initDockWidgets()
     if (shouldEagerLoad(QStringLiteral("handle"))) { m_handleWidget = new HandleDock(this); }
     if (shouldEagerLoad(QStringLiteral("startup"))) { m_startupWidget = new StartupDock(this); }
     if (shouldEagerLoad(QStringLiteral("service"))) { m_serviceWidget = new ServiceDock(this); }
-    if (shouldEagerLoad(QStringLiteral("misc"))) { m_miscWidget = new MiscDock(this); }
+    if (shouldEagerLoad(QStringLiteral("misc")))
+    {
+        m_miscWidget = new MiscDock(this);
+        updateBugcheckDiagnosticsEntryVisibility();
+    }
 
     reportStartupProgress(
         60,

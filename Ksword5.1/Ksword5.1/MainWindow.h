@@ -391,6 +391,15 @@ private:
     // 调用方式：MainWindow 构造末尾调用。
     void initAppearanceSettings();
 
+    // updateBugcheckDiagnosticsEntryVisibility 作用：把持久化配置与本次安装状态同步到杂项页入口。
+    // 调用方式：杂项页构造后、设置页修改自动安装选项或安装 IOCTL 成功后调用。
+    // 返回：无。
+    void updateBugcheckDiagnosticsEntryVisibility();
+
+    // installBugcheckDiagnosticsAfterServiceStart 作用：自动安装已启用时，在 R0 服务运行后后台发送安装 IOCTL。
+    // 调用方式：startR0RuntimeConsumersAfterServiceStart 内部调用；返回：无，失败只记录日志。
+    void installBugcheckDiagnosticsAfterServiceStart();
+
     // reattachDetachedFeatureDocks 作用：
     // - 把布局恢复后仍游离在浮动容器里的主功能 Dock 收回主 Dock 区；
     // - 用户的布局配置是在旧版本保存的，其中不含后来新增的 Dock，
@@ -730,6 +739,7 @@ private:
     bool m_deferredDockInitializationStarted = false; // m_deferredDockInitializationStarted：是否已启动显示后补载流程。
     bool m_dockLayoutRestoredFromConfig = false;     // m_dockLayoutRestoredFromConfig：启动时是否已从配置恢复 ADS 布局。
     bool m_pendingR0DynDataRefresh = false;          // m_pendingR0DynDataRefresh：KernelDock 惰性创建后是否需要补跑 DynData 刷新。
+    bool m_bugcheckDiagnosticsInstalledForSession = false; // m_bugcheckDiagnosticsInstalledForSession：当前驱动生命周期内是否已成功安装蓝屏诊断。
     std::size_t m_nextDeferredDockIndex = 0;          // m_nextDeferredDockIndex：下一个待补载 Dock 队列索引。
     std::vector<ads::CDockWidget*> m_deferredDockLoadQueue; // m_deferredDockLoadQueue：显示后依次补载的 Dock 队列。
 };

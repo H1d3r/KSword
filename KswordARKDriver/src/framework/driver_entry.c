@@ -224,9 +224,16 @@ Return Value:
     }
 
 #if KSWORD_ARK_BUGCHECK_DIAGNOSTICS_ENABLED
-    // VMware bugcheck diagnostics are strictly optional. The initializer
-    // returns without registering callbacks on every unsupported environment.
-    (void)KswordARKBugcheckInitialize(DriverObject, controlDevice);
+    // DriverEntry 只准备按需安装控制器，避免普通加载时扫描私有 BGP 字段或注册蓝屏回调。
+    status = KswordARKBugcheckControlInitialize(DriverObject, controlDevice);
+    if (!NT_SUCCESS(status)) {
+        TraceEvents(
+            TRACE_LEVEL_WARNING,
+            TRACE_DRIVER,
+            "KswordARKBugcheckControlInitialize degraded %!STATUS!",
+            status);
+    }
+    // Guard 仍是独立的一次性调试能力；初始化本身不会安装 KeBugCheckEx hook。
     KswordARKBugcheckGuardInitialize();
 #else
     // Fail closed while the crash-time renderer and guard are disabled.
@@ -294,11 +301,9 @@ Return Value:
     KswordARKDriverResetDirectoryScanCache();
 
 #if KSWORD_ARK_BUGCHECK_DIAGNOSTICS_ENABLED
-    // Stop crash callbacks before any other teardown can invalidate state used
-    // by the nonpaged diagnostic path.
-    // Restore the one-shot KeBugCheckEx entry before the driver image can unload.
+    // 先还原一次性 Guard，再由控制器撤销按需安装的 BGP 回调和预生成资源。
     KswordARKBugcheckGuardUninitialize();
-    KswordARKBugcheckUninitialize();
+    KswordARKBugcheckControlUninitialize();
 #endif
 
     // 必须先注销内核调试回调，防止后续卸载阶段再次进入本驱动代码。

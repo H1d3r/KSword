@@ -752,6 +752,9 @@
     <ClCompile Include="src\features\bugcheck\bugcheck_runtime.c">
       <Filter>Source Files\Features\Bugcheck</Filter>
     </ClCompile>
+    <ClCompile Include="src\features\bugcheck\bugcheck_control.c">
+      <Filter>Source Files\Features\Bugcheck</Filter>
+    </ClCompile>
     <ClCompile Include="src\features\bugcheck\bugcheck_bgp.c">
       <Filter>Source Files\Features\Bugcheck</Filter>
     </ClCompile>

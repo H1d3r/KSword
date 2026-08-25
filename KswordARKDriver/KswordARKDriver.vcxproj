@@ -140,6 +140,7 @@
     <ClCompile Include="src\features\debug_output\debug_output_ioctl.c" />
     <ClCompile Include="src\features\bugcheck\bugcheck_decode.c" />
     <ClCompile Include="src\features\bugcheck\bugcheck_runtime.c" />
+    <ClCompile Include="src\features\bugcheck\bugcheck_control.c" />
     <ClCompile Include="src\features\bugcheck\bugcheck_bgp.c" />
     <ClCompile Include="src\features\bugcheck\bugcheck_bgp_lifecycle.c" />
     <ClCompile Include="src\features\bugcheck\bugcheck_layout.c" />

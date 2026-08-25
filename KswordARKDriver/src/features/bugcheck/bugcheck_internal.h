@@ -154,6 +154,13 @@ typedef struct _KSWORD_ARK_BUGCHECK_STATE
 extern KSWORD_ARK_BUGCHECK_STATE g_KswordArkBugcheckState;
 extern UCHAR g_KswordArkBugcheckBitmapPixels[KSWORD_ARK_BUGCHECK_BITMAP_MAX_BYTES];
 
+// 控制器在 DriverEntry 只建立同步状态；配置 IOCTL 明确请求后才启动完整 BGP 诊断。
+NTSTATUS
+KswordARKBugcheckControlConfigure(
+    _In_ const KSWORD_ARK_BUGCHECK_DIAGNOSTICS_REQUEST* Request,
+    _Out_ KSWORD_ARK_BUGCHECK_DIAGNOSTICS_RESPONSE* Response
+    );
+
 NTSTATUS
 KswordARKBugcheckSvgaInitialize(
     _Inout_ PKSWORD_ARK_SVGA_CONTEXT Context

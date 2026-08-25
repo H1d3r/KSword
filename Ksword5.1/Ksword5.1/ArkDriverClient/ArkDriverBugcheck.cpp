@@ -161,6 +161,38 @@ namespace ksword::ark
             0);
     }
 
+    BugcheckDiagnosticsResult DriverClient::configureBugcheckDiagnostics(
+        const unsigned long action) const
+    {
+        BugcheckDiagnosticsResult result{};
+        KSWORD_ARK_BUGCHECK_DIAGNOSTICS_REQUEST request{};
+
+        // 请求仅表达查询或本次驱动生命周期内安装，保留字段保持零以匹配 R0 严格校验。
+        request.size = sizeof(request);
+        request.version = KSWORD_ARK_BUGCHECK_DIAGNOSTICS_PROTOCOL_VERSION;
+        request.action = action;
+        result.io = deviceIoControl(
+            IOCTL_KSWORD_ARK_CONFIGURE_BUGCHECK_DIAGNOSTICS,
+            &request,
+            static_cast<unsigned long>(sizeof(request)),
+            &result.response,
+            static_cast<unsigned long>(sizeof(result.response)));
+        result.unsupported = !result.io.ok &&
+            (result.io.win32Error == ERROR_INVALID_FUNCTION ||
+             result.io.win32Error == ERROR_NOT_SUPPORTED);
+        if (result.io.ok &&
+            (result.io.bytesReturned < sizeof(result.response) ||
+             result.response.version !=
+                 KSWORD_ARK_BUGCHECK_DIAGNOSTICS_PROTOCOL_VERSION ||
+             result.response.size != sizeof(result.response)))
+        {
+            result.io.ok = false;
+            result.io.win32Error = ERROR_INVALID_DATA;
+        }
+        result.io.ntStatus = result.response.lastStatus;
+        return result;
+    }
+
     BugcheckGuardResult DriverClient::configureBugcheckGuard(
         const unsigned long action,
         const unsigned long delaySeconds,

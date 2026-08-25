@@ -2,8 +2,8 @@
 
 #include "KswordArkProcessIoctl.h"
 
-// Optional R3 -> R0 packets for the VMware-only bugcheck panel and the
-// explicitly-confirmed one-shot KeBugCheckEx delay guard.
+// Optional R3 -> R0 packets for the on-demand BGP blue-screen diagnostics,
+// VMware legacy bitmap resources, and the explicitly-confirmed one-shot guard.
 // The diagnostic feature itself is detected and enabled entirely in R0.
 #ifndef FILE_WRITE_ACCESS
 #define FILE_WRITE_ACCESS 0x0002
@@ -104,6 +104,61 @@ typedef struct _KSWORD_ARK_BUGCHECK_VERDICT_RESOURCE_ENTRY
     unsigned long dataOffset;
     unsigned long dataLength;
 } KSWORD_ARK_BUGCHECK_VERDICT_RESOURCE_ENTRY;
+
+// 蓝屏诊断的 BGP 解析、页面预生成与转储回调默认不在 DriverEntry 执行。
+// R3 仅在用户已配置自动安装，或本次明确点击安装后通过此 IOCTL 请求 R0 安装。
+#define KSWORD_ARK_BUGCHECK_DIAGNOSTICS_PROTOCOL_VERSION 1UL
+#define KSWORD_ARK_IOCTL_FUNCTION_CONFIGURE_BUGCHECK_DIAGNOSTICS 0x8FDUL
+
+#define IOCTL_KSWORD_ARK_CONFIGURE_BUGCHECK_DIAGNOSTICS \
+    CTL_CODE( \
+        KSWORD_ARK_IOCTL_DEVICE_TYPE, \
+        KSWORD_ARK_IOCTL_FUNCTION_CONFIGURE_BUGCHECK_DIAGNOSTICS, \
+        METHOD_BUFFERED, \
+        FILE_WRITE_ACCESS)
+
+#define KSWORD_ARK_BUGCHECK_DIAGNOSTICS_ACTION_QUERY   0UL
+#define KSWORD_ARK_BUGCHECK_DIAGNOSTICS_ACTION_INSTALL 1UL
+
+#define KSWORD_ARK_BUGCHECK_DIAGNOSTICS_STATUS_OK                 0UL
+#define KSWORD_ARK_BUGCHECK_DIAGNOSTICS_STATUS_INACTIVE           1UL
+#define KSWORD_ARK_BUGCHECK_DIAGNOSTICS_STATUS_BUSY               2UL
+#define KSWORD_ARK_BUGCHECK_DIAGNOSTICS_STATUS_UNSUPPORTED        3UL
+#define KSWORD_ARK_BUGCHECK_DIAGNOSTICS_STATUS_PREPARATION_FAILED 4UL
+#define KSWORD_ARK_BUGCHECK_DIAGNOSTICS_STATUS_INVALID_REQUEST    5UL
+
+#define KSWORD_ARK_BUGCHECK_DIAGNOSTICS_STATE_INSTALLED          0x00000001UL
+#define KSWORD_ARK_BUGCHECK_DIAGNOSTICS_STATE_CALLBACKS_READY    0x00000002UL
+#define KSWORD_ARK_BUGCHECK_DIAGNOSTICS_STATE_BGP_BACKEND_READY  0x00000004UL
+#define KSWORD_ARK_BUGCHECK_DIAGNOSTICS_STATE_PANEL_READY        0x00000008UL
+
+// 固定长度请求仅区分查询和本次驱动生命周期内的安装，不提供常驻卸载动作。
+typedef struct _KSWORD_ARK_BUGCHECK_DIAGNOSTICS_REQUEST
+{
+    unsigned long size;
+    unsigned long version;
+    unsigned long action;
+    unsigned long flags;
+    unsigned long reserved0;
+    unsigned long reserved1;
+} KSWORD_ARK_BUGCHECK_DIAGNOSTICS_REQUEST;
+
+// 响应保留回调与 BGP 准备摘要，R3 可展示失败阶段但不重新解释私有内核地址。
+typedef struct _KSWORD_ARK_BUGCHECK_DIAGNOSTICS_RESPONSE
+{
+    unsigned long size;
+    unsigned long version;
+    unsigned long status;
+    unsigned long stateFlags;
+    long lastStatus;
+    unsigned long callbackMask;
+    unsigned long bgpState;
+    unsigned long bgpPreparationStage;
+    long bgpPreparationStatus;
+    long panelStatus;
+    unsigned long reserved0;
+    unsigned long reserved1;
+} KSWORD_ARK_BUGCHECK_DIAGNOSTICS_RESPONSE;
 
 // The delay guard is deliberately separate from the VMware display panel.
 // On systems where HVCI protects kernel code it uses a supported BugCheck

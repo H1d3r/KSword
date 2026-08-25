@@ -1465,6 +1465,15 @@ namespace ksword::ark
     };
 
 
+    // BugcheckDiagnosticsResult：保留按需安装蓝屏诊断的传输结果和 R0 准备摘要。
+    // UI 仅展示回调/BGP 状态，不重新扫描私有内核函数或推断故障原因。
+    struct BugcheckDiagnosticsResult
+    {
+        IoResult io;
+        bool unsupported = false;
+        KSWORD_ARK_BUGCHECK_DIAGNOSTICS_RESPONSE response{};
+    };
+
     // BugcheckGuardResult keeps the transport result independent from the R0
     // state snapshot, allowing an older driver to degrade safely in the UI.
     struct BugcheckGuardResult

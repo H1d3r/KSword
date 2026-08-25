@@ -154,10 +154,21 @@ Assert-DoesNotMatch `
     -Pattern '\b(?:KswordARKBugcheckBgpScanSignatures|KswordARKBugcheckBgpResolveFunctions|KswordARKRuntimeReadMemory)\s*\(' `
     -FailureMessage 'The bugcheck callback must consume only prepared state and never scan or read the live kernel image.'
 
+$driverEntry = Join-Path $RepositoryRoot 'KswordARKDriver\src\framework\driver_entry.c'
+$driverEntryBody = Get-CFunctionBody -Path $driverEntry -Name 'DriverEntry'
+Assert-Matches `
+    -Text $driverEntryBody `
+    -Pattern '\bKswordARKBugcheckControlInitialize\s*\(' `
+    -FailureMessage 'DriverEntry must initialize only the on-demand bugcheck controller.'
+Assert-DoesNotMatch `
+    -Text $driverEntryBody `
+    -Pattern '\bKswordARKBugcheckInitialize\s*\(' `
+    -FailureMessage 'DriverEntry must not scan BGP fields or register blue-screen callbacks before R3 requests installation.'
+
 $bugcheckHeader = Get-Content -LiteralPath (Join-Path $RepositoryRoot 'KswordARKDriver\include\ark\ark_bugcheck.h') -Raw
 Assert-Matches `
     -Text $bugcheckHeader `
-    -Pattern '(?s)#ifndef\s+KSWORD_ARK_BUGCHECK_DIAGNOSTICS_ENABLED.*?#define\s+KSWORD_ARK_BUGCHECK_DIAGNOSTICS_ENABLED\s+0' `
-    -FailureMessage 'Driver-side bugcheck diagnostics must remain an explicit opt-in and default to disabled.'
+    -Pattern '(?s)#ifndef\s+KSWORD_ARK_BUGCHECK_DIAGNOSTICS_ENABLED.*?#define\s+KSWORD_ARK_BUGCHECK_DIAGNOSTICS_ENABLED\s+1' `
+    -FailureMessage 'Driver-side bugcheck diagnostics must default to enabled for the development driver image.'
 
 Write-Host 'safe-read regression passed: fallback and BGP scanners use fault-contained reads; discardable sections and crash-time rescans stay blocked.'

@@ -61,7 +61,9 @@ namespace ksword::ark
         // Install the complete bilingual BGP verdict-card resource set.
         IoResult setBugcheckVerdictResources(
             const std::vector<BugcheckVerdictBitmap>& resources) const;
-
+        // 根据设置文件或用户本次明确操作，按需安装并查询 BGP 蓝屏诊断回调。
+        BugcheckDiagnosticsResult configureBugcheckDiagnostics(
+            unsigned long action) const;
 
         // Confirmation-gated control/status path for the one-shot KeBugCheckEx delay guard.
         BugcheckGuardResult configureBugcheckGuard(
