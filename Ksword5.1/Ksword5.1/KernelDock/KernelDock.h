@@ -1198,7 +1198,6 @@ private:
     QLineEdit* m_callbackRemoveAddressEdit = nullptr;               // m_callbackRemoveAddressEdit：回调地址输入框。
     QPushButton* m_callbackRemoveButton = nullptr;                  // m_callbackRemoveButton：执行移除按钮。
     QLabel* m_callbackRemoveStatusLabel = nullptr;                  // m_callbackRemoveStatusLabel：状态文本。
-    CodeEditorWidget* m_callbackRemoveDetailEditor = nullptr;       // m_callbackRemoveDetailEditor：结果详情文本框。
 
     // ==================== 数据缓存 ====================
     std::vector<KernelObjectNamespaceEntry> m_objectNamespaceRows; // m_objectNamespaceRows：对象命名空间快照行。
