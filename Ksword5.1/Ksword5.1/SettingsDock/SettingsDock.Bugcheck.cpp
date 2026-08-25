@@ -12,12 +12,13 @@
 #include <QPointer>
 #include <QPushButton>
 #include <QThreadPool>
+#include <QTimer>
 #include <QVBoxLayout>
-
-#include <iomanip>
 
 namespace
 {
+    // 蓝屏诊断安装允许 BGP 探测短暂占用 R0 队列，但不能让设置页无限等待。
+    constexpr int kBugcheckDiagnosticsInstallTimeoutMs = 30000;
     // bugcheckDiagnosticsStatusText：按当前语言返回自动安装状态说明，忙碌状态优先展示。
     QString bugcheckDiagnosticsStatusText(const bool autoInstallEnabled, const bool busy)
     {
@@ -180,6 +181,31 @@ void SettingsDock::initializeBugcheckDiagnosticsControls(
         {
             installBugcheckDiagnosticsForCurrentSession();
         });
+    m_bugcheckDiagnosticsTimeoutTimer = new QTimer(this);
+    m_bugcheckDiagnosticsTimeoutTimer->setSingleShot(true);
+    connect(
+        m_bugcheckDiagnosticsTimeoutTimer,
+        &QTimer::timeout,
+        this,
+        [this]()
+        {
+            if (!m_bugcheckDiagnosticsInstallBusy)
+            {
+                return;
+            }
+            setBugcheckDiagnosticsControlsBusy(false);
+            if (m_bugcheckDiagnosticsStatusLabel != nullptr)
+            {
+                m_bugcheckDiagnosticsStatusLabel->setText(
+                    ks::i18n::text(
+                        QStringLiteral("settings.features.bugcheck.status.timeout"),
+                        QStringLiteral("蓝屏诊断安装请求超过 30 秒未完成。当前驱动可能仍在处理，请先重启或卸载 R0 后再试。")));
+            }
+            kLogEvent timeoutEvent;
+            warn << timeoutEvent
+                << "[SettingsDock] 蓝屏诊断安装 IOCTL 等待超时。"
+                << eol;
+        });
     refreshBugcheckDiagnosticsStatusText();
 }
 
@@ -252,8 +278,13 @@ void SettingsDock::installBugcheckDiagnosticsForCurrentSession()
         return;
     }
 
-    // BGP 函数解析和资源预生成可能耗时，必须在工作线程等待 IOCTL，不能阻塞设置对话框。
+    // 先通知主窗口显示入口，再开始后台调用，避免 R0 请求未完成时用户看不到诊断页面。
+    emit bugcheckDiagnosticsInstallationStarted();
     setBugcheckDiagnosticsControlsBusy(true);
+    if (m_bugcheckDiagnosticsTimeoutTimer != nullptr)
+    {
+        m_bugcheckDiagnosticsTimeoutTimer->start(kBugcheckDiagnosticsInstallTimeoutMs);
+    }
     const QPointer<SettingsDock> guardedSettingsDock(this);
     QThreadPool::globalInstance()->start(
         [guardedSettingsDock]()
@@ -267,9 +298,11 @@ void SettingsDock::installBugcheckDiagnosticsForCurrentSession()
                 return;
             }
 
-            QMetaObject::invokeMethod(
-                application,
-                [guardedSettingsDock, result]()
+            if (!guardedSettingsDock.isNull())
+            {
+                QMetaObject::invokeMethod(
+                    guardedSettingsDock,
+                    [guardedSettingsDock, result]()
                 {
                     if (guardedSettingsDock == nullptr)
                     {
@@ -277,6 +310,10 @@ void SettingsDock::installBugcheckDiagnosticsForCurrentSession()
                     }
 
                     guardedSettingsDock->setBugcheckDiagnosticsControlsBusy(false);
+                    if (guardedSettingsDock->m_bugcheckDiagnosticsTimeoutTimer != nullptr)
+                    {
+                        guardedSettingsDock->m_bugcheckDiagnosticsTimeoutTimer->stop();
+                    }
                     if (guardedSettingsDock->m_bugcheckDiagnosticsStatusLabel != nullptr)
                     {
                         guardedSettingsDock->m_bugcheckDiagnosticsStatusLabel->setText(
@@ -314,7 +351,9 @@ void SettingsDock::installBugcheckDiagnosticsForCurrentSession()
                             << std::dec
                             << eol;
                     }
-                });
+                },
+                Qt::QueuedConnection);
+            }
         });
 }
 

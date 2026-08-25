@@ -740,6 +740,7 @@ private:
     bool m_dockLayoutRestoredFromConfig = false;     // m_dockLayoutRestoredFromConfig：启动时是否已从配置恢复 ADS 布局。
     bool m_pendingR0DynDataRefresh = false;          // m_pendingR0DynDataRefresh：KernelDock 惰性创建后是否需要补跑 DynData 刷新。
     bool m_bugcheckDiagnosticsInstalledForSession = false; // m_bugcheckDiagnosticsInstalledForSession：当前驱动生命周期内是否已成功安装蓝屏诊断。
+    bool m_bugcheckDiagnosticsEntryRequestedForSession = false; // m_bugcheckDiagnosticsEntryRequestedForSession：用户本次操作是否已请求显示诊断入口。
     std::size_t m_nextDeferredDockIndex = 0;          // m_nextDeferredDockIndex：下一个待补载 Dock 队列索引。
     std::vector<ads::CDockWidget*> m_deferredDockLoadQueue; // m_deferredDockLoadQueue：显示后依次补载的 Dock 队列。
 };

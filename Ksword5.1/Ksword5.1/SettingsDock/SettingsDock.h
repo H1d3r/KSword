@@ -14,6 +14,7 @@ class QRadioButton;
 class QSlider;
 class QSpinBox;
 class QTabWidget;
+class QTimer;
 class QToolButton;
 class QVBoxLayout;
 
@@ -61,6 +62,9 @@ signals:
 
     // bugcheckDiagnosticsInstalledForSession 作用：本次安装完成后显示蓝屏诊断入口并上传运行期资源。
     void bugcheckDiagnosticsInstalledForSession();
+
+    // bugcheckDiagnosticsInstallationStarted 作用：用户明确请求本次安装后立即显示入口，便于查看状态和失败原因。
+    void bugcheckDiagnosticsInstallationStarted();
 
 private:
     // initializeUi 作用：
@@ -365,6 +369,9 @@ private:
 
     // m_bugcheckDiagnosticsInstallBusy 作用：记录异步安装 IOCTL 是否仍在执行。
     bool m_bugcheckDiagnosticsInstallBusy = false;
+
+    // m_bugcheckDiagnosticsTimeoutTimer 作用：限制 R0 安装请求对设置页面的等待时间。
+    QTimer* m_bugcheckDiagnosticsTimeoutTimer = nullptr;
 
     // m_installTaskmgrHijackButton 作用：调用当前目录 TaskmgrHijack.ps1 安装 taskmgr.exe IFEO 映像劫持。
     QPushButton* m_installTaskmgrHijackButton = nullptr;

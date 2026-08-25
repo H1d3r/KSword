@@ -7511,6 +7511,15 @@ void MainWindow::showSettingsPanelFromMenu(bool showLanguageTab)
         });
     connect(
         settingsPanel,
+        &SettingsDock::bugcheckDiagnosticsInstallationStarted,
+        this,
+        [this]()
+        {
+            m_bugcheckDiagnosticsEntryRequestedForSession = true;
+            updateBugcheckDiagnosticsEntryVisibility();
+        });
+    connect(
+        settingsPanel,
         &SettingsDock::bugcheckDiagnosticsInstalledForSession,
         this,
         [this]()
@@ -8655,7 +8664,8 @@ void MainWindow::updateBugcheckDiagnosticsEntryVisibility()
 {
     const bool shouldShowEntry =
         m_currentAppearanceSettings.bugcheckDiagnosticsAutoInstallEnabled ||
-        m_bugcheckDiagnosticsInstalledForSession;
+        m_bugcheckDiagnosticsInstalledForSession ||
+        m_bugcheckDiagnosticsEntryRequestedForSession;
     if (m_miscWidget != nullptr)
     {
         // 杂项页使用隐藏而非删除的 Tab，自动安装取消后已构造页面仍能安全析构。
@@ -8685,9 +8695,11 @@ void MainWindow::installBugcheckDiagnosticsAfterServiceStart()
                 return;
             }
 
-            QMetaObject::invokeMethod(
-                application,
-                [guardedSelf, result]()
+            if (!guardedSelf.isNull())
+            {
+                QMetaObject::invokeMethod(
+                    guardedSelf,
+                    [guardedSelf, result]()
                 {
                     if (guardedSelf == nullptr)
                     {
@@ -8722,7 +8734,9 @@ void MainWindow::installBugcheckDiagnosticsAfterServiceStart()
                             << std::dec
                             << eol;
                     }
-                });
+                },
+                Qt::QueuedConnection);
+            }
         });
 }
 
@@ -9072,6 +9086,7 @@ bool MainWindow::stopR0DriverService(const bool suppressErrorDialog)
                 guardedSelf->m_r0DriverServiceRunning = false;
                 // 本次安装只绑定当前内核驱动映像，服务卸载成功后入口随之恢复配置态可见性。
                 guardedSelf->m_bugcheckDiagnosticsInstalledForSession = false;
+                guardedSelf->m_bugcheckDiagnosticsEntryRequestedForSession = false;
                 guardedSelf->updateBugcheckDiagnosticsEntryVisibility();
                 kLogEvent logEvent;
                 info << logEvent << "[MainWindow][R0] 已停止并删除 KswordARK 驱动服务。" << eol;
@@ -9855,7 +9870,8 @@ void MainWindow::ensureDockContentInitialized(ads::CDockWidget* dockWidget)
         if (m_miscWidget == nullptr) { m_miscWidget = new MiscDock(this); }
         m_miscWidget->setBugcheckDiagnosticsVisible(
             m_currentAppearanceSettings.bugcheckDiagnosticsAutoInstallEnabled ||
-            m_bugcheckDiagnosticsInstalledForSession);
+            m_bugcheckDiagnosticsInstalledForSession ||
+            m_bugcheckDiagnosticsEntryRequestedForSession);
         realWidget = m_miscWidget;
     }
     if (realWidget == nullptr)
