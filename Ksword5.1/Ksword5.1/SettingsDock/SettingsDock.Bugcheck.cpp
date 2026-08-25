@@ -12,13 +12,10 @@
 #include <QPointer>
 #include <QPushButton>
 #include <QThreadPool>
-#include <QTimer>
 #include <QVBoxLayout>
 
 namespace
 {
-    // 蓝屏诊断安装允许 BGP 探测短暂占用 R0 队列，但不能让设置页无限等待。
-    constexpr int kBugcheckDiagnosticsInstallTimeoutMs = 30000;
     // bugcheckDiagnosticsStatusText：按当前语言返回自动安装状态说明，忙碌状态优先展示。
     QString bugcheckDiagnosticsStatusText(const bool autoInstallEnabled, const bool busy)
     {
@@ -26,7 +23,7 @@ namespace
         {
             return ks::i18n::text(
                 QStringLiteral("settings.features.bugcheck.status.installing"),
-                QStringLiteral("正在向当前 R0 驱动安装蓝屏诊断。请勿重复操作或卸载驱动。"));
+                QStringLiteral("正在由 R0 工作项准备蓝屏诊断。卸载驱动会安全取消本次准备。"));
         }
         if (autoInstallEnabled)
         {
@@ -67,6 +64,14 @@ namespace
             return ks::i18n::text(
                 QStringLiteral("settings.features.bugcheck.status.busy"),
                 QStringLiteral("蓝屏诊断正在安装或清理，请等待当前操作完成。"));
+        }
+        if (result.response.status ==
+                KSWORD_ARK_BUGCHECK_DIAGNOSTICS_STATUS_PREPARATION_FAILED &&
+            static_cast<unsigned long>(result.response.lastStatus) == 0xC00000B5UL)
+        {
+            return ks::i18n::text(
+                QStringLiteral("settings.features.bugcheck.status.timeout"),
+                QStringLiteral("蓝屏诊断未能在 30 秒安全预算内完成，R0 已停止继续准备并清理临时资源。"));
         }
         return ks::i18n::text(
             QStringLiteral("settings.features.bugcheck.status.preparation_failed"),
@@ -181,31 +186,6 @@ void SettingsDock::initializeBugcheckDiagnosticsControls(
         {
             installBugcheckDiagnosticsForCurrentSession();
         });
-    m_bugcheckDiagnosticsTimeoutTimer = new QTimer(this);
-    m_bugcheckDiagnosticsTimeoutTimer->setSingleShot(true);
-    connect(
-        m_bugcheckDiagnosticsTimeoutTimer,
-        &QTimer::timeout,
-        this,
-        [this]()
-        {
-            if (!m_bugcheckDiagnosticsInstallBusy)
-            {
-                return;
-            }
-            setBugcheckDiagnosticsControlsBusy(false);
-            if (m_bugcheckDiagnosticsStatusLabel != nullptr)
-            {
-                m_bugcheckDiagnosticsStatusLabel->setText(
-                    ks::i18n::text(
-                        QStringLiteral("settings.features.bugcheck.status.timeout"),
-                        QStringLiteral("蓝屏诊断安装请求超过 30 秒未完成。当前驱动可能仍在处理，请先重启或卸载 R0 后再试。")));
-            }
-            kLogEvent timeoutEvent;
-            warn << timeoutEvent
-                << "[SettingsDock] 蓝屏诊断安装 IOCTL 等待超时。"
-                << eol;
-        });
     refreshBugcheckDiagnosticsStatusText();
 }
 
@@ -281,10 +261,6 @@ void SettingsDock::installBugcheckDiagnosticsForCurrentSession()
     // 先通知主窗口显示入口，再开始后台调用，避免 R0 请求未完成时用户看不到诊断页面。
     emit bugcheckDiagnosticsInstallationStarted();
     setBugcheckDiagnosticsControlsBusy(true);
-    if (m_bugcheckDiagnosticsTimeoutTimer != nullptr)
-    {
-        m_bugcheckDiagnosticsTimeoutTimer->start(kBugcheckDiagnosticsInstallTimeoutMs);
-    }
     const QPointer<SettingsDock> guardedSettingsDock(this);
     QThreadPool::globalInstance()->start(
         [guardedSettingsDock]()
@@ -310,10 +286,6 @@ void SettingsDock::installBugcheckDiagnosticsForCurrentSession()
                     }
 
                     guardedSettingsDock->setBugcheckDiagnosticsControlsBusy(false);
-                    if (guardedSettingsDock->m_bugcheckDiagnosticsTimeoutTimer != nullptr)
-                    {
-                        guardedSettingsDock->m_bugcheckDiagnosticsTimeoutTimer->stop();
-                    }
                     if (guardedSettingsDock->m_bugcheckDiagnosticsStatusLabel != nullptr)
                     {
                         guardedSettingsDock->m_bugcheckDiagnosticsStatusLabel->setText(

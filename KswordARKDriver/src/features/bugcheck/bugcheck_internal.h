@@ -161,6 +161,13 @@ KswordARKBugcheckControlConfigure(
     _Out_ KSWORD_ARK_BUGCHECK_DIAGNOSTICS_RESPONSE* Response
     );
 
+// 耗时准备阶段在安全边界调用此函数；返回 STATUS_CANCELLED 表示驱动正在卸载，
+// STATUS_IO_TIMEOUT 表示本次安装已超过 R0 的 30 秒预算。
+NTSTATUS
+KswordARKBugcheckControlCheckAbort(
+    VOID
+    );
+
 NTSTATUS
 KswordARKBugcheckSvgaInitialize(
     _Inout_ PKSWORD_ARK_SVGA_CONTEXT Context

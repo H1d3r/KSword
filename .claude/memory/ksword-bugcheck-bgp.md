@@ -13,7 +13,9 @@
 - Windows 10 19042 的 BGP 私有 `GetBpp` 在驱动加载期尚未调用 `InbvAcquireDisplayOwnership` 时可能返回 `1`，同时分辨率返回 `0×0`。这是未取得显示所有权的延迟探测状态，不能直接判定为不支持。
 - 加载期仍需在 `PASSIVE_LEVEL` 完成全部资源准备。当前实现同时生成并解析 24 BPP、32 BPP 的 Logo 与黑色/蓝色 ASCII 字形矩形。
 - BGP 私有函数解析必须先用故障封装读取器校验 DOS/NT/节表，再分块复制候选节后扫描；所有 `IMAGE_SCN_MEM_DISCARDABLE` 节（即使同时带 `IMAGE_SCN_MEM_EXECUTE`）都必须在读取前排除。节 RVA、签名范围、入口回退和 `rel32` 目标均使用减法式边界与显式溢出检查；任一窗口无法完整读取就 fail-closed。
-- 解析结果只有在全部私有入口、唯一性、Clear/Draw→BPP 语义关系和崩溃期常驻属性同时通过后，才能一次性发布到非分页全局快照。BugCheck 回调只消费该快照和预生成矩形，不得重新扫描 `ntoskrnl` 或现场解析指令。驱动侧蓝屏诊断保持编译期显式 opt-in、默认关闭，Windows 原生蓝屏与转储不受影响。
+- 解析结果只有在全部私有入口、唯一性、Clear/Draw→BPP 语义关系和崩溃期常驻属性同时通过后，才能一次性发布到非分页全局快照。BugCheck 回调只消费该快照和预生成矩形，不得重新扫描 `ntoskrnl` 或现场解析指令。开发驱动映像会编译进蓝屏诊断代码，但运行期默认保持未安装；只有 R3 配置或用户本次明确操作才触发安装，Windows 原生蓝屏与转储不受影响。
+- 按需安装控制协议 v2 的 `INSTALL` 只能排队 R0 `WDFWORKITEM` 并立即返回 `BUSY`，R3 再用短 `QUERY` 轮询终态；禁止在 IOCTL handler 持 `FAST_MUTEX` 同步执行 BGP 扫描/矩形预生成，否则 R3 设备句柄和 `DriverUnload` 会同时被长操作卡住。工作项使用自己的锁并关闭 WDF 自动串行化，内核准备预算为 30 秒；扫描每 64 KiB、每次私有位图解析前后都检查超时/卸载取消。卸载先撤销 ready、发布取消并 `WdfWorkItemFlush`，再注销 BugCheck 回调和销毁矩形。协议版本必须随同步→异步语义变化升级，使新 R3 遇到已加载的 v1 驱动时快速拒绝，而不是进入旧版无界同步路径。
+- `WDFWORKITEM` 自身不能在 `WDF_OBJECT_ATTRIBUTES` 中显式设置 `ExecutionLevel` 或 `SynchronizationScope`；保留 `WDF_OBJECT_ATTRIBUTES_INIT` 的继承值，并用 `WDF_WORKITEM_CONFIG.AutomaticSerialization = FALSE` 配合功能自有锁。否则 `WdfWorkItemCreate` 会因对象属性非法而失败，控制器保持 not-ready，R3 会把安装能力误报为不可用。
 - 崩溃回调中的顺序保持为 `InbvAcquireDisplayOwnership → BgpFwAcquireLock → 重新读取分辨率/BPP → BgpClearScreen → BgpGxDrawRectangle → BgpFwReleaseLock`。
 - 取得显示所有权后只接受实际 BPP 为 24 或 32。分辨率、BPP、私有特征或节属性不满足时，在清屏前释放锁并退出，保留 Windows 原蓝屏。
 - VMware 的 Windows 10 19042 蓝屏显示模式可能固定回落到 `640×480×32`，即使桌面分辨率更高。面板必须保留 `640×480` 紧凑布局；`1024×768` 只能作为完整布局阈值，不能作为 BGP 可用性的最低门槛。

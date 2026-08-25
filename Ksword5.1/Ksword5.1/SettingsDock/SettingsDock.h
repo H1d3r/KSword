@@ -14,7 +14,6 @@ class QRadioButton;
 class QSlider;
 class QSpinBox;
 class QTabWidget;
-class QTimer;
 class QToolButton;
 class QVBoxLayout;
 
@@ -369,9 +368,6 @@ private:
 
     // m_bugcheckDiagnosticsInstallBusy 作用：记录异步安装 IOCTL 是否仍在执行。
     bool m_bugcheckDiagnosticsInstallBusy = false;
-
-    // m_bugcheckDiagnosticsTimeoutTimer 作用：限制 R0 安装请求对设置页面的等待时间。
-    QTimer* m_bugcheckDiagnosticsTimeoutTimer = nullptr;
 
     // m_installTaskmgrHijackButton 作用：调用当前目录 TaskmgrHijack.ps1 安装 taskmgr.exe IFEO 映像劫持。
     QPushButton* m_installTaskmgrHijackButton = nullptr;

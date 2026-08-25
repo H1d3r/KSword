@@ -640,6 +640,18 @@
     <Exec Command="&quot;$(KswordArkPowerShellExe)&quot; -NoProfile -ExecutionPolicy Bypass -File &quot;$(KswordArkSignScript)&quot; -DriverPath &quot;$(TargetPath)&quot;$(KswordArkSignStrictArg)" IgnoreStandardErrorWarningFormat="true" Condition="Exists('$(KswordArkSignScript)')" />
     <Error Condition="!Exists('$(KswordArkSignScript)')" Text="KswordARK driver variant signing script was not found: $(KswordArkSignScript)" />
   </Target>
+  <!-- 保持可直接复制的统一 Release 目录自洽；主程序加载根 sys，INF/打包路径使用子目录副本。 -->
+  <Target Name="KswordArkMirrorUnifiedReleaseArtifacts" AfterTargets="Build" DependsOnTargets="KswordArkAutoVariantSignAfterBuild" Condition="'$(Configuration)|$(Platform)'=='Release|x64' and Exists('$(TargetPath)')">
+    <PropertyGroup>
+      <KswordArkMirrorDir>$(TargetDir)KswordARKDriver\</KswordArkMirrorDir>
+      <KswordArkPdbPath>$(TargetDir)KswordARK.pdb</KswordArkPdbPath>
+      <KswordArkInfPath>$(TargetDir)KswordARKDriver.inf</KswordArkInfPath>
+    </PropertyGroup>
+    <MakeDir Directories="$(KswordArkMirrorDir)" />
+    <Copy SourceFiles="$(TargetPath)" DestinationFiles="$(KswordArkMirrorDir)KswordARK.sys" SkipUnchangedFiles="false" />
+    <Copy SourceFiles="$(KswordArkPdbPath)" DestinationFiles="$(KswordArkMirrorDir)KswordARK.pdb" SkipUnchangedFiles="false" Condition="Exists('$(KswordArkPdbPath)')" />
+    <Copy SourceFiles="$(KswordArkInfPath)" DestinationFiles="$(KswordArkMirrorDir)KswordARKDriver.inf" SkipUnchangedFiles="false" Condition="Exists('$(KswordArkInfPath)')" />
+  </Target>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets" />
 </Project>

@@ -165,6 +165,31 @@ Assert-DoesNotMatch `
     -Pattern '\bKswordARKBugcheckInitialize\s*\(' `
     -FailureMessage 'DriverEntry must not scan BGP fields or register blue-screen callbacks before R3 requests installation.'
 
+$bugcheckControl = Get-Content -LiteralPath (Join-Path $RepositoryRoot 'KswordARKDriver\src\features\bugcheck\bugcheck_control.c') -Raw
+$bugcheckConfigureBody = Get-CFunctionBody `
+    -Path (Join-Path $RepositoryRoot 'KswordARKDriver\src\features\bugcheck\bugcheck_control.c') `
+    -Name 'KswordARKBugcheckControlConfigure'
+Assert-DoesNotMatch `
+    -Text $bugcheckConfigureBody `
+    -Pattern '\bKswordARKBugcheckInitialize\s*\(' `
+    -FailureMessage 'The bugcheck installation IOCTL must enqueue work instead of synchronously running BGP preparation.'
+Assert-Matches `
+    -Text $bugcheckConfigureBody `
+    -Pattern '\bWdfWorkItemEnqueue\s*\(' `
+    -FailureMessage 'The bugcheck installation IOCTL must enqueue the bounded R0 preparation work item.'
+Assert-DoesNotMatch `
+    -Text $bugcheckControl `
+    -Pattern 'attributes\.(?:ExecutionLevel|SynchronizationScope)\s*=' `
+    -FailureMessage 'WDFWORKITEM attributes must inherit execution level and synchronization scope; KMDF rejects explicit values for this object type.'
+Assert-Matches `
+    -Text $bugcheckControl `
+    -Pattern '(?s)KswordARKBugcheckControlUninitialize.*?\bWdfWorkItemFlush\s*\(' `
+    -FailureMessage 'Driver unload must cancel and flush the bugcheck preparation work item before releasing resources.'
+Assert-Matches `
+    -Text $bgpScanBody `
+    -Pattern '\bKswordARKBugcheckControlCheckAbort\s*\(' `
+    -FailureMessage 'The bounded BGP signature scan must honor installation timeout and driver-unload cancellation.'
+
 $bugcheckHeader = Get-Content -LiteralPath (Join-Path $RepositoryRoot 'KswordARKDriver\include\ark\ark_bugcheck.h') -Raw
 Assert-Matches `
     -Text $bugcheckHeader `

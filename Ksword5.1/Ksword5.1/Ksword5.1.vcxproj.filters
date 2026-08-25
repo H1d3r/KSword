@@ -790,6 +790,9 @@
     <ClCompile Include="UI\CodeEditorWidget.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="UI\EmbeddedRowDelegate.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="UI\DetailLayoutHost.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -1499,6 +1502,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="UI\DetailLayoutHost.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="UI\EmbeddedRowDelegate.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="UI\DetailLayoutRegistry.h">

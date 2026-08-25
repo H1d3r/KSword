@@ -106,8 +106,12 @@ typedef struct _KSWORD_ARK_BUGCHECK_VERDICT_RESOURCE_ENTRY
 } KSWORD_ARK_BUGCHECK_VERDICT_RESOURCE_ENTRY;
 
 // 蓝屏诊断的 BGP 解析、页面预生成与转储回调默认不在 DriverEntry 执行。
-// R3 仅在用户已配置自动安装，或本次明确点击安装后通过此 IOCTL 请求 R0 安装。
-#define KSWORD_ARK_BUGCHECK_DIAGNOSTICS_PROTOCOL_VERSION 1UL
+// INSTALL 只排队 R0 工作项并返回 BUSY；R3 通过 QUERY 轮询 OK 或失败终态。
+// 工作项有 30 秒内核预算，驱动卸载会请求取消并排空工作项后再释放回调与资源。
+// v2 changes INSTALL from a synchronous operation to an enqueue-and-query contract.
+// The version bump makes a new R3 client fail fast against a loaded v1 driver instead of
+// entering that driver's unbounded synchronous installation path.
+#define KSWORD_ARK_BUGCHECK_DIAGNOSTICS_PROTOCOL_VERSION 2UL
 #define KSWORD_ARK_IOCTL_FUNCTION_CONFIGURE_BUGCHECK_DIAGNOSTICS 0x8FDUL
 
 #define IOCTL_KSWORD_ARK_CONFIGURE_BUGCHECK_DIAGNOSTICS \
@@ -236,4 +240,3 @@ typedef struct _KSWORD_ARK_BUGCHECK_GUARD_RESPONSE
     unsigned char originalBytes[KSWORD_ARK_BUGCHECK_GUARD_HOOK_BYTES];
     unsigned char hookBytes[KSWORD_ARK_BUGCHECK_GUARD_HOOK_BYTES];
 } KSWORD_ARK_BUGCHECK_GUARD_RESPONSE;
-
