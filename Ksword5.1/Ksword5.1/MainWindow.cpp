@@ -38,6 +38,7 @@
 #include <QLabel>
 #include <QList>
 #include <QPainter>
+#include <QPainterPath>
 #include <QPaintEvent>
 #include <QPalette>
 #include <QPen>
@@ -49,6 +50,7 @@
 #include <QPropertyAnimation>
 #include <QRectF>
 #include <QResizeEvent>
+#include <QRegion>
 #include <QSizePolicy>
 #include <QScrollBar>
 #include <QScrollArea>
@@ -1471,6 +1473,28 @@ namespace
         return KswordTheme::ThemedComboBoxPopupViewStyle();
     }
 
+    // applyComboPopupRoundedMask 作用：
+    // - QComboBox Popup 是独立顶层窗口，QSS 的 border-radius 只能改变绘制，不能裁掉原生矩形窗口四角；
+    // - 用与按钮/组合框相同的主题圆角更新窗口区域，避免不透明 palette 在四角露出直角底色；
+    // - Popup 每次显示或尺寸变化后都会重算，兼容条目数量、屏幕可用空间导致的动态高度变化。
+    void applyComboPopupRoundedMask(QWidget* const popupContainer)
+    {
+        if (popupContainer == nullptr ||
+            !popupContainer->windowFlags().testFlag(Qt::Popup) ||
+            popupContainer->width() <= 0 ||
+            popupContainer->height() <= 0)
+        {
+            return;
+        }
+
+        QPainterPath popupPath;
+        popupPath.addRoundedRect(
+            QRectF(QPointF(0.0, 0.0), QSizeF(popupContainer->size())),
+            KswordTheme::ControlCornerRadius,
+            KswordTheme::ControlCornerRadius);
+        popupContainer->setMask(QRegion(popupPath.toFillPolygon().toPolygon()));
+    }
+
     // applyOpaqueComboPopupTheme 作用：
     // - 输入：任意 QComboBox；
     // - 处理：直接主题化其 Popup QFrame、列表视图及 viewport；
@@ -1488,17 +1512,22 @@ namespace
             return;
         }
 
+        QWidget* const popupContainer = itemView->window();
+        const bool hasDedicatedPopupContainer =
+            popupContainer != nullptr &&
+            popupContainer != comboBox &&
+            popupContainer->windowFlags().testFlag(Qt::Popup);
+        if (hasDedicatedPopupContainer)
+        {
+            applyComboPopupRoundedMask(popupContainer);
+        }
+
         const bool autoThemed = itemView->property(kKswordComboPopupAutoThemedPropertyName).toBool();
         if (!autoThemed && !itemView->styleSheet().trimmed().isEmpty())
         {
             return;
         }
 
-        QWidget* const popupContainer = itemView->window();
-        const bool hasDedicatedPopupContainer =
-            popupContainer != nullptr &&
-            popupContainer != comboBox &&
-            popupContainer->windowFlags().testFlag(Qt::Popup);
         if (hasDedicatedPopupContainer)
         {
             applyOpaqueComboPopupPalette(popupContainer);
@@ -1507,10 +1536,12 @@ namespace
                 "  background-color:%1 !important;"
                 "  color:%2 !important;"
                 "  border:1px solid %3 !important;"
+                "  border-radius:%4px;"
                 "}")
                 .arg(KswordTheme::SurfaceColorHex())
                 .arg(KswordTheme::TextPrimaryColorHex())
-                .arg(KswordTheme::BorderColorHex()));
+                .arg(KswordTheme::BorderColorHex())
+                .arg(KswordTheme::ControlCornerRadius));
         }
 
         applyOpaqueComboPopupPalette(itemView);
@@ -1520,7 +1551,7 @@ namespace
     }
 
     // GlobalComboPopupThemeFilter 作用：
-    // - 监听应用范围内的 Popup 显示事件；
+    // - 监听应用范围内的 Popup 显示和尺寸变化事件；
     // - 对新建、懒加载和主题切换后的普通组合框，重新执行不透明列表背景主题化；
     // - 组合框本体可保留业务局部样式，但只要 Popup 没有直接样式就统一补齐不透明列表表面。
     class GlobalComboPopupThemeFilter final : public QObject
@@ -1534,7 +1565,19 @@ namespace
     protected:
         bool eventFilter(QObject* watchedObject, QEvent* eventObject) override
         {
-            if (watchedObject == nullptr || eventObject == nullptr || eventObject->type() != QEvent::Show)
+            if (watchedObject == nullptr || eventObject == nullptr)
+            {
+                return QObject::eventFilter(watchedObject, eventObject);
+            }
+
+            const QEvent::Type eventType = eventObject->type();
+            QWidget* const watchedWidget = qobject_cast<QWidget*>(watchedObject);
+            const bool isPopupResize =
+                eventType == QEvent::Resize &&
+                watchedWidget != nullptr &&
+                watchedWidget == watchedWidget->window() &&
+                watchedWidget->windowFlags().testFlag(Qt::Popup);
+            if (eventType != QEvent::Show && !isPopupResize)
             {
                 return QObject::eventFilter(watchedObject, eventObject);
             }
@@ -1542,9 +1585,9 @@ namespace
             QAbstractItemView* itemView = qobject_cast<QAbstractItemView*>(watchedObject);
             if (itemView == nullptr)
             {
-                if (QWidget* const widget = qobject_cast<QWidget*>(watchedObject))
+                if (watchedWidget != nullptr)
                 {
-                    itemView = widget->findChild<QAbstractItemView*>();
+                    itemView = watchedWidget->findChild<QAbstractItemView*>();
                 }
             }
 
