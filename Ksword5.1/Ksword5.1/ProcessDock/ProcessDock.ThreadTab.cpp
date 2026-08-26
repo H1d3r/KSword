@@ -942,13 +942,14 @@ void ProcessDock::requestAsyncThreadRefresh(const bool forceRefresh)
             nextThreadCounters->emplace(identityKey, nextSample);
 
             // CSwitch 区间可用时优先采用真实调度归因；无运行事件的存活线程按 0% 显示。
-            if (cpuCoreUsageSnapshot.monitorRunning &&
-                cpuCoreUsageSnapshot.sampleReady &&
-                !cpuCoreUsageSnapshot.dataLossDetected)
+            if (cpuCoreUsageSnapshot != nullptr &&
+                cpuCoreUsageSnapshot->monitorRunning &&
+                cpuCoreUsageSnapshot->sampleReady &&
+                !cpuCoreUsageSnapshot->dataLossDetected)
             {
-                const auto coreUsageIt = cpuCoreUsageSnapshot.threadUsageByIdentity.find(
+                const auto coreUsageIt = cpuCoreUsageSnapshot->threadUsageByIdentity.find(
                     ks::process::BuildCpuThreadIdentity(threadRecord.ownerPid, threadRecord.threadId));
-                threadRecord.cpuPercent = coreUsageIt != cpuCoreUsageSnapshot.threadUsageByIdentity.end()
+                threadRecord.cpuPercent = coreUsageIt != cpuCoreUsageSnapshot->threadUsageByIdentity.end()
                     ? coreUsageIt->second.coreEquivalentPercent
                     : 0.0;
                 threadRecord.cpuUsageReady = true;

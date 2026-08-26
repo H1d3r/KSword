@@ -381,6 +381,7 @@
     <ClCompile Include="ProcessDock\ProcessDetailWindow.ExtendedActions.cpp" />
     <ClCompile Include="ProcessDock\ProcessDetailWindow.AdvancedInfo.cpp" />
     <ClCompile Include="PluginHost.cpp" />
+    <ClCompile Include="ProcessDock\ProcessCpuCapacityCell.cpp" />
     <ClCompile Include="ProcessDock\ProcessDock.cpp" />
     <ClCompile Include="ProcessDock\ProcessDock.Icon.cpp" />
     <ClCompile Include="ProcessDock\ProcessDock.ColumnChooser.cpp" />
@@ -728,6 +729,7 @@
     <ClInclude Include="ProcessDock\ProcessAffinityUtils.h" />
     <ClInclude Include="ProcessDock\ProcessAffinityPersistence.h" />
     <ClInclude Include="ProcessDock\ProcessAffinityModel.h" />
+    <ClInclude Include="ProcessDock\ProcessCpuCapacityCell.h" />
     <ClInclude Include="ProcessDock\ProcessMessageHookWindow.h" />
     <ClInclude Include="ProcessDock\ThreadStackWindow.h" />
     <QtMoc Include="ProcessDock\ProcessDock.h" />

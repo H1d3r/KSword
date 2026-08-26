@@ -661,6 +661,9 @@
     <ClCompile Include="PluginHost.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="ProcessDock\ProcessCpuCapacityCell.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="ProcessDock\ProcessDock.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -1381,6 +1384,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="ProcessDock\ProcessAffinityModel.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="ProcessDock\ProcessCpuCapacityCell.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="ProcessDock\ProcessMessageHookWindow.h">

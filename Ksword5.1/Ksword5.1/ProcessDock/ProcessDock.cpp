@@ -1,6 +1,7 @@
 #include "ProcessDock.h"
 #include "ProcessAffinityUtils.h"
 #include "ProcessAffinityPersistence.h"
+#include "ProcessCpuCapacityCell.h"
 #include "../UI/TableInteractionSupport.h"
 #include "../UI/VisibleTableWidget.h"
 
@@ -223,7 +224,8 @@ namespace
         "GPU 引擎",
         "专用 GPU 内存",
         "共享 GPU 内存",
-        "类型"
+        "类型",
+        "CPU核心"
     };
 
     const char* const ProcessTableHeaderKeys[] = {
@@ -289,7 +291,8 @@ namespace
         "process.table.header.gpu_engine",
         "process.table.header.gpu_dedicated_memory",
         "process.table.header.gpu_shared_memory",
-        "process.table.header.process_type"
+        "process.table.header.process_type",
+        "process.table.header.cpu_core"
     };
 
     // ProcessTableHeaderKeyCount：
@@ -495,6 +498,8 @@ namespace
     constexpr int ProcessExpandedRole = Qt::UserRole + 206;
     constexpr int ActivityMinimumIntervalMilliseconds = 50;
     constexpr int ActivityMaximumIntervalMilliseconds = 60000;
+    // CSwitch 会话可以常驻，但 PID/TID×核心矩阵最多每秒结算一次，抑制高频刷新下的后台分配。
+    constexpr int CpuCoreSnapshotMinimumIntervalMilliseconds = 1000;
     constexpr int ProcessTableMinimumIntervalMilliseconds = 500;
     constexpr int ProcessTableMaximumIntervalMilliseconds = 60000;
     constexpr std::size_t ActivityMaximumSampleCount = 1800;
@@ -1971,9 +1976,12 @@ namespace
         // - tableView：被代理绘制的进程表视图；
         // - 处理：启用 viewport 鼠标追踪，记录当前悬停行；
         // - 返回：无返回值。
-        explicit ProcessRowHighlightDelegate(QTableView* tableView)
+        explicit ProcessRowHighlightDelegate(
+            QTableView* tableView,
+            const int cpuCoreColumn)
             : QStyledItemDelegate(tableView)
             , m_tableView(tableView)
+            , m_cpuCoreColumn(cpuCoreColumn)
         {
             if (m_tableView != nullptr && m_tableView->viewport() != nullptr)
             {
@@ -2030,9 +2038,24 @@ namespace
             const bool drawEfficiencyLeaf =
                 index.column() == 0 &&
                 index.data(ProcessEfficiencyModeRole).toBool();
+            const bool customCpuCapacityCell =
+                painter != nullptr &&
+                index.column() == m_cpuCoreColumn &&
+                ks::ui::HasProcessCpuCapacityCellData(index);
             if (customNameColumn)
             {
                 drawProcessNameCell(painter, itemOption, index, drawEfficiencyLeaf);
+            }
+            else if (customCpuCapacityCell)
+            {
+                // CPU 容量槽需要模型背景、前景色和字体；先初始化样式选项，再交给专用绘制器。
+                QStyleOptionViewItem cpuCellOption(itemOption);
+                initStyleOption(&cpuCellOption, index);
+                cpuCellOption.state = itemOption.state;
+                ks::ui::PaintProcessCpuCapacityCell(
+                    painter,
+                    cpuCellOption,
+                    index);
             }
             else
             {
@@ -2087,6 +2110,38 @@ namespace
             {
                 drawRowInteractionBorder(painter, option, index, rowSelected);
             }
+        }
+
+        // helpEvent：
+        // - 输入：Qt tooltip 事件、表格视图、当前单元格几何和模型索引；
+        // - 处理：鼠标命中逐核心小方框时显示该真实逻辑 CPU 的组号、编号和区间占用；
+        // - 返回：true 表示已显示精确核心提示，否则交回默认 ToolTipRole 路径。
+        bool helpEvent(
+            QHelpEvent* const event,
+            QAbstractItemView* const view,
+            const QStyleOptionViewItem& option,
+            const QModelIndex& index) override
+        {
+            if (event != nullptr &&
+                view != nullptr &&
+                index.column() == m_cpuCoreColumn)
+            {
+                QStyleOptionViewItem cpuCellOption(option);
+                initStyleOption(&cpuCellOption, index);
+                const QString coreToolTip = ks::ui::ProcessCpuCapacityToolTipText(
+                    cpuCellOption,
+                    index,
+                    event->pos());
+                if (!coreToolTip.isEmpty())
+                {
+                    QToolTip::showText(
+                        event->globalPos(),
+                        coreToolTip,
+                        view->viewport());
+                    return true;
+                }
+            }
+            return QStyledItemDelegate::helpEvent(event, view, option, index);
         }
 
     private:
@@ -2361,6 +2416,7 @@ namespace
         }
 
         QPointer<QTableView> m_tableView;         // m_tableView：被代理的进程表，不拥有。
+        int m_cpuCoreColumn = -1;                 // m_cpuCoreColumn：唯一允许解析逐核心共享快照的逻辑列。
         QPersistentModelIndex m_hoveredRowIndex; // m_hoveredRowIndex：当前鼠标悬停行的第 0 列索引。
     };
 
@@ -3760,44 +3816,102 @@ void ProcessDock::stopProcessNetworkTrafficCapture()
 
 void ProcessDock::ensureCpuCoreUsageCaptureStarted()
 {
-    if (m_cpuCoreUsageCaptureStarted)
+    // 先记录期望状态：Stop 尚未完成时虽不能立刻启动，完成回调仍能据此恢复同一实例。
+    m_cpuCoreUsageCaptureDesired->store(true, std::memory_order_release);
+    // 同一个旧会话仍在异步 Stop/join 时禁止创建新实例，确保进程页始终最多一个 CSwitch 会话。
+    if (m_cpuCoreUsageCaptureStarted || m_cpuCoreUsageStopInProgress)
     {
         return;
     }
     m_cpuCoreUsageCaptureStarted = true;
     if (m_cpuCoreUsageService == nullptr)
     {
-        m_cpuCoreUsageService = std::make_unique<ks::process::ProcessCpuCoreEtwMonitor>();
+        m_cpuCoreUsageService =
+            std::make_shared<ks::process::ProcessCpuCoreEtwMonitor>();
     }
 
-    const bool started = m_cpuCoreUsageService->Start();
-    kLogEvent logEvent;
-    (started ? info : warn) << logEvent
-        << "[ProcessDock] CSwitch 进程/线程逐核心 CPU 采集器"
-        << (started ? "启动成功" : "启动失败")
-        << (started ? std::string() : (", detail=" + m_cpuCoreUsageService->LastErrorText()))
-        << eol;
+    // StartTrace/OpenTrace 只执行一次，但仍移到全局工作线程，避免 ETW 服务响应慢时阻塞 GUI。
+    const std::shared_ptr<ks::process::ProcessCpuCoreEtwMonitor> cpuCoreService =
+        m_cpuCoreUsageService;
+    const std::shared_ptr<std::atomic_bool> captureDesired =
+        m_cpuCoreUsageCaptureDesired;
+    QRunnable* startTask = QRunnable::create([cpuCoreService, captureDesired]()
+    {
+        const bool started = cpuCoreService->Start();
+        if (started && !captureDesired->load(std::memory_order_acquire))
+        {
+            // 用户在启动完成前已暂停时立即后台回收，避免短暂遗留无人消费的高频会话。
+            cpuCoreService->Stop();
+        }
+        kLogEvent logEvent;
+        (started ? info : warn) << logEvent
+            << "[ProcessDock] 单系统会话 CSwitch 逐核心 CPU 采集器"
+            << (started ? "启动成功" : "启动失败")
+            << (started
+                ? std::string()
+                : (", detail=" + cpuCoreService->LastErrorText()))
+            << eol;
+    });
+    startTask->setAutoDelete(true);
+    QThreadPool::globalInstance()->start(startTask);
 }
 
 void ProcessDock::stopCpuCoreUsageCapture()
 {
-    if (m_cpuCoreUsageService != nullptr)
+    // UI 立即释放最新矩阵；StopTrace + consumer join 交给后台执行，暂停按钮不会卡住界面。
+    m_latestCpuCoreUsageSnapshot.reset();
+    m_lastCpuCoreUsageSnapshotTime = {};
+    m_cpuCoreUsageCaptureDesired->store(false, std::memory_order_release);
+    if (m_processTable != nullptr && m_processTable->viewport() != nullptr)
     {
-        m_cpuCoreUsageService->Stop();
+        // 暂停后立即清掉 CPU 列上一帧扇形，不等待滚动、曝光或下一次整表刷新。
+        const int cpuColumn = toColumnIndex(TableColumn::CpuCore);
+        const QRect cpuViewportRect(
+            m_processTable->columnViewportPosition(cpuColumn),
+            0,
+            m_processTable->columnWidth(cpuColumn),
+            m_processTable->viewport()->height());
+        m_processTable->viewport()->update(
+            cpuViewportRect.intersected(m_processTable->viewport()->rect()));
     }
     m_cpuCoreUsageCaptureStarted = false;
-    m_latestCpuCoreUsageSnapshot.monitorRunning = false;
-}
-
-ks::process::CpuCoreUsageSnapshot ProcessDock::snapshotCpuCoreUsage()
-{
-    if (m_cpuCoreUsageService == nullptr)
+    if (m_cpuCoreUsageService == nullptr || m_cpuCoreUsageStopInProgress)
     {
-        ks::process::CpuCoreUsageSnapshot snapshot;
-        snapshot.diagnosticText = "CSwitch monitor has not started";
-        return snapshot;
+        return;
     }
-    return m_cpuCoreUsageService->SnapshotAndReset();
+
+    m_cpuCoreUsageStopInProgress = true;
+    // 始终保留并复用同一个 service 对象；Stop 完成后的恢复仍调用同一实例，绝不创建第二个会话。
+    const std::shared_ptr<ks::process::ProcessCpuCoreEtwMonitor> cpuCoreService =
+        m_cpuCoreUsageService;
+    const QPointer<ProcessDock> safeThis(this);
+    QRunnable* stopTask = QRunnable::create([safeThis, cpuCoreService]()
+    {
+        cpuCoreService->Stop();
+        if (safeThis.isNull())
+        {
+            return;
+        }
+
+        QMetaObject::invokeMethod(
+            safeThis,
+            [safeThis]()
+            {
+                if (safeThis.isNull())
+                {
+                    return;
+                }
+                safeThis->m_cpuCoreUsageStopInProgress = false;
+                if (safeThis->m_cpuCoreUsageCaptureDesired->load(std::memory_order_acquire))
+                {
+                    // 用户在 Stop 完成前已重新进入允许刷新状态时，此处恢复唯一系统级会话。
+                    safeThis->ensureCpuCoreUsageCaptureStarted();
+                }
+            },
+            Qt::QueuedConnection);
+    });
+    stopTask->setAutoDelete(true);
+    QThreadPool::globalInstance()->start(stopTask);
 }
 
 void ProcessDock::syncCpuCoreUsageToDetailWindow(
@@ -3810,36 +3924,46 @@ void ProcessDock::syncCpuCoreUsageToDetailWindow(
     }
 
     ProcessDetailWindow::CpuCoreViewSample viewSample;
-    viewSample.monitorRunning = m_latestCpuCoreUsageSnapshot.monitorRunning;
-    viewSample.sampleReady = m_latestCpuCoreUsageSnapshot.sampleReady;
-    viewSample.dataLossDetected = m_latestCpuCoreUsageSnapshot.dataLossDetected;
-    viewSample.eventsLost = m_latestCpuCoreUsageSnapshot.eventsLost;
-    viewSample.contextSwitchEvents = m_latestCpuCoreUsageSnapshot.contextSwitchEvents;
-    viewSample.diagnosticText = ks::i18n::sourceText(
-        QString::fromStdString(m_latestCpuCoreUsageSnapshot.diagnosticText));
     viewSample.processSystemPercent = processRecord.cpuPercent;
     viewSample.processCoreEquivalentPercent = processRecord.cpuCorePercent;
+    const std::shared_ptr<const ks::process::CpuCoreUsageSnapshot> cpuCoreSnapshot =
+        m_latestCpuCoreUsageSnapshot;
+    if (cpuCoreSnapshot == nullptr)
+    {
+        viewSample.diagnosticText = ks::i18n::sourceText(
+            QStringLiteral("CSwitch monitor has not started"));
+        detailWindow->setCpuCoreViewSample(std::move(viewSample));
+        return;
+    }
+
+    viewSample.monitorRunning = cpuCoreSnapshot->monitorRunning;
+    viewSample.sampleReady = cpuCoreSnapshot->sampleReady;
+    viewSample.dataLossDetected = cpuCoreSnapshot->dataLossDetected;
+    viewSample.eventsLost = cpuCoreSnapshot->eventsLost;
+    viewSample.contextSwitchEvents = cpuCoreSnapshot->contextSwitchEvents;
+    viewSample.diagnosticText = ks::i18n::sourceText(
+        QString::fromStdString(cpuCoreSnapshot->diagnosticText));
 
     const auto processUsageIt =
-        m_latestCpuCoreUsageSnapshot.processUsageByPid.find(processRecord.pid);
+        cpuCoreSnapshot->processUsageByPid.find(processRecord.pid);
     const ks::process::CpuCoreUsageSeries* const processUsage =
-        processUsageIt != m_latestCpuCoreUsageSnapshot.processUsageByPid.end()
+        processUsageIt != cpuCoreSnapshot->processUsageByPid.end()
         ? &processUsageIt->second
         : nullptr;
-    viewSample.processCores.reserve(m_latestCpuCoreUsageSnapshot.processors.size());
+    viewSample.processCores.reserve(cpuCoreSnapshot->processors.size());
     for (std::size_t processorIndex = 0;
-         processorIndex < m_latestCpuCoreUsageSnapshot.processors.size();
+         processorIndex < cpuCoreSnapshot->processors.size();
          ++processorIndex)
     {
         const ks::process::EtwLogicalProcessorCoordinate& coordinate =
-            m_latestCpuCoreUsageSnapshot.processors[processorIndex];
+            cpuCoreSnapshot->processors[processorIndex];
         ProcessDetailWindow::CpuCoreValue coreValue;
         coreValue.processorIndex = coordinate.processorIndex;
         coreValue.group = coordinate.group;
         coreValue.number = coordinate.number;
         coreValue.sampleReady =
-            processorIndex < m_latestCpuCoreUsageSnapshot.sampleReadyByProcessor.size() &&
-            m_latestCpuCoreUsageSnapshot.sampleReadyByProcessor[processorIndex];
+            processorIndex < cpuCoreSnapshot->sampleReadyByProcessor.size() &&
+            cpuCoreSnapshot->sampleReadyByProcessor[processorIndex];
         if (processUsage != nullptr &&
             processorIndex < processUsage->percentByProcessor.size())
         {
@@ -3849,8 +3973,8 @@ void ProcessDock::syncCpuCoreUsageToDetailWindow(
     }
 
     std::unordered_set<std::uint32_t> populatedThreadIds;
-    populatedThreadIds.reserve(m_latestCpuCoreUsageSnapshot.threadUsageByIdentity.size());
-    for (const auto& threadUsagePair : m_latestCpuCoreUsageSnapshot.threadUsageByIdentity)
+    populatedThreadIds.reserve(cpuCoreSnapshot->threadUsageByIdentity.size());
+    for (const auto& threadUsagePair : cpuCoreSnapshot->threadUsageByIdentity)
     {
         const ks::process::CpuCoreUsageSeries& threadUsage = threadUsagePair.second;
         if (threadUsage.processId != processRecord.pid || threadUsage.threadId == 0)
@@ -3878,7 +4002,7 @@ void ProcessDock::syncCpuCoreUsageToDetailWindow(
 
     // 生命周期 rundown 中已知但本区间未获调度的存活线程也保留为 0%，
     // 避免线程矩阵只列出“刚好运行过”的线程而让用户误以为线程已退出。
-    for (const std::uint64_t identity : m_latestCpuCoreUsageSnapshot.liveThreadIdentities)
+    for (const std::uint64_t identity : cpuCoreSnapshot->liveThreadIdentities)
     {
         const std::uint32_t processId = static_cast<std::uint32_t>(identity >> 32U);
         const std::uint32_t threadId = static_cast<std::uint32_t>(identity & 0xffffffffULL);
@@ -4815,7 +4939,9 @@ void ProcessDock::initializeProcessTable()
     m_processTable->setSortingEnabled(true);
     m_processTable->setContextMenuPolicy(Qt::CustomContextMenu);
     m_processTable->setAlternatingRowColors(true);
-    m_processTable->setItemDelegate(new ProcessRowHighlightDelegate(m_processTable));
+    m_processTable->setItemDelegate(new ProcessRowHighlightDelegate(
+        m_processTable,
+        toColumnIndex(TableColumn::CpuCore)));
     m_processTable->setProperty("ksword_preserve_custom_table_delegate", true);
     m_processTable->setShowGrid(false);
     m_processTable->setWordWrap(false);
@@ -5576,6 +5702,7 @@ void ProcessDock::initializeConnections()
             else
             {
                 m_refreshTimer->stop();
+                stopCpuCoreUsageCapture();
             }
         }
         if (m_monitoringEnabled && isProcessActivityRefreshAllowedNow())
@@ -5701,10 +5828,14 @@ void ProcessDock::initializeConnections()
         }
         if (m_monitoringEnabled &&
             m_activityBackgroundRecordCheck != nullptr &&
-            !m_activityBackgroundRecordCheck->isChecked() &&
-            m_refreshTimer != nullptr)
+            !m_activityBackgroundRecordCheck->isChecked())
         {
-            m_refreshTimer->stop();
+            if (m_refreshTimer != nullptr)
+            {
+                m_refreshTimer->stop();
+            }
+            // 页面自动暂停刷新时同步后台停止唯一 CSwitch 会话，避免无人消费仍常驻高频事件。
+            stopCpuCoreUsageCapture();
         }
         if (currentPage == m_threadPage)
         {
@@ -6129,6 +6260,11 @@ void ProcessDock::applyDefaultColumnWidths()
     m_processTable->setColumnWidth(toColumnIndex(TableColumn::Name), 280);
     m_processTable->setColumnWidth(toColumnIndex(TableColumn::Pid), 80);
     m_processTable->setColumnWidth(toColumnIndex(TableColumn::Cpu), 80);
+    m_processTable->setColumnWidth(
+        toColumnIndex(TableColumn::CpuCore),
+        ks::ui::ProcessCpuCapacityCellSizeHint(
+            m_processTable->fontMetrics(),
+            m_logicalCpuCount).width());
     m_processTable->setColumnWidth(toColumnIndex(TableColumn::Ram), 90);
     m_processTable->setColumnWidth(toColumnIndex(TableColumn::Disk), 95);
     m_processTable->setColumnWidth(toColumnIndex(TableColumn::Gpu), 80);
@@ -6311,7 +6447,8 @@ std::vector<int> ProcessDock::defaultVisibleColumnsForViewMode(const ViewMode vi
             TableColumn::Ppl,
             TableColumn::HandleTable,
             TableColumn::SectionObject,
-            TableColumn::R0Status });
+            TableColumn::R0Status,
+            TableColumn::CpuCore });
         break;
     }
 
@@ -6532,21 +6669,44 @@ void ProcessDock::requestAsyncRefresh(const bool forceRefresh)
     auto previousCounters = m_counterSampleByIdentity;
     ensureProcessNetworkTrafficCaptureStarted();
     auto networkTrafficSnapshot = snapshotProcessNetworkTrafficCounters();
-    const bool cpuCoreUsageDemanded = std::any_of(
-        m_detailWindowByIdentity.cbegin(),
-        m_detailWindowByIdentity.cend(),
-        [](const auto& detailWindowPair) { return detailWindowPair.second != nullptr; });
-    ks::process::CpuCoreUsageSnapshot cpuCoreUsageSnapshot;
-    if (cpuCoreUsageDemanded)
+    // CPU核心列可见或详情窗口需要数据时，才常驻同一个系统级 CSwitch 会话。
+    // 强制刷新若来自隐藏页面或不需要逐核心数据，也不能偷偷保留高频会话。
+    const bool cpuCoreUsageDemanded =
+        isProcessColumnVisible(TableColumn::CpuCore) ||
+        std::any_of(
+            m_detailWindowByIdentity.cbegin(),
+            m_detailWindowByIdentity.cend(),
+            [](const auto& detailWindowPair)
+            {
+                return detailWindowPair.second != nullptr;
+            });
+    const bool cpuCoreCaptureAllowed =
+        isProcessActivityRefreshAllowedNow() && cpuCoreUsageDemanded;
+    if (cpuCoreCaptureAllowed)
     {
-        // CSwitch 是高频系统事件：只在至少一个进程详情窗口存活时启用共享会话。
         ensureCpuCoreUsageCaptureStarted();
-        cpuCoreUsageSnapshot = snapshotCpuCoreUsage();
     }
     else if (m_cpuCoreUsageCaptureStarted)
     {
         stopCpuCoreUsageCapture();
     }
+    const std::shared_ptr<ks::process::ProcessCpuCoreEtwMonitor> cpuCoreUsageService =
+        cpuCoreCaptureAllowed ? m_cpuCoreUsageService : nullptr;
+    const std::chrono::steady_clock::time_point cpuCoreSnapshotNow =
+        std::chrono::steady_clock::now();
+    const bool cpuCoreSnapshotDue =
+        cpuCoreUsageService != nullptr &&
+        (m_lastCpuCoreUsageSnapshotTime.time_since_epoch().count() == 0 ||
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                cpuCoreSnapshotNow - m_lastCpuCoreUsageSnapshotTime).count() >=
+                CpuCoreSnapshotMinimumIntervalMilliseconds);
+    if (cpuCoreSnapshotDue)
+    {
+        // 投递时就更新时间，刷新任务本身互斥，因此不会并发生成两份逐核心矩阵。
+        m_lastCpuCoreUsageSnapshotTime = cpuCoreSnapshotNow;
+    }
+    const std::shared_ptr<const ks::process::CpuCoreUsageSnapshot> previousCpuCoreUsageSnapshot =
+        m_latestCpuCoreUsageSnapshot;
 
     // ticket 用于丢弃过期结果（防止乱序覆盖）。
     const std::uint64_t localTicket = ++m_refreshTicket;
@@ -6585,7 +6745,19 @@ void ProcessDock::requestAsyncRefresh(const bool forceRefresh)
         previousCache = std::move(previousCache),
         previousCounters = std::move(previousCounters),
         networkTrafficSnapshot = std::move(networkTrafficSnapshot),
-        cpuCoreUsageSnapshot = std::move(cpuCoreUsageSnapshot)]() mutable {
+        cpuCoreUsageService,
+        cpuCoreSnapshotDue,
+        previousCpuCoreUsageSnapshot]() mutable {
+        // 先在工作线程构造完整 PID/TID×核心快照，ETW 回调锁竞争不会占用 GUI 事件循环。
+        std::shared_ptr<const ks::process::CpuCoreUsageSnapshot> cpuCoreUsageSnapshot =
+            previousCpuCoreUsageSnapshot;
+        if (cpuCoreUsageService != nullptr && cpuCoreSnapshotDue)
+        {
+            // 即使异步 Start 尚未完成也取得带处理器拓扑的失效态快照，让 UI 画灰槽而非假 0%。
+            cpuCoreUsageSnapshot = std::make_shared<ks::process::CpuCoreUsageSnapshot>(
+                cpuCoreUsageService->SnapshotAndReset());
+        }
+
         ProcessDock::RefreshResult refreshResult = ProcessDock::buildRefreshResult(
             strategyIndex,
             detailModeEnabled,
@@ -6663,8 +6835,20 @@ void ProcessDock::applyRefreshResult(RefreshResult refreshResult, const bool for
 
     restorePersistedAffinityForNewProcesses(refreshResult);
 
-    // 逐核心快照与本轮进程缓存来自同一次刷新 ticket；先替换再同步详情窗口。
-    m_latestCpuCoreUsageSnapshot = std::move(refreshResult.cpuCoreUsageSnapshot);
+    // 逐核心快照与本轮进程缓存来自同一次 ticket；暂停后到达的旧结果不得复活最后一帧。
+    const std::shared_ptr<const ks::process::CpuCoreUsageSnapshot> previousCpuCoreSnapshot =
+        m_latestCpuCoreUsageSnapshot;
+    if (m_monitoringEnabled &&
+        m_cpuCoreUsageCaptureDesired->load(std::memory_order_acquire))
+    {
+        m_latestCpuCoreUsageSnapshot = std::move(refreshResult.cpuCoreUsageSnapshot);
+    }
+    else
+    {
+        m_latestCpuCoreUsageSnapshot.reset();
+    }
+    const bool cpuCoreSnapshotChanged =
+        previousCpuCoreSnapshot != m_latestCpuCoreUsageSnapshot;
 
     // 把最新进程数据同步到已打开的详情窗口（若对应进程仍存在）。
     // 性能策略：
@@ -6726,10 +6910,27 @@ void ProcessDock::applyRefreshResult(RefreshResult refreshResult, const bool for
     {
         rebuildProcessActivityTableSnapshotRecords();
     }
-    if (shouldRebuildProcessTableForRefresh(forceUiRefresh))
+    const bool processTableRebuilt = shouldRebuildProcessTableForRefresh(forceUiRefresh);
+    if (processTableRebuilt)
     {
         rebuildTable();
         m_lastProcessTableRebuildTime = nowTime;
+    }
+    else if (cpuCoreSnapshotChanged &&
+        m_processTable != nullptr &&
+        m_processTable->viewport() != nullptr)
+    {
+        // 逐核心快照独立于整表 2 秒节流：只重绘 CPU 列可见矩形，不触碰其它列或模型行。
+        const int cpuColumn = toColumnIndex(TableColumn::CpuCore);
+        const int cpuColumnLeft = m_processTable->columnViewportPosition(cpuColumn);
+        const int cpuColumnWidth = m_processTable->columnWidth(cpuColumn);
+        const QRect cpuViewportRect(
+            cpuColumnLeft,
+            0,
+            cpuColumnWidth,
+            m_processTable->viewport()->height());
+        m_processTable->viewport()->update(
+            cpuViewportRect.intersected(m_processTable->viewport()->rect()));
     }
     if (m_sideTabWidget != nullptr && m_sideTabWidget->currentWidget() == m_threadPage)
     {
@@ -7737,12 +7938,33 @@ void ProcessDock::rebuildTable()
         tableRow.identityKey = displayRow.rowKind == ProcessTableRowKind::Process
             ? ks::process::BuildProcessIdentityKey(processRecord.pid, processRecord.creationTime100ns)
             : std::string();
+        if (displayRow.rowKind == ProcessTableRowKind::Process && !displayRow.isExited)
+        {
+            tableRow.cpuCoreProcessIds.push_back(processRecord.pid);
+        }
+        else if (displayRow.rowKind == ProcessTableRowKind::ApplicationAggregate)
+        {
+            // 应用父行复用现有成员 identity 列表，解析为本轮真实 PID 后交给逐核心绘制器求和。
+            tableRow.cpuCoreProcessIds.reserve(
+                static_cast<qsizetype>(displayRow.actionIdentityKeys.size()));
+            for (const std::string& memberIdentityKey : displayRow.actionIdentityKeys)
+            {
+                const auto memberIt = m_cacheByIdentity.find(memberIdentityKey);
+                if (memberIt == m_cacheByIdentity.end() ||
+                    memberIt->second.isExitedInLatestRound)
+                {
+                    continue;
+                }
+                tableRow.cpuCoreProcessIds.push_back(memberIt->second.record.pid);
+            }
+        }
         tableRow.depth = displayRow.depth;
         tableRow.hasChildren = displayRow.hasChildren;
         tableRow.isNew = displayRow.isNew;
         tableRow.isExited = displayRow.isExited;
         tableRow.isKernelOnly = displayRow.isKernelOnly;
         tableRow.activitySnapshotActive = activitySnapshotActive;
+        // 逐核心 ETW 快照由 ProcessDock 全部实时行共享，不进入每行对象，避免行数级 shared_ptr 增减。
         tableRow.cpuUsageRatio = std::clamp(processRecord.cpuPercent / 100.0, 0.0, 1.0);
         tableRow.ramUsageRatio = (maxRamMB > 0.0)
             ? std::clamp(processRecord.workingSetMB / maxRamMB, 0.0, 1.0)
@@ -8882,6 +9104,45 @@ QVariant ProcessDock::processTableData(const ProcessTableRow& tableRow, const in
             return tableRow.hasChildren;
         }
     }
+    if (tableColumn == TableColumn::CpuCore && role == Qt::SizeHintRole)
+    {
+        // CPU 列的首选宽度同时容纳现有百分比和全部逻辑处理器容量槽。
+        // 返回 SizeHintRole 后，全局列宽自适应器不会把方框压成不可辨认的一排省略号。
+        const QFontMetrics tableFontMetrics = m_processTable != nullptr
+            ? m_processTable->fontMetrics()
+            : QFontMetrics(QApplication::font());
+        return ks::ui::ProcessCpuCapacityCellSizeHint(
+            tableFontMetrics,
+            m_logicalCpuCount);
+    }
+    if (tableColumn == TableColumn::CpuCore &&
+        (tableRow.rowKind == ProcessTableRowKind::Process ||
+            tableRow.rowKind == ProcessTableRowKind::ApplicationAggregate) &&
+        !tableRow.activitySnapshotActive)
+    {
+        if (role == ks::ui::ProcessCpuUsageSnapshotRole &&
+            m_latestCpuCoreUsageSnapshot != nullptr &&
+            !tableRow.isExited &&
+            !tableRow.cpuCoreProcessIds.isEmpty())
+        {
+            // QVariant 只复制 shared_ptr 控制块；应用父行和真实进程行共享同一轮 ETW 快照。
+            return QVariant::fromValue(m_latestCpuCoreUsageSnapshot);
+        }
+        if (role == ks::ui::ProcessCpuProcessIdsRole)
+        {
+            return QVariant::fromValue(tableRow.cpuCoreProcessIds);
+        }
+        if (role == Qt::ToolTipRole)
+        {
+            return processContextText(
+                "process.table.cell.cpu_core_summary_tooltip",
+                QStringLiteral(
+                    "CPU：%1%\n单核等效：%2%\n"
+                    "每个扇形对应一个真实逻辑 CPU；悬停扇形查看处理器组、编号和本轮占用。"))
+                .arg(processRecord.cpuPercent, 0, 'f', 2)
+                .arg(processRecord.cpuCorePercent, 0, 'f', 2);
+        }
+    }
     if (tableRow.rowKind == ProcessTableRowKind::GroupHeader)
     {
         // GroupHeader is a synthetic non-process row:
@@ -9010,6 +9271,8 @@ QVariant ProcessDock::processTableData(const ProcessTableRow& tableRow, const in
             return static_cast<double>(processRecord.pid);
         case TableColumn::Cpu:
             return processRecord.cpuPercent;
+        case TableColumn::CpuCore:
+            return processRecord.cpuCorePercent;
         case TableColumn::Ram:
             return processRecord.workingSetMB;
         case TableColumn::Disk:
@@ -9820,6 +10083,11 @@ std::vector<ProcessDock::DisplayRow> ProcessDock::buildFriendlyDisplayOrder() co
                 break;
             case TableColumn::Cpu:
                 primaryResult = compareDouble(leftRecord.cpuPercent, rightRecord.cpuPercent);
+                break;
+            case TableColumn::CpuCore:
+                primaryResult = compareDouble(
+                    leftRecord.cpuCorePercent,
+                    rightRecord.cpuCorePercent);
                 break;
             case TableColumn::Ram:
                 primaryResult = compareDouble(leftRecord.workingSetMB, rightRecord.workingSetMB);
@@ -12515,6 +12783,9 @@ QString ProcessDock::formatColumnText(const ks::process::ProcessRecord& processR
     case TableColumn::ProcessType:
         // 类型依赖“应用 / 后台进程 / Windows 进程”的行分组结果，
         // 该信息保存在 ProcessTableRow 而不是 ProcessRecord，由 processTableData 直接产出。
+        return QString();
+    case TableColumn::CpuCore:
+        // CPU核心列只由 delegate 自绘真实逐核心扇形，不额外显示文本。
         return QString();
     default:
         return QString();

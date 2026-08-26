@@ -15,6 +15,7 @@
 #include <QColor>
 #include <QHash>
 #include <QIcon>
+#include <QList>
 #include <QModelIndex>
 #include <QPointer>
 #include <QSet>
@@ -23,6 +24,7 @@
 #include <QVariant>
 #include <QWidget>
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <deque>
@@ -226,6 +228,7 @@ private:
         GpuDedicatedMemory,      // 专用 GPU 内存。
         GpuSharedMemory,         // 共享 GPU 内存。
         ProcessType,             // 类型：应用 / 后台进程 / Windows 进程。
+        CpuCore,                 // CPU核心：真实逻辑处理器逐核心占用扇形图。
         Count                    // 列总数。
     };
 
@@ -372,6 +375,7 @@ private:
         QString syntheticTitle;                       // syntheticTitle：分类/聚合行的展示标题。
         QString expansionKey;                         // expansionKey：分类/聚合行展开状态键。
         std::vector<std::string> actionIdentityKeys;   // actionIdentityKeys：应用聚合行批量动作的成员标识。
+        QList<std::uint32_t> cpuCoreProcessIds;         // cpuCoreProcessIds：逐核心绘制参与汇总的真实 PID 集合。
         int depth = 0;                                // depth：树状显示时的缩进层级。
         bool hasChildren = false;                     // hasChildren：供表示层绘制树状展开提示。
         bool isNew = false;                           // isNew：新增行高亮标记。
@@ -440,7 +444,7 @@ private:
     {
         std::unordered_map<std::string, CacheEntry> nextCache;                    // 下一轮缓存。
         std::unordered_map<std::string, ks::process::CounterSample> nextCounters; // 下一轮计数器样本。
-        ks::process::CpuCoreUsageSnapshot cpuCoreUsageSnapshot;                  // CSwitch 区间逐核心快照。
+        std::shared_ptr<const ks::process::CpuCoreUsageSnapshot> cpuCoreUsageSnapshot; // 后台构造的共享逐核心快照，UI 只移动指针。
 
         // ======== 统计字段（用于 UI 状态提示 + 详细日志） ========
         std::size_t enumeratedCount = 0;        // 本轮枚举到的“当前存活”进程数。
@@ -979,7 +983,6 @@ private:
     // ======== 进程/线程逐核心 CPU 采样 ========
     void ensureCpuCoreUsageCaptureStarted();
     void stopCpuCoreUsageCapture();
-    ks::process::CpuCoreUsageSnapshot snapshotCpuCoreUsage();
     void syncCpuCoreUsageToDetailWindow(
         ProcessDetailWindow* detailWindow,
         const ks::process::ProcessRecord& processRecord) const;
@@ -1157,6 +1160,7 @@ private:
     std::uint64_t m_refreshTicket = 0;        // 刷新请求序号（防乱序）。
     std::uint32_t m_logicalCpuCount = 1;      // CPU 核心数（CPU 百分比换算）。
     std::chrono::steady_clock::time_point m_lastRefreshStartTime{}; // 主线程记录的刷新开始时刻。
+    std::chrono::steady_clock::time_point m_lastCpuCoreUsageSnapshotTime{}; // 最近一次逐核心矩阵结算投递时刻，独立限制为至少 1 秒。
     std::chrono::steady_clock::time_point m_lastProcessTableRebuildTime{}; // 最近一次进程表重绘时间。
 
     // ======== 数据缓存 ========
@@ -1166,9 +1170,12 @@ private:
     std::unordered_map<std::string, ks::process::CounterSample> m_counterSampleByIdentity; // 差值样本。
     std::unique_ptr<ks::network::ProcessNetworkEtwMonitor> m_processNetworkTrafficService; // 进程页内部 ETW 网络累计器。
     bool m_processNetworkTrafficCaptureStarted = false; // ETW 采集器是否已经尝试启动。
-    std::unique_ptr<ks::process::ProcessCpuCoreEtwMonitor> m_cpuCoreUsageService; // CSwitch 逐核心累计器。
-    bool m_cpuCoreUsageCaptureStarted = false; // 本轮监视周期内是否已经尝试启动。
-    ks::process::CpuCoreUsageSnapshot m_latestCpuCoreUsageSnapshot; // 最近一次完整刷新取得的区间快照。
+    std::shared_ptr<ks::process::ProcessCpuCoreEtwMonitor> m_cpuCoreUsageService; // 单个系统级 CSwitch 会话；后台快照任务共享生命周期。
+    bool m_cpuCoreUsageCaptureStarted = false; // UI 线程状态：本轮监视周期内是否已经投递启动。
+    bool m_cpuCoreUsageStopInProgress = false; // UI 线程状态：异步 Stop/join 完成前禁止第二个会话。
+    std::shared_ptr<std::atomic_bool> m_cpuCoreUsageCaptureDesired =
+        std::make_shared<std::atomic_bool>(false); // 后台 Start 返回后读取的期望状态，解决快速开始/暂停竞态。
+    std::shared_ptr<const ks::process::CpuCoreUsageSnapshot> m_latestCpuCoreUsageSnapshot; // 最近区间快照；UI 只交换共享指针，避免复制全量矩阵。
     QHash<QString, QIcon> m_iconCacheByPath;  // 进程图标缓存，避免重复提取。
     QHash<QString, QIcon> m_activityIconCacheByProcessKey; // 历史活动图标缓存：进程名+路径 -> 图标。
     QSet<QString> m_processIconPathsInFlight; // 已投递后台线程池、尚未回传结果的 EXE 路径集合。
