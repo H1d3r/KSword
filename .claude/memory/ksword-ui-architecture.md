@@ -13,6 +13,7 @@ KSword 主程序位于 `Ksword5.1/Ksword5.1`（Qt 6.9.3 Widgets + Qt Advanced Do
 - 纯图标按钮的几何同样由 `theme.h` 收口：紧凑工具栏使用 `ApplyCompactIconButtonMetrics`（28px 按钮 / 16px 图标），独立或强调动作使用 `ApplyStandardIconButtonMetrics`（32px / 18px）；页面不得继续新增 30/34/36px 的临时组合。
 - `MainWindow::applyAppearanceSettings`：主题应用唯一入口，设置 QApplication palette + 调用 `applyGlobalApplicationStyleBlocks`（带 marker 的 QSS 块替换机制，marker 常量在 MainWindow.cpp 顶部匿名命名空间）。
 - 全局 QSS 块顺序：BaseControl（`UI/GlobalUiBaseStyle.cpp`）→ Tooltip → ContextMenu → ControlContrast → ComboBox，依次追加到 app stylesheet，基线块在最前，局部样式可覆盖。
+- `QComboBox` 弹出列表是独立 `Qt::Popup` 顶层窗口：列表 QSS 的 `border-radius` 只改变绘制，不能消除不透明 palette 的矩形窗口四角。圆角必须复用 `KswordTheme::ControlCornerRadius`，并在 Popup 显示及尺寸变化后同步更新顶层窗口 mask；即使业务控件保留自己的列表 QSS，也应统一裁剪最外层轮廓。
 - `UI/GlobalDialogTheme.cpp`：QApplication 事件过滤器给所有 QDialog 补主题（palette + 追加 QSS）；QMessageBox 由 `UI/ThemedMessageBox` 专管。
 - `UI/WindowChrome.cpp`：事件过滤器对所有原生标题栏顶层窗口用 DwmSetWindowAttribute 染色（IMMERSIVE_DARK_MODE=20、BORDER=34、CAPTION=35、TEXT=36），主题切换时 `RefreshAllWindowChrome()`。
 - 大型独立窗口的初始尺寸和最低尺寸统一调用 `ks::ui::applyResponsiveWindowGeometry`，以父窗口所在屏幕的 `availableGeometry` 为边界；不要再直接写 1000px 以上的硬 `setMinimumSize`，否则高 DPI、小屏或远程桌面会把窗口撑出工作区。
