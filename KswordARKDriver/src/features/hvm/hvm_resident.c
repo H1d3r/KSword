@@ -1052,7 +1052,6 @@ KswordARKHvmResidentStart(
     ULONG processorIndex = 0UL;
     ULONG ruleIndex = 0UL;
     LONG powerGeneration = 0L;
-    KIRQL oldIrql = PASSIVE_LEVEL;
     KSWORD_ARK_HVM_EVENT_ROW eventRow = { 0 };
 
     /* Reject a missing runtime before evaluating lifecycle policy. */
@@ -1199,8 +1198,15 @@ KswordARKHvmResidentStart(
         /* Return the exact context preparation failure. */
         return status;
     }
-    /* Serialize only the nonallocating VMX transition and guard commit. */
-    KeAcquireSpinLock(&Runtime->ResidentTransitionLock, &oldIrql);
+    /* Own the transition phase without holding its state lock over the IPI. */
+    status = KswordARKHvmAcquireResidentTransition(Runtime);
+    if (!NT_SUCCESS(status)) {
+        KswordARKHvmResidentReleaseContexts();
+        InterlockedExchange(
+            &Runtime->ResidentContextPreparing,
+            0L);
+        return status;
+    }
     /* A power callback may have arrived while host stacks were allocated. */
     if (InterlockedCompareExchange(
             &Runtime->PowerTransitionPending,
@@ -1215,7 +1221,7 @@ KswordARKHvmResidentStart(
         InterlockedExchange(
             &Runtime->ResidentContextPreparing,
             0L);
-        KeReleaseSpinLock(&Runtime->ResidentTransitionLock, oldIrql);
+        KswordARKHvmReleaseResidentTransition(Runtime);
         return STATUS_POWER_STATE_INVALID;
     }
     /* Prevent image unload before the first processor can enter VMX. */
@@ -1226,7 +1232,7 @@ KswordARKHvmResidentStart(
         InterlockedExchange(
             &Runtime->ResidentContextPreparing,
             0L);
-        KeReleaseSpinLock(&Runtime->ResidentTransitionLock, oldIrql);
+        KswordARKHvmReleaseResidentTransition(Runtime);
         return guardStatus;
     }
     /* Publish starting state before any processor enters VMX non-root. */
@@ -1287,9 +1293,7 @@ KswordARKHvmResidentStart(
             InterlockedExchange(
                 &Runtime->ResidentContextPreparing,
                 0L);
-            KeReleaseSpinLock(
-                &Runtime->ResidentTransitionLock,
-                oldIrql);
+            KswordARKHvmReleaseResidentTransition(Runtime);
             return status;
         }
         /* Release host stacks only after rollback reached zero active CPUs. */
@@ -1323,9 +1327,7 @@ KswordARKHvmResidentStart(
         InterlockedExchange(
             &Runtime->ResidentContextPreparing,
             0L);
-        KeReleaseSpinLock(
-            &Runtime->ResidentTransitionLock,
-            oldIrql);
+        KswordARKHvmReleaseResidentTransition(Runtime);
         /* Return the authoritative all-processor start failure. */
         return status;
     }
@@ -1349,9 +1351,7 @@ KswordARKHvmResidentStart(
     InterlockedExchange(
         &Runtime->ResidentContextPreparing,
         0L);
-    KeReleaseSpinLock(
-        &Runtime->ResidentTransitionLock,
-        oldIrql);
+    KswordARKHvmReleaseResidentTransition(Runtime);
     /* Describe one lifecycle event after full residency succeeds. */
     eventRow.type = KSWORD_ARK_HVM_EVENT_TYPE_LIFECYCLE;
     /* Publish successful resident start status. */
@@ -1369,7 +1369,6 @@ KswordARKHvmResidentStop(
 {
     NTSTATUS status = STATUS_SUCCESS;
     NTSTATUS guardStatus = STATUS_SUCCESS;
-    KIRQL oldIrql = PASSIVE_LEVEL;
     KSWORD_ARK_HVM_EVENT_ROW eventRow = { 0 };
 
     /* Reject a missing runtime before lifecycle mutation. */
@@ -1377,8 +1376,11 @@ KswordARKHvmResidentStop(
         /* Return the exact caller-contract failure. */
         return STATUS_INVALID_PARAMETER;
     }
-    /* Serialize devirtualization against resident start and power resume. */
-    KeAcquireSpinLock(&Runtime->ResidentTransitionLock, &oldIrql);
+    /* Serialize devirtualization through the wait-aware transition phase. */
+    status = KswordARKHvmAcquireResidentTransition(Runtime);
+    if (!NT_SUCCESS(status)) {
+        return status;
+    }
     /* Treat a fully stopped lifecycle as idempotent success. */
     if (InterlockedCompareExchange(
             &Runtime->ResidentProcessorCount,
@@ -1415,14 +1417,10 @@ KswordARKHvmResidentStop(
                 KSWORD_ARK_HVM_STATE_ROLLBACK_REQUIRED;
             Runtime->ResidentImplementation =
                 KSWORD_ARK_HVM_IMPLEMENTATION_PARTIAL;
-            KeReleaseSpinLock(
-                &Runtime->ResidentTransitionLock,
-                oldIrql);
+            KswordARKHvmReleaseResidentTransition(Runtime);
             return guardStatus;
         }
-        KeReleaseSpinLock(
-            &Runtime->ResidentTransitionLock,
-            oldIrql);
+        KswordARKHvmReleaseResidentTransition(Runtime);
         /* Complete the idempotent stop successfully. */
         return STATUS_SUCCESS;
     }
@@ -1449,9 +1447,7 @@ KswordARKHvmResidentStop(
         /* Clear transient stopping state after the failed rendezvous. */
         Runtime->StateFlags &=
             ~KSWORD_ARK_HVM_STATE_RESIDENT_STOPPING;
-        KeReleaseSpinLock(
-            &Runtime->ResidentTransitionLock,
-            oldIrql);
+        KswordARKHvmReleaseResidentTransition(Runtime);
         /* Return the authoritative stop or incomplete rollback failure. */
         return NT_SUCCESS(status)
             ? STATUS_HV_OPERATION_FAILED
@@ -1482,14 +1478,10 @@ KswordARKHvmResidentStop(
             KSWORD_ARK_HVM_STATE_ROLLBACK_REQUIRED;
         Runtime->ResidentImplementation =
             KSWORD_ARK_HVM_IMPLEMENTATION_PARTIAL;
-        KeReleaseSpinLock(
-            &Runtime->ResidentTransitionLock,
-            oldIrql);
+        KswordARKHvmReleaseResidentTransition(Runtime);
         return guardStatus;
     }
-    KeReleaseSpinLock(
-        &Runtime->ResidentTransitionLock,
-        oldIrql);
+    KswordARKHvmReleaseResidentTransition(Runtime);
     /* Describe one successful resident stop lifecycle event. */
     eventRow.type = KSWORD_ARK_HVM_EVENT_TYPE_LIFECYCLE;
     /* Publish successful resident stop status. */

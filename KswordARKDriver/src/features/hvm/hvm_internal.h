@@ -316,8 +316,12 @@ typedef struct _KSW_HVM_RUNTIME
     KSW_HVM_EPT_RULE_SLOT EptRules[KSWORD_ARK_HVM_MAX_EPT_RULES];
     /* Retain every split two-MiB EPT leaf. */
     KSW_HVM_EPT_SPLIT EptSplits[KSW_HVM_MAX_EPT_SPLITS];
-    /* Serialize resident VMX transition commits against power notification. */
-    KSPIN_LOCK ResidentTransitionLock;
+    /* Protect only the resident-transition phase and idle-event state. */
+    KSPIN_LOCK ResidentTransitionStateLock;
+    /* Wake wait-capable transition contenders after the current owner exits. */
+    KEVENT ResidentTransitionIdleEvent;
+    /* Publish whether one VMX transition phase currently owns the runtime. */
+    volatile LONG ResidentTransitionActive;
     /* Reference this image's driver object for the unload interlock. */
     PDRIVER_OBJECT DriverObject;
     /* Preserve the exact KMDF-installed unload entry while residency is active. */
@@ -343,6 +347,27 @@ typedef struct _KSW_HVM_RUNTIME
 } KSW_HVM_RUNTIME;
 
 EXTERN_C_START
+
+/*
+ * Serialize VMX transition phases without holding a spin lock across VMX or
+ * all-processor rendezvous work.  At IRQL <= APC_LEVEL contenders wait on the
+ * preallocated event.  A DISPATCH_LEVEL callback never spins behind an owner;
+ * it receives STATUS_DEVICE_BUSY so the power path can fail closed.
+ */
+_IRQL_requires_max_(DISPATCH_LEVEL)
+_IRQL_requires_same_
+NTSTATUS
+KswordARKHvmAcquireResidentTransition(
+    _Inout_ KSW_HVM_RUNTIME* Runtime
+    );
+
+/* Release one transition phase and wake every wait-capable contender. */
+_IRQL_requires_max_(DISPATCH_LEVEL)
+_IRQL_requires_same_
+VOID
+KswordARKHvmReleaseResidentTransition(
+    _Inout_ KSW_HVM_RUNTIME* Runtime
+    );
 
 /* Allocate one zeroed EPT page and record it in the runtime ledger. */
 PVOID

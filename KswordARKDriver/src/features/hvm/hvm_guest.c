@@ -17,6 +17,7 @@ Environment:
 --*/
 
 #include "hvm_guest.h"
+#include "hvm_internal.h"
 #include "../../platform/pool_compat.h"
 
 #if defined(_M_AMD64)
@@ -272,15 +273,14 @@ KswordARKHvmLaunchControlledGuest(
     UCHAR vmxResult = 0xFFU;
     NTSTATUS status = STATUS_UNSUCCESSFUL;
     BOOLEAN affinitySet = FALSE;
-    BOOLEAN transitionLockHeld = FALSE;
+    BOOLEAN transitionOwned = FALSE;
+    BOOLEAN irqlRaised = FALSE;
     BOOLEAN cr4Changed = FALSE;
 
     /* Validate the fixed launch contract before allocating nonpaged stacks. */
     if (Input == NULL ||
         Result == NULL ||
-        Input->TransitionLock == NULL ||
-        Input->PowerTransitionPending == NULL ||
-        Input->PowerTransitionGeneration == NULL) {
+        Input->Runtime == NULL) {
         return STATUS_INVALID_PARAMETER;
     }
     /* Start with deterministic diagnostics even when allocation fails. */
@@ -316,19 +316,25 @@ KswordARKHvmLaunchControlledGuest(
         &oldAffinity);
     /* Record the affinity transition for symmetric cleanup. */
     affinitySet = TRUE;
-    /* Serialize the nonallocating VMX window against system power transition. */
-    KeAcquireSpinLock(Input->TransitionLock, &oldIrql);
-    transitionLockHeld = TRUE;
+    /* Own the transition phase without holding its state spin lock over VMX. */
+    status = KswordARKHvmAcquireResidentTransition(Input->Runtime);
+    if (!NT_SUCCESS(status)) {
+        goto Complete;
+    }
+    transitionOwned = TRUE;
+    /* Prevent thread migration while this CPU temporarily owns VMX root. */
+    KeRaiseIrql(DISPATCH_LEVEL, &oldIrql);
+    irqlRaised = TRUE;
 
     /* Protect privileged state transitions from virtual-CPU exceptions. */
     __try {
         /* A leaving-S0 callback always wins before any new VMXON. */
         if (InterlockedCompareExchange(
-                Input->PowerTransitionPending,
+                &Input->Runtime->PowerTransitionPending,
                 0L,
                 0L) != 0L ||
             InterlockedCompareExchange(
-                Input->PowerTransitionGeneration,
+                &Input->Runtime->PowerTransitionGeneration,
                 0L,
                 0L) != Input->ExpectedPowerTransitionGeneration) {
             status = STATUS_POWER_STATE_INVALID;
@@ -507,8 +513,12 @@ KswordARKHvmLaunchControlledGuest(
 
 Complete:
     /* Reopen the power callback only after privileged cleanup is complete. */
-    if (transitionLockHeld) {
-        KeReleaseSpinLock(Input->TransitionLock, oldIrql);
+    if (transitionOwned) {
+        KswordARKHvmReleaseResidentTransition(Input->Runtime);
+    }
+    /* Restore the caller's exact IRQL after all VMX state is native again. */
+    if (irqlRaised) {
+        KeLowerIrql(oldIrql);
     }
     /* Restore the caller's group affinity after returning to passive migration. */
     if (affinitySet) {

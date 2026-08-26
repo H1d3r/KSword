@@ -644,6 +644,78 @@ KswordARKHvmInvalidatePowerResumeEvidence(
     }
 }
 
+NTSTATUS
+KswordARKHvmAcquireResidentTransition(
+    _Inout_ KSW_HVM_RUNTIME* Runtime
+    )
+{
+    KIRQL oldIrql = PASSIVE_LEVEL;
+
+    if (Runtime == NULL) {
+        return STATUS_INVALID_PARAMETER;
+    }
+    for (;;) {
+        /* Claim only the phase bit while the ordinary spin lock is held. */
+        KeAcquireSpinLock(
+            &Runtime->ResidentTransitionStateLock,
+            &oldIrql);
+        if (InterlockedCompareExchange(
+                &Runtime->ResidentTransitionActive,
+                1L,
+                0L) == 0L) {
+            /* Reset the reusable notification event for this exact owner. */
+            KeClearEvent(&Runtime->ResidentTransitionIdleEvent);
+            KeReleaseSpinLock(
+                &Runtime->ResidentTransitionStateLock,
+                oldIrql);
+            return STATUS_SUCCESS;
+        }
+        KeReleaseSpinLock(
+            &Runtime->ResidentTransitionStateLock,
+            oldIrql);
+
+        if (KeGetCurrentIrql() > APC_LEVEL) {
+            /* Never spin at DISPATCH_LEVEL behind a preempted phase owner. */
+            return STATUS_DEVICE_BUSY;
+        }
+        /* Suspend a control thread instead of spinning behind an IPI. */
+        (void)KeWaitForSingleObject(
+            &Runtime->ResidentTransitionIdleEvent,
+            Executive,
+            KernelMode,
+            FALSE,
+            NULL);
+    }
+}
+
+VOID
+KswordARKHvmReleaseResidentTransition(
+    _Inout_ KSW_HVM_RUNTIME* Runtime
+    )
+{
+    KIRQL oldIrql = PASSIVE_LEVEL;
+
+    NT_ASSERT(Runtime != NULL);
+    /* Publish idle and signal its event as one short state-locked commit. */
+    KeAcquireSpinLock(
+        &Runtime->ResidentTransitionStateLock,
+        &oldIrql);
+    NT_ASSERT(InterlockedCompareExchange(
+        &Runtime->ResidentTransitionActive,
+        0L,
+        0L) != 0L);
+    InterlockedExchange(
+        &Runtime->ResidentTransitionActive,
+        0L);
+    KeSetEvent(
+        &Runtime->ResidentTransitionIdleEvent,
+        IO_NO_INCREMENT,
+        FALSE);
+    KeReleaseSpinLock(
+        &Runtime->ResidentTransitionStateLock,
+        oldIrql);
+}
+
 static NTSTATUS
 KswordARKHvmCompleteDeferredPowerResumeLocked(
     _Inout_ KSW_HVM_RUNTIME* Runtime
@@ -692,7 +764,6 @@ KswordARKHvmPowerStateCallback(
 {
     KSW_HVM_RUNTIME* runtime =
         (KSW_HVM_RUNTIME*)CallbackContext;
-    KIRQL oldIrql = PASSIVE_LEVEL;
     NTSTATUS status = STATUS_SUCCESS;
 
     /* Process only the system working-state lock notification. */
@@ -701,7 +772,7 @@ KswordARKHvmPowerStateCallback(
         return;
     }
     if ((ULONG_PTR)Argument2 == FALSE) {
-        /* Block every new resident transition before waiting for its spin gate. */
+        /* Block every new resident transition before taking its phase gate. */
         InterlockedExchange(&runtime->PowerTransitionPending, 1L);
         InterlockedIncrement(&runtime->PowerTransitionGeneration);
         InterlockedOr(
@@ -716,8 +787,13 @@ KswordARKHvmPowerStateCallback(
                 (volatile LONG*)&runtime->StateFlags,
                 (LONG)(KSWORD_ARK_HVM_STATE_FAULTED |
                     KSWORD_ARK_HVM_STATE_ROLLBACK_REQUIRED));
-            /* Never enter a non-S0 state while any CPU still runs this VMM. */
-            if (InterlockedCompareExchange(
+            /*
+             * A DISPATCH_LEVEL phase collision cannot wait safely.  Fail
+             * closed even before resident count is published so an in-flight
+             * transient VMX window cannot cross the S0 boundary.
+             */
+            if (status == STATUS_DEVICE_BUSY ||
+                InterlockedCompareExchange(
                     &runtime->ResidentProcessorCount,
                     0L,
                     0L) != 0L) {
@@ -733,20 +809,22 @@ KswordARKHvmPowerStateCallback(
     }
 
     /* Mark S0 resumed, then reopen only after every HVM operation drains. */
-    KeAcquireSpinLock(&runtime->ResidentTransitionLock, &oldIrql);
     InterlockedExchange(&runtime->PowerTransitionPending, 2L);
-    if (runtime->Busy ||
-        InterlockedCompareExchange(
-            &runtime->ResidentContextPreparing,
-            0L,
-            0L) != 0L) {
-        /* Keep the gate closed until the active control path discards its work. */
-        status = STATUS_DEVICE_BUSY;
-    } else {
-        status =
-            KswordARKHvmCompleteDeferredPowerResumeLocked(runtime);
+    status = KswordARKHvmAcquireResidentTransition(runtime);
+    if (NT_SUCCESS(status)) {
+        if (runtime->Busy ||
+            InterlockedCompareExchange(
+                &runtime->ResidentContextPreparing,
+                0L,
+                0L) != 0L) {
+            /* Keep the gate closed until the active control path drains. */
+            status = STATUS_DEVICE_BUSY;
+        } else {
+            status =
+                KswordARKHvmCompleteDeferredPowerResumeLocked(runtime);
+        }
+        KswordARKHvmReleaseResidentTransition(runtime);
     }
-    KeReleaseSpinLock(&runtime->ResidentTransitionLock, oldIrql);
     runtime->LastStatus = status;
     InterlockedIncrement((volatile LONG*)&runtime->Generation);
 }
@@ -1103,7 +1181,8 @@ KswordARKHvmSelfTestProcessor(
     UCHAR vmxResult = 0xFFU;
     NTSTATUS status = STATUS_UNSUCCESSFUL;
     BOOLEAN affinitySet = FALSE;
-    BOOLEAN transitionLockHeld = FALSE;
+    BOOLEAN transitionOwned = FALSE;
+    BOOLEAN irqlRaised = FALSE;
     BOOLEAN cr4Changed = FALSE;
 
     /* Bind the current system thread to the exact resource-owning processor. */
@@ -1115,9 +1194,15 @@ KswordARKHvmSelfTestProcessor(
         &oldAffinity);
     affinitySet = TRUE;
 
-    /* Serialize the local VMX window against the system power callback. */
-    KeAcquireSpinLock(&Runtime->ResidentTransitionLock, &oldIrql);
-    transitionLockHeld = TRUE;
+    /* Own the transition phase without holding its state spin lock over VMX. */
+    status = KswordARKHvmAcquireResidentTransition(Runtime);
+    if (!NT_SUCCESS(status)) {
+        goto Complete;
+    }
+    transitionOwned = TRUE;
+    /* Prevent thread migration while this CPU temporarily owns VMX root. */
+    KeRaiseIrql(DISPATCH_LEVEL, &oldIrql);
+    irqlRaised = TRUE;
     __try {
         /* A leaving-S0 callback always wins before any new VMXON. */
         if (InterlockedCompareExchange(
@@ -1188,8 +1273,12 @@ KswordARKHvmSelfTestProcessor(
                 KSWORD_ARK_HVM_CPU_STATE_EXCEPTION;
         }
     }
-    if (transitionLockHeld) {
-        KeReleaseSpinLock(&Runtime->ResidentTransitionLock, oldIrql);
+Complete:
+    if (transitionOwned) {
+        KswordARKHvmReleaseResidentTransition(Runtime);
+    }
+    if (irqlRaised) {
+        KeLowerIrql(oldIrql);
     }
     if (affinitySet) {
         KeRevertToUserGroupAffinityThread(&oldAffinity);
@@ -1209,8 +1298,8 @@ KswordARKHvmSelfTestLocked(
     ULONG index = 0UL;
     ULONG passed = 0UL;
     NTSTATUS firstFailure = STATUS_SUCCESS;
+    NTSTATUS transitionStatus = STATUS_SUCCESS;
     LONG powerGeneration = 0L;
-    KIRQL oldIrql = PASSIVE_LEVEL;
 
     /* The test operates only on a complete prepared resource set. */
     if ((Runtime->StateFlags &
@@ -1243,7 +1332,10 @@ KswordARKHvmSelfTestLocked(
         }
     }
     /* Publish one coherent test epoch, never a pre/post-sleep mixture. */
-    KeAcquireSpinLock(&Runtime->ResidentTransitionLock, &oldIrql);
+    transitionStatus = KswordARKHvmAcquireResidentTransition(Runtime);
+    if (!NT_SUCCESS(transitionStatus)) {
+        return transitionStatus;
+    }
     if (InterlockedCompareExchange(
             &Runtime->PowerTransitionPending,
             0L,
@@ -1253,7 +1345,7 @@ KswordARKHvmSelfTestLocked(
             0L,
             0L) != powerGeneration) {
         KswordARKHvmInvalidatePowerResumeEvidence(Runtime);
-        KeReleaseSpinLock(&Runtime->ResidentTransitionLock, oldIrql);
+        KswordARKHvmReleaseResidentTransition(Runtime);
         return STATUS_POWER_STATE_INVALID;
     }
     Runtime->SelfTestPassedProcessorCount = passed;
@@ -1263,13 +1355,13 @@ KswordARKHvmSelfTestLocked(
         Runtime->StateFlags |=
             KSWORD_ARK_HVM_STATE_SELF_TEST_PASSED |
             KSWORD_ARK_HVM_STATE_GUEST_READY;
-        KeReleaseSpinLock(&Runtime->ResidentTransitionLock, oldIrql);
+        KswordARKHvmReleaseResidentTransition(Runtime);
         return STATUS_SUCCESS;
     }
     Runtime->StateFlags &=
         ~(KSWORD_ARK_HVM_STATE_SELF_TEST_PASSED |
           KSWORD_ARK_HVM_STATE_GUEST_READY);
-    KeReleaseSpinLock(&Runtime->ResidentTransitionLock, oldIrql);
+    KswordARKHvmReleaseResidentTransition(Runtime);
     return NT_SUCCESS(firstFailure)
         ? STATUS_UNSUCCESSFUL
         : firstFailure;
@@ -1380,12 +1472,8 @@ KswordARKHvmLaunchGuestLocked(
     launchInput.Cr4Fixed1 = Runtime->Cr4Fixed1;
     /* Reference the prepared RAM identity-map EPT pointer. */
     launchInput.EptPointer = Runtime->EptPointer;
-    /* Serialize the exact transient VMX window against power notification. */
-    launchInput.TransitionLock = &Runtime->ResidentTransitionLock;
-    launchInput.PowerTransitionPending =
-        &Runtime->PowerTransitionPending;
-    launchInput.PowerTransitionGeneration =
-        &Runtime->PowerTransitionGeneration;
+    /* Share the runtime-owned transition phase and power epoch. */
+    launchInput.Runtime = Runtime;
     launchInput.ExpectedPowerTransitionGeneration = powerGeneration;
 
     /* Replace the previous one-shot state with an observable running state. */
@@ -1538,7 +1626,12 @@ KswordARKHvmInitialize(
     /* Initialize the lock before publishing any observable runtime state. */
     RtlZeroMemory(&g_KswordHvm, sizeof(g_KswordHvm));
     ExInitializePushLock(&g_KswordHvm.Lock);
-    KeInitializeSpinLock(&g_KswordHvm.ResidentTransitionLock);
+    KeInitializeSpinLock(
+        &g_KswordHvm.ResidentTransitionStateLock);
+    KeInitializeEvent(
+        &g_KswordHvm.ResidentTransitionIdleEvent,
+        NotificationEvent,
+        TRUE);
     g_KswordHvm.Initialized = TRUE;
     g_KswordHvm.StateFlags = KSWORD_ARK_HVM_STATE_INITIALIZED;
     g_KswordHvm.Generation = 1UL;
@@ -1759,20 +1852,20 @@ KswordARKHvmUninitialize(
             &g_KswordHvm.ResidentProcessorCount,
             0L,
             0L) == 0L) {
-        KIRQL oldIrql = PASSIVE_LEVEL;
+        NTSTATUS transitionStatus = STATUS_SUCCESS;
 
         /* Restore the captured KMDF unload entry after complete VMXOFF. */
-        KeAcquireSpinLock(
-            &g_KswordHvm.ResidentTransitionLock,
-            &oldIrql);
-        if (!NT_SUCCESS(
-                KswordARKHvmDisarmUnloadGuard(&g_KswordHvm))) {
+        transitionStatus =
+            KswordARKHvmAcquireResidentTransition(&g_KswordHvm);
+        if (NT_SUCCESS(transitionStatus)) {
+            transitionStatus =
+                KswordARKHvmDisarmUnloadGuard(&g_KswordHvm);
+            KswordARKHvmReleaseResidentTransition(&g_KswordHvm);
+        }
+        if (!NT_SUCCESS(transitionStatus)) {
             g_KswordHvm.StateFlags |=
                 KSWORD_ARK_HVM_STATE_ROLLBACK_REQUIRED;
         }
-        KeReleaseSpinLock(
-            &g_KswordHvm.ResidentTransitionLock,
-            oldIrql);
         /* Publish completed HVM teardown. */
         g_KswordHvm.Initialized = FALSE;
     } else {
@@ -1931,7 +2024,6 @@ KswordARKHvmControl(
     ULONG eventCount = 0UL;
     ULONG droppedEventCount = 0UL;
     ULONG allowedFlags = 0UL;
-    KIRQL deferredResumeIrql = PASSIVE_LEVEL;
 
     /* Validate the complete versioned request before acquiring the state lock. */
     if (Request == NULL || Response == NULL) {
@@ -2209,14 +2301,13 @@ KswordARKHvmControl(
     g_KswordHvm.Busy = FALSE;
     g_KswordHvm.StateFlags &= ~KSWORD_ARK_HVM_STATE_BUSY;
     /* Finish a resume that waited for this exact control operation to drain. */
-    KeAcquireSpinLock(
-        &g_KswordHvm.ResidentTransitionLock,
-        &deferredResumeIrql);
     deferredResumeStatus =
-        KswordARKHvmCompleteDeferredPowerResumeLocked(&g_KswordHvm);
-    KeReleaseSpinLock(
-        &g_KswordHvm.ResidentTransitionLock,
-        deferredResumeIrql);
+        KswordARKHvmAcquireResidentTransition(&g_KswordHvm);
+    if (NT_SUCCESS(deferredResumeStatus)) {
+        deferredResumeStatus =
+            KswordARKHvmCompleteDeferredPowerResumeLocked(&g_KswordHvm);
+        KswordARKHvmReleaseResidentTransition(&g_KswordHvm);
+    }
     if (!NT_SUCCESS(deferredResumeStatus) &&
         deferredResumeStatus != STATUS_DEVICE_BUSY &&
         NT_SUCCESS(status)) {
