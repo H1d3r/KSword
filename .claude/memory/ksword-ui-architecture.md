@@ -50,7 +50,7 @@ KSword 主程序位于 `Ksword5.1/Ksword5.1`（Qt 6.9.3 Widgets + Qt Advanced Do
 - 周期性后台刷新（例如进程监视采样）不得注册为全局 `kPro` 任务；否则每轮采样都会进入“当前任务”和顶部进度通知。`kPro` 只用于有明确开始/结束、需要用户感知的有限操作，常驻监视状态应留在页面状态标签与诊断日志中。
 - 周期采集的缺失证据或查询失败若使用 `Warn`，必须按规范化错误集合做状态变化去重：首次出现或错误集合改变时记录一次，连续相同采样只更新页面状态；错误清除后再复发才允许重新通知。否则默认 Warn 通知阈值会把固定失败放大成通知卡和日志风暴。
 - `UI/TableInteractionSupport.cpp` 通过应用级事件过滤器统一接入 `QTableView/QTableWidget`；表头点击排序由 `UI/TableHeaderSortingSupport.*` 负责。
-- `VisibleTableWidget` 与 `TableActionTableView` 共用嵌入式 `TableActionBar`，但能力按表格用途分级：普通 `VisibleTableWidget` 默认只显示复制/导出的紧凑条，模型型 `TableActionTableView` 默认提供冻结、暂停和快照的完整条；窄小或纯展示表格用 `SetTableActionBarMode(..., None)` 禁用。操作条会同时出现在 Dock 和普通 `QDialog` 中，因此按钮、快照滚动区等几何/字体样式必须由操作条自身用 palette 角色封装；不能继承宿主弹窗的 `ThemedButtonStyle`，否则弹窗中的 padding/粗体会把同一套按钮放大并挤压固定高度操作条。
+- `VisibleTableWidget` 与 `TableActionTableView` 共用嵌入式 `TableActionBar`，两者默认都提供冻结、暂停、快照和差异比对的完整条；窄小或纯展示表格可用 `SetTableActionBarMode(..., Compact/None)` 降级或禁用。通用表格搜索入口只显示图标按钮，点击后把范围切到当前表格并激活标题栏搜索框，不在表格操作条内重复放置输入框。操作条会同时出现在 Dock 和普通 `QDialog` 中，因此按钮、快照滚动区等几何/字体样式必须由操作条自身用 palette 角色封装；不能继承宿主弹窗的 `ThemedButtonStyle`，否则弹窗中的 padding/粗体会把同一套按钮放大并挤压固定高度操作条。
 - 普通 `QTableView/QTableWidget` 的横纵表头由 `TableInteractionSupport` 强制应用同一套 palette 基线，页面不要再用蓝色粗体等局部表头 QSS 制造层级差异；十六进制编辑器等确实需要专业表头语义的控件须在设置局部样式前调用 `SetPreserveCustomTableHeaderStyle(table, true)` 显式声明例外。
 - 未显式开启 Qt 持续排序的 `QTableWidget` 使用“一次点击、一次排序”，不改变 `sortingEnabled`。这样后续 `setRowCount/setItem` 批量或分批填充不会因实时搬行而写错列组。
 - 手动排序后遇到增删行、模型重置或单元格更新会撤销排序箭头，不自动重排半成品数据。具有帧序、加载序、采集序等固定行序语义的表格调用 `SetTableHeaderClickSortingEnabled(table, false)`。
