@@ -4933,6 +4933,13 @@ void ProcessDock::initializeProcessTable()
     // - 右键菜单会读取所有已选行并批量执行动作。
     m_processTable->setSelectionMode(QAbstractItemView::ExtendedSelection);
     m_processTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    // “CPU 核心”列会按真实逻辑处理器数量保留完整内容宽度：
+    // - 表格水平方向忽略内容 sizeHint，避免列宽经页面布局反向撑大 ProcessDock；
+    // - 超出 viewport 的列统一交给表格底部横向滚动条，不压缩逐核心扇形。
+    m_processTable->setSizeAdjustPolicy(QAbstractScrollArea::AdjustIgnored);
+    m_processTable->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Expanding);
+    m_processTable->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    m_processTable->setHorizontalScrollMode(QAbstractItemView::ScrollPerPixel);
     // 按像素滚动可让滚轮和触控板事件在到达时立刻推进 viewport，
     // 避免固定行高表格把输入聚合为较大的逐项跳动。
     m_processTable->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
@@ -4946,9 +4953,8 @@ void ProcessDock::initializeProcessTable()
     m_processTable->setShowGrid(false);
     m_processTable->setWordWrap(false);
     m_processTable->setCornerButtonEnabled(false);
-    // 横向滚动条策略保持 Qt 默认值：
-    // - 全局 TableColumnAutoFit 会在首次显示/尺寸变化时把列宽压入 viewport；
-    // - 不强制隐藏横向滚动条，用户手动拖宽列后允许滚动条自然出现。
+    // 全局 TableColumnAutoFit 会在首次显示/尺寸变化时尽量把普通列压入 viewport；
+    // 逐核心列或用户手动拖宽后的溢出宽度由上面的按需横向滚动承接。
     if (QScrollBar* verticalScrollBar = m_processTable->verticalScrollBar())
     {
         verticalScrollBar->setProperty("ksword_disable_smooth_scroll", true);
