@@ -793,8 +793,8 @@ private:
     QLabel* m_cpuCoreStatusLabel = nullptr;            // ETW 运行/采样/丢事件状态。
     QLabel* m_cpuCoreSystemValueLabel = nullptr;       // 进程全系统归一化占用汇总。
     QLabel* m_cpuCoreEquivalentValueLabel = nullptr;   // 进程单核等效占用汇总。
-    QTableWidget* m_processCpuCoreTable = nullptr;      // 当前进程逐逻辑处理器占用。
-    QTableWidget* m_threadCpuCoreTable = nullptr;       // 线程 x 逻辑处理器占用矩阵。
+    QWidget* m_processCpuCoreGrid = nullptr;            // 当前进程逐逻辑处理器卡片矩阵。
+    QWidget* m_threadCpuCoreGrid = nullptr;             // 按总占用排序的线程卡片矩阵。
     CpuCoreViewSample m_cpuCoreViewSample;              // 页面未构造时也保留最新快照。
 
     // ======== 线程页控件 ========
