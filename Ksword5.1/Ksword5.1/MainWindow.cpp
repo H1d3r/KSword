@@ -38,7 +38,6 @@
 #include <QLabel>
 #include <QList>
 #include <QPainter>
-#include <QPainterPath>
 #include <QPaintEvent>
 #include <QPalette>
 #include <QPen>
@@ -50,7 +49,6 @@
 #include <QPropertyAnimation>
 #include <QRectF>
 #include <QResizeEvent>
-#include <QRegion>
 #include <QSizePolicy>
 #include <QScrollBar>
 #include <QScrollArea>
@@ -174,6 +172,7 @@ namespace
     constexpr const char* kKswordTableSelectionOutlineDelegatePropertyName = "ksword_table_selection_outline_delegate";
     constexpr const char* kKswordTableSelectionOutlineStylePropertyName = "ksword_table_selection_outline_style";
     constexpr const char* kKswordComboPopupAutoThemedPropertyName = "ksword_combo_popup_auto_themed";
+    constexpr const char* kKswordComboPopupThemeUpdatePendingPropertyName = "ksword_combo_popup_theme_update_pending";
     constexpr int kResizeBorderOverlayWidth = 3;
     constexpr int kResizeCornerTriangleLeg = 6;
 
@@ -1459,9 +1458,18 @@ namespace
             QPalette::HighlightedText,
             KswordTheme::MaximumContrastMonochromeColor(KswordTheme::ControlAccentColor()));
         popupPalette.setColor(QPalette::Mid, KswordTheme::BorderColor());
-        targetWidget->setPalette(popupPalette);
-        targetWidget->setAutoFillBackground(true);
-        targetWidget->setAttribute(Qt::WA_StyledBackground, true);
+        if (targetWidget->palette() != popupPalette)
+        {
+            targetWidget->setPalette(popupPalette);
+        }
+        if (!targetWidget->autoFillBackground())
+        {
+            targetWidget->setAutoFillBackground(true);
+        }
+        if (!targetWidget->testAttribute(Qt::WA_StyledBackground))
+        {
+            targetWidget->setAttribute(Qt::WA_StyledBackground, true);
+        }
     }
 
     // comboPopupViewStyle 作用：
@@ -1471,28 +1479,6 @@ namespace
     QString comboPopupViewStyle()
     {
         return KswordTheme::ThemedComboBoxPopupViewStyle();
-    }
-
-    // applyComboPopupRoundedMask 作用：
-    // - QComboBox Popup 是独立顶层窗口，QSS 的 border-radius 只能改变绘制，不能裁掉原生矩形窗口四角；
-    // - 用与按钮/组合框相同的主题圆角更新窗口区域，避免不透明 palette 在四角露出直角底色；
-    // - Popup 每次显示或尺寸变化后都会重算，兼容条目数量、屏幕可用空间导致的动态高度变化。
-    void applyComboPopupRoundedMask(QWidget* const popupContainer)
-    {
-        if (popupContainer == nullptr ||
-            !popupContainer->windowFlags().testFlag(Qt::Popup) ||
-            popupContainer->width() <= 0 ||
-            popupContainer->height() <= 0)
-        {
-            return;
-        }
-
-        QPainterPath popupPath;
-        popupPath.addRoundedRect(
-            QRectF(QPointF(0.0, 0.0), QSizeF(popupContainer->size())),
-            KswordTheme::ControlCornerRadius,
-            KswordTheme::ControlCornerRadius);
-        popupContainer->setMask(QRegion(popupPath.toFillPolygon().toPolygon()));
     }
 
     // applyOpaqueComboPopupTheme 作用：
@@ -1517,10 +1503,6 @@ namespace
             popupContainer != nullptr &&
             popupContainer != comboBox &&
             popupContainer->windowFlags().testFlag(Qt::Popup);
-        if (hasDedicatedPopupContainer)
-        {
-            applyComboPopupRoundedMask(popupContainer);
-        }
 
         const bool autoThemed = itemView->property(kKswordComboPopupAutoThemedPropertyName).toBool();
         if (!autoThemed && !itemView->styleSheet().trimmed().isEmpty())
@@ -1531,28 +1513,59 @@ namespace
         if (hasDedicatedPopupContainer)
         {
             applyOpaqueComboPopupPalette(popupContainer);
-            popupContainer->setStyleSheet(QStringLiteral(
+            const QString popupContainerStyle = QStringLiteral(
                 "QFrame{"
                 "  background-color:%1 !important;"
                 "  color:%2 !important;"
                 "  border:1px solid %3 !important;"
-                "  border-radius:%4px;"
                 "}")
                 .arg(KswordTheme::SurfaceColorHex())
                 .arg(KswordTheme::TextPrimaryColorHex())
-                .arg(KswordTheme::BorderColorHex())
-                .arg(KswordTheme::ControlCornerRadius));
+                .arg(KswordTheme::BorderColorHex());
+            if (popupContainer->styleSheet() != popupContainerStyle)
+            {
+                popupContainer->setStyleSheet(popupContainerStyle);
+            }
         }
 
         applyOpaqueComboPopupPalette(itemView);
-        itemView->setStyleSheet(comboPopupViewStyle());
+        const QString itemViewStyle = comboPopupViewStyle();
+        if (itemView->styleSheet() != itemViewStyle)
+        {
+            itemView->setStyleSheet(itemViewStyle);
+        }
         applyOpaqueComboPopupPalette(itemView->viewport());
         itemView->setProperty(kKswordComboPopupAutoThemedPropertyName, true);
     }
 
+    // scheduleOpaqueComboPopupTheme 作用：
+    // - QComboBox Popup 的 Show 事件发生在 QWidgetPrivate::showChildren 遍历内部子对象期间；
+    // - palette/QSS 可能触发 repolish 并重建滚动条等子控件，因此必须等当前 Show 分发完成后再更新；
+    // - 以组合框动态属性合并同一轮 Popup 容器、视图及 viewport 产生的重复 Show 事件。
+    void scheduleOpaqueComboPopupTheme(QComboBox* const comboBox)
+    {
+        if (comboBox == nullptr ||
+            comboBox->property(kKswordComboPopupThemeUpdatePendingPropertyName).toBool())
+        {
+            return;
+        }
+
+        comboBox->setProperty(kKswordComboPopupThemeUpdatePendingPropertyName, true);
+        const QPointer<QComboBox> guardedComboBox(comboBox);
+        QTimer::singleShot(0, comboBox, [guardedComboBox]()
+        {
+            if (guardedComboBox.isNull())
+            {
+                return;
+            }
+            guardedComboBox->setProperty(kKswordComboPopupThemeUpdatePendingPropertyName, false);
+            applyOpaqueComboPopupTheme(guardedComboBox.data());
+        });
+    }
+
     // GlobalComboPopupThemeFilter 作用：
-    // - 监听应用范围内的 Popup 显示和尺寸变化事件；
-    // - 对新建、懒加载和主题切换后的普通组合框，重新执行不透明列表背景主题化；
+    // - 监听应用范围内的控件显示事件；
+    // - 对新建、懒加载和主题切换后的普通组合框，在当前 Show 分发结束后更新 Popup 主题；
     // - 组合框本体可保留业务局部样式，但只要 Popup 没有直接样式就统一补齐不透明列表表面。
     class GlobalComboPopupThemeFilter final : public QObject
     {
@@ -1570,18 +1583,12 @@ namespace
                 return QObject::eventFilter(watchedObject, eventObject);
             }
 
-            const QEvent::Type eventType = eventObject->type();
-            QWidget* const watchedWidget = qobject_cast<QWidget*>(watchedObject);
-            const bool isPopupResize =
-                eventType == QEvent::Resize &&
-                watchedWidget != nullptr &&
-                watchedWidget == watchedWidget->window() &&
-                watchedWidget->windowFlags().testFlag(Qt::Popup);
-            if (eventType != QEvent::Show && !isPopupResize)
+            if (eventObject->type() != QEvent::Show)
             {
                 return QObject::eventFilter(watchedObject, eventObject);
             }
 
+            QWidget* const watchedWidget = qobject_cast<QWidget*>(watchedObject);
             QAbstractItemView* itemView = qobject_cast<QAbstractItemView*>(watchedObject);
             if (itemView == nullptr)
             {
@@ -1591,7 +1598,7 @@ namespace
                 }
             }
 
-            applyOpaqueComboPopupTheme(comboBoxForPopupView(itemView));
+            scheduleOpaqueComboPopupTheme(comboBoxForPopupView(itemView));
             return QObject::eventFilter(watchedObject, eventObject);
         }
     };
