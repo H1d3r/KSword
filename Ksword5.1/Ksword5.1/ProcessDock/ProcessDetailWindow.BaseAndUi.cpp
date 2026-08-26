@@ -4040,7 +4040,16 @@ void ProcessDetailWindow::initializeCpuCoreTab()
         QStringLiteral("线程逐核心占用"));
     auto* threadLayout = new QVBoxLayout(threadGroup);
     threadLayout->setContentsMargins(8, 10, 8, 8);
-    threadLayout->setSpacing(0);
+    threadLayout->setSpacing(6);
+    auto* threadUsageHintLabel = new QLabel(threadGroup);
+    threadUsageHintLabel->setWordWrap(true);
+    threadUsageHintLabel->setStyleSheet(QStringLiteral("color:%1;")
+        .arg(KswordTheme::TextSecondaryHex()));
+    languageManager.bindText(
+        threadUsageHintLabel,
+        QStringLiteral("process.detail.cpu_core.thread_hint"),
+        QStringLiteral("此百分比统计了线程在每个核心的占用时间（线程所在的核心可能发生跳变）（单个线程不可能同时使用多个核心）"));
+    threadLayout->addWidget(threadUsageHintLabel);
     m_threadCpuCoreGrid = new CpuThreadUsageCardGridWidget(threadGroup);
     threadLayout->addWidget(m_threadCpuCoreGrid);
     layout->addWidget(threadGroup);
