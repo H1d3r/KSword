@@ -7,6 +7,7 @@
 #include "../OtherDock/OtherDock.h"
 #include "../MiscDock/SoundSource/SoundSourcePage.h"
 #include "../UI/VisibleTableWidget.h"
+#include "../UI/TableInteractionSupport.h"
 #include "../UI/DetailLayoutRegistry.h"
 #include "../PluginHost.h"
 
@@ -1202,6 +1203,7 @@ void ProcessDetailWindow::updateBaseRecord(const ks::process::ProcessRecord& bas
         ++m_hotkeyRefreshTicket;
         ++m_keyboardRefreshTicket;
         m_performanceHistory.clear();
+        m_cpuCoreViewSample = CpuCoreViewSample{};
     }
     refreshDetailTabTexts();
     if (shouldTryStaticBackgroundRefresh || identityChanged)
@@ -1269,6 +1271,13 @@ void ProcessDetailWindow::appendPerformanceHistorySample(const PerformanceHistor
         m_performanceHistory.pop_front();
     }
     refreshPerformanceHistoryCharts();
+}
+
+void ProcessDetailWindow::setCpuCoreViewSample(CpuCoreViewSample sample)
+{
+    // 页面采用懒加载；尚未构造控件时只保存最新区间，首次进入即可直接展示。
+    m_cpuCoreViewSample = std::move(sample);
+    refreshCpuCoreView();
 }
 
 void ProcessDetailWindow::changeEvent(QEvent* event)
@@ -1416,6 +1425,7 @@ void ProcessDetailWindow::applyThemeStyle()
     const std::vector<QWidget*> tabPageList{
         m_detailTab,
         m_performanceTab,
+        m_cpuCoreTab,
         m_threadTab,
         m_actionTab,
         m_moduleTab,
@@ -1471,6 +1481,36 @@ void ProcessDetailWindow::applyThemeStyle()
     {
         m_keyboardHookTable->horizontalHeader()->setStyleSheet(headerStyle);
     }
+    if (m_processCpuCoreTable != nullptr && m_processCpuCoreTable->horizontalHeader() != nullptr)
+    {
+        m_processCpuCoreTable->horizontalHeader()->setStyleSheet(headerStyle);
+    }
+    if (m_threadCpuCoreTable != nullptr && m_threadCpuCoreTable->horizontalHeader() != nullptr)
+    {
+        m_threadCpuCoreTable->horizontalHeader()->setStyleSheet(headerStyle);
+    }
+
+    if (m_cpuCoreTitleLabel != nullptr)
+    {
+        m_cpuCoreTitleLabel->setStyleSheet(QStringLiteral("font-size:16px;font-weight:700;color:%1;")
+            .arg(KswordTheme::TextPrimaryHex()));
+    }
+    if (m_cpuCoreDescriptionLabel != nullptr)
+    {
+        m_cpuCoreDescriptionLabel->setStyleSheet(QStringLiteral("color:%1;")
+            .arg(KswordTheme::TextSecondaryHex()));
+    }
+    const QString cpuCoreSummaryStyle = QStringLiteral("font-size:20px;font-weight:700;color:%1;")
+        .arg(KswordTheme::AccentColor(KswordTheme::AccentRole::Blue).name());
+    if (m_cpuCoreSystemValueLabel != nullptr)
+    {
+        m_cpuCoreSystemValueLabel->setStyleSheet(cpuCoreSummaryStyle);
+    }
+    if (m_cpuCoreEquivalentValueLabel != nullptr)
+    {
+        m_cpuCoreEquivalentValueLabel->setStyleSheet(cpuCoreSummaryStyle);
+    }
+    refreshCpuCoreView();
 
     if (m_signatureCheckBox != nullptr)
     {
@@ -1534,6 +1574,7 @@ void ProcessDetailWindow::initializeUi()
     // 先创建轻量页面容器，实际控件树在用户首次进入时构造。
     m_detailTab = new QWidget(m_tabWidget);
     m_performanceTab = new QWidget(m_tabWidget);
+    m_cpuCoreTab = new QWidget(m_tabWidget);
     m_threadTab = new QWidget(m_tabWidget);
     m_actionTab = new QWidget(m_tabWidget);
     m_moduleTab = new QWidget(m_tabWidget);
@@ -1553,6 +1594,7 @@ void ProcessDetailWindow::initializeUi()
 
     m_detailTab->setObjectName(QStringLiteral("ProcessDetailTab_Detail"));
     m_performanceTab->setObjectName(QStringLiteral("ProcessDetailTab_Performance"));
+    m_cpuCoreTab->setObjectName(QStringLiteral("ProcessDetailTab_CpuCore"));
     m_threadTab->setObjectName(QStringLiteral("ProcessDetailTab_Thread"));
     m_actionTab->setObjectName(QStringLiteral("ProcessDetailTab_Action"));
     m_moduleTab->setObjectName(QStringLiteral("ProcessDetailTab_Module"));
@@ -1580,6 +1622,10 @@ void ProcessDetailWindow::initializeUi()
         m_performanceTab,
         QIcon(":/Icon/process_performance.svg"),
         ks::i18n::text(QStringLiteral("process.detail.tab.performance"), QString()));
+    m_tabWidget->addTab(
+        m_cpuCoreTab,
+        QIcon(":/Icon/process_performance.svg"),
+        ks::i18n::text(QStringLiteral("process.detail.tab.cpu_core"), QString()));
     m_tabWidget->addTab(m_threadTab, QIcon(":/Icon/process_tree.svg"), "线程");
     m_tabWidget->addTab(m_actionTab, QIcon(":/Icon/process_priority.svg"), "操作");
     m_tabWidget->addTab(m_moduleTab, QIcon(":/Icon/process_list.svg"), "模块");
@@ -1644,6 +1690,10 @@ void ProcessDetailWindow::ensureTabContentInitialized(QWidget* const tab)
     else if (tab == m_performanceTab)
     {
         initializePerformanceTab();
+    }
+    else if (tab == m_cpuCoreTab)
+    {
+        initializeCpuCoreTab();
     }
     else if (tab == m_actionTab)
     {
@@ -2875,6 +2925,7 @@ void ProcessDetailWindow::initializeDetailTab()
     m_detailThreadCountValue = createValueLabel(overviewGroup);
     m_detailHandleCountValue = createValueLabel(overviewGroup);
     m_detailCpuValue = createValueLabel(overviewGroup);
+    m_detailCpuCoreValue = createValueLabel(overviewGroup);
     m_detailRamValue = createValueLabel(overviewGroup);
     m_detailDiskValue = createValueLabel(overviewGroup);
     m_detailSignatureValue = createValueLabel(overviewGroup);
@@ -2892,6 +2943,7 @@ void ProcessDetailWindow::initializeDetailTab()
 
     addFixedRow(overviewRightForm, overviewGroup, QStringLiteral("process.detail.field.priority"), QStringLiteral("优先级"), m_detailPriorityValue);
     addFixedRow(overviewRightForm, overviewGroup, QStringLiteral("process.detail.field.cpu"), QStringLiteral("CPU 占用"), m_detailCpuValue);
+    addFixedRow(overviewRightForm, overviewGroup, QStringLiteral("process.detail.field.cpu_core"), QStringLiteral("CPU 单核等效"), m_detailCpuCoreValue);
     addExtraRow(overviewRightForm, overviewGroup, QStringLiteral("gpu"), QStringLiteral("process.detail.field.gpu"), QStringLiteral("GPU 占用"));
     addFixedRow(overviewRightForm, overviewGroup, QStringLiteral("process.detail.field.disk"), QStringLiteral("DISK 吞吐"), m_detailDiskValue);
     addExtraRow(overviewRightForm, overviewGroup, QStringLiteral("network_rx"), QStringLiteral("process.detail.field.network_rx"), QStringLiteral("网络下行"));
@@ -3069,6 +3121,7 @@ void ProcessDetailWindow::initializePerformanceTab()
     };
 
     addChart(m_performanceCpuChart, QStringLiteral("process.detail.performance.chart.cpu"));
+    addChart(m_performanceCpuCoreChart, QStringLiteral("process.detail.performance.chart.cpu_core"));
     addChart(m_performanceMemoryChart, QStringLiteral("process.detail.performance.chart.memory"));
     addChart(m_performanceDiskChart, QStringLiteral("process.detail.performance.chart.disk"));
     addChart(m_performanceNetworkChart, QStringLiteral("process.detail.performance.chart.network"));
@@ -3099,6 +3152,7 @@ void ProcessDetailWindow::refreshPerformanceHistoryCharts()
 
     std::vector<qint64> timestamps;
     std::vector<double> cpuValues;
+    std::vector<double> cpuCoreValues;
     std::vector<double> memoryValues;
     std::vector<double> diskValues;
     std::vector<double> networkRxValues;
@@ -3106,6 +3160,7 @@ void ProcessDetailWindow::refreshPerformanceHistoryCharts()
     std::vector<double> gpuValues;
     timestamps.reserve(m_performanceHistory.size());
     cpuValues.reserve(m_performanceHistory.size());
+    cpuCoreValues.reserve(m_performanceHistory.size());
     memoryValues.reserve(m_performanceHistory.size());
     diskValues.reserve(m_performanceHistory.size());
     networkRxValues.reserve(m_performanceHistory.size());
@@ -3115,6 +3170,7 @@ void ProcessDetailWindow::refreshPerformanceHistoryCharts()
     {
         timestamps.push_back(sample.unixMilliseconds);
         cpuValues.push_back(sample.cpuPercent);
+        cpuCoreValues.push_back(sample.cpuCorePercent);
         memoryValues.push_back(sample.memoryMB);
         diskValues.push_back(sample.diskMBps);
         networkRxValues.push_back(sample.networkRxKBps);
@@ -3155,6 +3211,19 @@ void ProcessDetailWindow::refreshPerformanceHistoryCharts()
             std::move(cpuValues) } },
         QStringLiteral("%"),
         100.0);
+    const double cpuCoreMaximum = cpuCoreValues.empty()
+        ? 100.0
+        : std::max(
+            100.0,
+            std::ceil(*std::max_element(cpuCoreValues.cbegin(), cpuCoreValues.cend()) / 100.0) * 100.0);
+    setChartData(
+        m_performanceCpuCoreChart,
+        { ProcessPerformanceHistoryChartWidget::Series{
+            text(QStringLiteral("process.detail.performance.series.cpu_core")),
+            KswordTheme::PerformanceColor(KswordTheme::PerformanceRole::Cpu),
+            std::move(cpuCoreValues) } },
+        QStringLiteral("%"),
+        cpuCoreMaximum);
     setChartData(
         m_performanceMemoryChart,
         { ProcessPerformanceHistoryChartWidget::Series{
@@ -3201,6 +3270,248 @@ void ProcessDetailWindow::refreshPerformanceHistoryCharts()
             .arg(static_cast<qulonglong>(m_performanceHistory.size()))
             .arg(beginTime)
             .arg(endTime));
+}
+
+void ProcessDetailWindow::initializeCpuCoreTab()
+{
+    auto& languageManager = ks::i18n::LanguageManager::instance();
+    auto* layout = new QVBoxLayout(m_cpuCoreTab);
+    layout->setContentsMargins(12, 12, 12, 12);
+    layout->setSpacing(10);
+
+    m_cpuCoreTitleLabel = new QLabel(m_cpuCoreTab);
+    m_cpuCoreTitleLabel->setStyleSheet(QStringLiteral("font-size:16px;font-weight:700;color:%1;")
+        .arg(KswordTheme::TextPrimaryHex()));
+    languageManager.bindText(
+        m_cpuCoreTitleLabel,
+        QStringLiteral("process.detail.cpu_core.title"),
+        QStringLiteral("进程与线程 CPU 核心视图"));
+    layout->addWidget(m_cpuCoreTitleLabel);
+
+    m_cpuCoreDescriptionLabel = new QLabel(m_cpuCoreTab);
+    m_cpuCoreDescriptionLabel->setWordWrap(true);
+    m_cpuCoreDescriptionLabel->setStyleSheet(QStringLiteral("color:%1;")
+        .arg(KswordTheme::TextSecondaryHex()));
+    languageManager.bindText(
+        m_cpuCoreDescriptionLabel,
+        QStringLiteral("process.detail.cpu_core.description"),
+        QStringLiteral("基于线程上下文切换区间统计真实运行核心；单组使用 Lx，多组使用 Gx:Ly。"));
+    layout->addWidget(m_cpuCoreDescriptionLabel);
+
+    m_cpuCoreStatusLabel = new QLabel(m_cpuCoreTab);
+    m_cpuCoreStatusLabel->setWordWrap(true);
+    layout->addWidget(m_cpuCoreStatusLabel);
+
+    auto* equivalentGroup = new QGroupBox(m_cpuCoreTab);
+    languageManager.bindText(
+        equivalentGroup,
+        QStringLiteral("process.detail.cpu_core.group.summary"),
+        QStringLiteral("进程汇总"));
+    auto* equivalentLayout = new QHBoxLayout(equivalentGroup);
+    auto* systemTitleLabel = new QLabel(equivalentGroup);
+    languageManager.bindText(
+        systemTitleLabel,
+        QStringLiteral("process.detail.cpu_core.summary.system"),
+        QStringLiteral("CPU 占用"));
+    m_cpuCoreSystemValueLabel = new QLabel(QStringLiteral("0.00%"), equivalentGroup);
+    m_cpuCoreSystemValueLabel->setStyleSheet(QStringLiteral("font-size:20px;font-weight:700;color:%1;")
+        .arg(KswordTheme::AccentColor(KswordTheme::AccentRole::Blue).name()));
+    auto* equivalentTitleLabel = new QLabel(equivalentGroup);
+    languageManager.bindText(
+        equivalentTitleLabel,
+        QStringLiteral("process.detail.field.cpu_core"),
+        QStringLiteral("CPU 单核等效"));
+    m_cpuCoreEquivalentValueLabel = new QLabel(QStringLiteral("0.00%"), equivalentGroup);
+    m_cpuCoreEquivalentValueLabel->setStyleSheet(QStringLiteral("font-size:20px;font-weight:700;color:%1;")
+        .arg(KswordTheme::AccentColor(KswordTheme::AccentRole::Blue).name()));
+    equivalentLayout->addWidget(systemTitleLabel);
+    equivalentLayout->addWidget(m_cpuCoreSystemValueLabel);
+    equivalentLayout->addSpacing(24);
+    equivalentLayout->addWidget(equivalentTitleLabel);
+    equivalentLayout->addWidget(m_cpuCoreEquivalentValueLabel);
+    equivalentLayout->addStretch(1);
+    layout->addWidget(equivalentGroup);
+
+    auto* processGroup = new QGroupBox(m_cpuCoreTab);
+    languageManager.bindText(
+        processGroup,
+        QStringLiteral("process.detail.cpu_core.group.process"),
+        QStringLiteral("进程逐核心占用"));
+    auto* processLayout = new QVBoxLayout(processGroup);
+    m_processCpuCoreTable = new ks::ui::VisibleTableWidget(processGroup);
+    m_processCpuCoreTable->setColumnCount(2);
+    m_processCpuCoreTable->setHorizontalHeaderLabels(QStringList{
+        ks::i18n::text(QStringLiteral("process.detail.cpu_core.header.processor"), QString()),
+        ks::i18n::text(QStringLiteral("process.detail.cpu_core.header.usage"), QString()) });
+    m_processCpuCoreTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_processCpuCoreTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+    m_processCpuCoreTable->verticalHeader()->setVisible(false);
+    m_processCpuCoreTable->horizontalHeader()->setStretchLastSection(true);
+    m_processCpuCoreTable->setMinimumHeight(190);
+    processLayout->addWidget(m_processCpuCoreTable);
+    layout->addWidget(processGroup, 1);
+
+    auto* threadGroup = new QGroupBox(m_cpuCoreTab);
+    languageManager.bindText(
+        threadGroup,
+        QStringLiteral("process.detail.cpu_core.group.thread"),
+        QStringLiteral("线程逐核心占用"));
+    auto* threadLayout = new QVBoxLayout(threadGroup);
+    m_threadCpuCoreTable = new ks::ui::VisibleTableWidget(threadGroup);
+    m_threadCpuCoreTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_threadCpuCoreTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+    m_threadCpuCoreTable->verticalHeader()->setVisible(false);
+    m_threadCpuCoreTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Interactive);
+    m_threadCpuCoreTable->setMinimumHeight(230);
+    threadLayout->addWidget(m_threadCpuCoreTable);
+    layout->addWidget(threadGroup, 2);
+
+    refreshCpuCoreView();
+}
+
+void ProcessDetailWindow::refreshCpuCoreView()
+{
+    if (m_cpuCoreStatusLabel == nullptr ||
+        m_processCpuCoreTable == nullptr ||
+        m_threadCpuCoreTable == nullptr)
+    {
+        return;
+    }
+
+    const CpuCoreViewSample& sample = m_cpuCoreViewSample;
+    if (m_cpuCoreSystemValueLabel != nullptr)
+    {
+        m_cpuCoreSystemValueLabel->setText(
+            QString::number(sample.processSystemPercent, 'f', 2) + QStringLiteral("%"));
+    }
+    if (m_cpuCoreEquivalentValueLabel != nullptr)
+    {
+        m_cpuCoreEquivalentValueLabel->setText(
+            QString::number(sample.processCoreEquivalentPercent, 'f', 2) + QStringLiteral("%"));
+    }
+
+    QString statusText;
+    QColor statusColor = statusSecondaryColor();
+    if (!sample.monitorRunning)
+    {
+        statusText = sample.diagnosticText.trimmed().isEmpty()
+            ? ks::i18n::text(QStringLiteral("process.detail.cpu_core.status.unavailable"), QString())
+            : ks::i18n::text(QStringLiteral("process.detail.cpu_core.status.failed"), QString())
+                .arg(sample.diagnosticText);
+        statusColor = KswordTheme::ErrorColor();
+    }
+    else if (!sample.sampleReady)
+    {
+        statusText = ks::i18n::text(QStringLiteral("process.detail.cpu_core.status.sampling"), QString());
+        statusColor = KswordTheme::PrimaryBlueColor;
+    }
+    else if (sample.dataLossDetected)
+    {
+        statusText = ks::i18n::text(QStringLiteral("process.detail.cpu_core.status.loss"), QString())
+            .arg(static_cast<qulonglong>(sample.eventsLost));
+        statusColor = statusWarningColor();
+    }
+    else
+    {
+        statusText = ks::i18n::text(QStringLiteral("process.detail.cpu_core.status.ready"), QString())
+            .arg(static_cast<qulonglong>(sample.contextSwitchEvents));
+        statusColor = signatureTrustedColor();
+    }
+    m_cpuCoreStatusLabel->setText(statusText);
+    m_cpuCoreStatusLabel->setStyleSheet(buildStateLabelStyle(statusColor, 600));
+
+    const bool multipleProcessorGroups = !sample.processCores.empty() && std::any_of(
+        sample.processCores.cbegin(),
+        sample.processCores.cend(),
+        [&sample](const CpuCoreValue& core) {
+            return core.group != sample.processCores.front().group;
+        });
+    const auto coordinateText = [multipleProcessorGroups](const CpuCoreValue& core) {
+        return multipleProcessorGroups
+            ? QStringLiteral("G%1:L%2").arg(core.group).arg(core.number)
+            : QStringLiteral("L%1").arg(core.number);
+    };
+    const auto createUsageItem = [](const CpuCoreValue& core) -> QTableWidgetItem* {
+        QTableWidgetItem* item = core.sampleReady
+            ? static_cast<QTableWidgetItem*>(new ks::ui::NumericTableItem(
+                QString::number(core.percent, 'f', 2) + QStringLiteral("%"),
+                static_cast<qulonglong>(std::llround(std::max(0.0, core.percent) * 10000.0))))
+            : new QTableWidgetItem(QStringLiteral("—"));
+        if (core.sampleReady)
+        {
+            item->setData(Qt::UserRole, core.percent);
+            item->setBackground(QBrush(KswordTheme::WithAlpha(
+                KswordTheme::PerformanceColor(KswordTheme::PerformanceRole::Cpu),
+                static_cast<int>(std::clamp(core.percent / 100.0, 0.0, 1.0) * 96.0))));
+        }
+        return item;
+    };
+
+    m_processCpuCoreTable->setSortingEnabled(false);
+    m_processCpuCoreTable->setRowCount(static_cast<int>(sample.processCores.size()));
+    for (int row = 0; row < static_cast<int>(sample.processCores.size()); ++row)
+    {
+        const CpuCoreValue& core = sample.processCores[static_cast<std::size_t>(row)];
+        m_processCpuCoreTable->setItem(
+            row,
+            0,
+            new ks::ui::NumericTableItem(
+                coordinateText(core),
+                static_cast<qulonglong>(core.processorIndex)));
+        m_processCpuCoreTable->setItem(row, 1, createUsageItem(core));
+    }
+    m_processCpuCoreTable->setColumnWidth(0, 110);
+    m_processCpuCoreTable->setSortingEnabled(true);
+
+    const int processorCount = static_cast<int>(sample.processCores.size());
+    m_threadCpuCoreTable->setSortingEnabled(false);
+    m_threadCpuCoreTable->clear();
+    m_threadCpuCoreTable->setColumnCount(2 + processorCount);
+    QStringList threadHeaders{
+        ks::i18n::text(QStringLiteral("process.detail.cpu_core.header.thread"), QString()),
+        ks::i18n::text(QStringLiteral("process.detail.cpu_core.header.thread_cpu"), QString()) };
+    for (const CpuCoreValue& core : sample.processCores)
+    {
+        threadHeaders.push_back(coordinateText(core));
+    }
+    m_threadCpuCoreTable->setHorizontalHeaderLabels(threadHeaders);
+    m_threadCpuCoreTable->setRowCount(static_cast<int>(sample.threads.size()));
+    for (int row = 0; row < static_cast<int>(sample.threads.size()); ++row)
+    {
+        const ThreadCpuCoreValue& thread = sample.threads[static_cast<std::size_t>(row)];
+        auto* threadIdItem = new ks::ui::NumericTableItem(
+            QString::number(thread.threadId),
+            static_cast<qulonglong>(thread.threadId));
+        threadIdItem->setData(Qt::UserRole, static_cast<qulonglong>(thread.threadId));
+        m_threadCpuCoreTable->setItem(row, 0, threadIdItem);
+        auto* totalItem = new ks::ui::NumericTableItem(
+            QString::number(thread.cpuPercent, 'f', 2) + QStringLiteral("%"),
+            static_cast<qulonglong>(std::llround(std::max(0.0, thread.cpuPercent) * 10000.0)));
+        totalItem->setData(Qt::UserRole, thread.cpuPercent);
+        m_threadCpuCoreTable->setItem(row, 1, totalItem);
+        for (int processorIndex = 0; processorIndex < processorCount; ++processorIndex)
+        {
+            if (processorIndex < static_cast<int>(thread.cores.size()))
+            {
+                m_threadCpuCoreTable->setItem(
+                    row,
+                    2 + processorIndex,
+                    createUsageItem(thread.cores[static_cast<std::size_t>(processorIndex)]));
+            }
+            else
+            {
+                m_threadCpuCoreTable->setItem(row, 2 + processorIndex, new QTableWidgetItem(QStringLiteral("—")));
+            }
+        }
+    }
+    m_threadCpuCoreTable->setColumnWidth(0, 92);
+    m_threadCpuCoreTable->setColumnWidth(1, 110);
+    for (int column = 2; column < 2 + processorCount; ++column)
+    {
+        m_threadCpuCoreTable->setColumnWidth(column, 92);
+    }
+    m_threadCpuCoreTable->setSortingEnabled(true);
+    m_threadCpuCoreTable->sortItems(1, Qt::DescendingOrder);
 }
 
 void ProcessDetailWindow::initializeThreadTab()
@@ -5355,6 +5666,7 @@ void ProcessDetailWindow::refreshDetailTabTexts()
     m_detailThreadCountValue->setText(QString::number(m_baseRecord.threadCount));
     m_detailHandleCountValue->setText(QString::number(m_baseRecord.handleCount));
     m_detailCpuValue->setText(formatDoubleText(m_baseRecord.cpuPercent, 2) + "%");
+    m_detailCpuCoreValue->setText(formatDoubleText(m_baseRecord.cpuCorePercent, 2) + "%");
     m_detailRamValue->setText(formatDoubleText(m_baseRecord.ramMB, 1) + " MB");
     m_detailDiskValue->setText(formatDoubleText(m_baseRecord.diskMBps, 2) + " MB/s");
     m_detailSignatureValue->setText(QString::fromStdString(m_baseRecord.signatureState.empty() ? "Unknown" : m_baseRecord.signatureState));

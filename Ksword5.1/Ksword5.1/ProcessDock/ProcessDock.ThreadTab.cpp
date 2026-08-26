@@ -33,6 +33,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <limits>
 #include <memory>
@@ -74,7 +75,8 @@ namespace
         "WaitTick",
         "上下文切换",
         "创建时间",
-        "进程路径"
+        "进程路径",
+        "CPU占用"
     };
 
     // 线程页图标常量：统一从 qrc alias 读取，避免硬编码磁盘路径。
@@ -662,6 +664,7 @@ void ProcessDock::initializeThreadPage()
     m_threadTable->setColumnWidth(toThreadColumnIndex(ThreadTableColumn::ContextSwitches), 120);
     m_threadTable->setColumnWidth(toThreadColumnIndex(ThreadTableColumn::CreateTime), 170);
     m_threadTable->setColumnWidth(toThreadColumnIndex(ThreadTableColumn::ProcessPath), 360);
+    m_threadTable->setColumnWidth(toThreadColumnIndex(ThreadTableColumn::CpuPercent), 105);
 
     // Issue #33 指定默认使用 A；此处在所有初始列宽设置完成后应用隐藏集合。
     applyThreadColumnLayout(ThreadColumnLayout::PresetA);
@@ -685,7 +688,7 @@ void ProcessDock::applyThreadColumnLayout(const ThreadColumnLayout layout)
         return;
     }
 
-    static constexpr std::array<ThreadTableColumn, 9> PresetAColumns{
+    static constexpr std::array<ThreadTableColumn, 10> PresetAColumns{
         ThreadTableColumn::ThreadId,
         ThreadTableColumn::OwnerPid,
         ThreadTableColumn::ProcessName,
@@ -694,6 +697,7 @@ void ProcessDock::applyThreadColumnLayout(const ThreadColumnLayout layout)
         ThreadTableColumn::ThreadState,
         ThreadTableColumn::WaitReason,
         ThreadTableColumn::CpuTimeMs,
+        ThreadTableColumn::CpuPercent,
         ThreadTableColumn::ContextSwitches
     };
     static constexpr std::array<ThreadTableColumn, 9> PresetBColumns{
@@ -707,15 +711,21 @@ void ProcessDock::applyThreadColumnLayout(const ThreadColumnLayout layout)
         ThreadTableColumn::KernelStack,
         ThreadTableColumn::ThreadR0Status
     };
-    const auto& visibleColumns = layout == ThreadColumnLayout::PresetA
-        ? PresetAColumns
-        : PresetBColumns;
+    const auto columnIsVisible = [layout](const ThreadTableColumn column) {
+        if (layout == ThreadColumnLayout::PresetA)
+        {
+            return std::find(PresetAColumns.cbegin(), PresetAColumns.cend(), column) !=
+                PresetAColumns.cend();
+        }
+        return std::find(PresetBColumns.cbegin(), PresetBColumns.cend(), column) !=
+            PresetBColumns.cend();
+    };
 
     m_threadApplyingColumnLayout = true;
     for (int columnIndex = 0; columnIndex < static_cast<int>(ThreadTableColumn::Count); ++columnIndex)
     {
         const ThreadTableColumn column = static_cast<ThreadTableColumn>(columnIndex);
-        const bool visible = std::find(visibleColumns.begin(), visibleColumns.end(), column) != visibleColumns.end();
+        const bool visible = columnIsVisible(column);
         m_threadTable->setColumnHidden(columnIndex, !visible);
     }
 
@@ -730,6 +740,7 @@ void ProcessDock::applyThreadColumnLayout(const ThreadColumnLayout layout)
         m_threadTable->setColumnWidth(toThreadColumnIndex(ThreadTableColumn::ThreadState), 125);
         m_threadTable->setColumnWidth(toThreadColumnIndex(ThreadTableColumn::WaitReason), 145);
         m_threadTable->setColumnWidth(toThreadColumnIndex(ThreadTableColumn::CpuTimeMs), 105);
+        m_threadTable->setColumnWidth(toThreadColumnIndex(ThreadTableColumn::CpuPercent), 100);
         m_threadTable->setColumnWidth(toThreadColumnIndex(ThreadTableColumn::ContextSwitches), 115);
     }
     else
@@ -878,6 +889,9 @@ void ProcessDock::requestAsyncThreadRefresh(const bool forceRefresh)
 
     m_threadRefreshInProgress = true;
     const std::uint64_t localTicket = ++m_threadRefreshTicket;
+    auto previousThreadCounters = m_threadCounterSampleByIdentity;
+    auto cpuCoreUsageSnapshot = m_latestCpuCoreUsageSnapshot;
+    const std::uint32_t logicalCpuCount = m_logicalCpuCount;
 
     if (m_threadRefreshButton != nullptr)
     {
@@ -893,16 +907,57 @@ void ProcessDock::requestAsyncThreadRefresh(const bool forceRefresh)
     }
 
     QPointer<ProcessDock> guardThis(this);
-    QRunnable* backgroundTask = QRunnable::create([guardThis, localTicket]() {
+    QRunnable* backgroundTask = QRunnable::create([
+        guardThis,
+        localTicket,
+        logicalCpuCount,
+        previousThreadCounters = std::move(previousThreadCounters),
+        cpuCoreUsageSnapshot = std::move(cpuCoreUsageSnapshot)]() mutable {
         bool usedNtQuery = false;
         std::string diagnosticText;
         std::vector<ks::process::SystemThreadRecord> threadList =
             ks::process::EnumerateSystemThreads(&usedNtQuery, &diagnosticText);
         const bool r0ThreadExtensionMerged = mergeThreadR0Snapshot(threadList, &diagnosticText);
 
+        const std::uint64_t currentTick100ns = static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count() / 100);
+        auto nextThreadCounters =
+            std::make_shared<std::unordered_map<std::string, ks::process::ThreadCounterSample>>();
+        nextThreadCounters->reserve(threadList.size());
+        for (ks::process::SystemThreadRecord& threadRecord : threadList)
+        {
+            const std::string identityKey = ks::process::BuildThreadIdentityKey(
+                threadRecord.ownerPid,
+                threadRecord.threadId,
+                threadRecord.createTime100ns);
+            const auto previousIt = previousThreadCounters.find(identityKey);
+            ks::process::ThreadCounterSample nextSample{};
+            ks::process::UpdateThreadCpuUsage(
+                threadRecord,
+                previousIt != previousThreadCounters.end() ? &previousIt->second : nullptr,
+                nextSample,
+                logicalCpuCount,
+                currentTick100ns);
+            nextThreadCounters->emplace(identityKey, nextSample);
+
+            // CSwitch 区间可用时优先采用真实调度归因；无运行事件的存活线程按 0% 显示。
+            if (cpuCoreUsageSnapshot.monitorRunning &&
+                cpuCoreUsageSnapshot.sampleReady &&
+                !cpuCoreUsageSnapshot.dataLossDetected)
+            {
+                const auto coreUsageIt = cpuCoreUsageSnapshot.threadUsageByIdentity.find(
+                    ks::process::BuildCpuThreadIdentity(threadRecord.ownerPid, threadRecord.threadId));
+                threadRecord.cpuPercent = coreUsageIt != cpuCoreUsageSnapshot.threadUsageByIdentity.end()
+                    ? coreUsageIt->second.coreEquivalentPercent
+                    : 0.0;
+                threadRecord.cpuUsageReady = true;
+            }
+        }
+
         auto deferredThreadList =
             std::make_shared<std::vector<ks::process::SystemThreadRecord>>(std::move(threadList));
-        QMetaObject::invokeMethod(guardThis, [guardThis, localTicket, usedNtQuery, r0ThreadExtensionMerged, diagnosticText, deferredThreadList]() {
+        QMetaObject::invokeMethod(guardThis, [guardThis, localTicket, usedNtQuery, r0ThreadExtensionMerged, diagnosticText, deferredThreadList, nextThreadCounters]() {
             if (guardThis == nullptr)
             {
                 return;
@@ -924,7 +979,8 @@ void ProcessDock::requestAsyncThreadRefresh(const bool forceRefresh)
                 usedNtQuery,
                 r0ThreadExtensionMerged,
                 diagnosticText,
-                deferredThreadList]() mutable
+                deferredThreadList,
+                nextThreadCounters]() mutable
             {
                 if (guardThis == nullptr || guardThis->m_threadRefreshTicket != localTicket)
                 {
@@ -932,6 +988,7 @@ void ProcessDock::requestAsyncThreadRefresh(const bool forceRefresh)
                 }
 
                 guardThis->m_threadRecordList = std::move(*deferredThreadList);
+                guardThis->m_threadCounterSampleByIdentity = std::move(*nextThreadCounters);
                 guardThis->m_threadDiagnosticText = diagnosticText;
                 guardThis->rebuildThreadTable();
 
@@ -1272,6 +1329,10 @@ QString ProcessDock::formatThreadColumnText(
         }
         return QStringLiteral("-");
     }
+    case ThreadTableColumn::CpuPercent:
+        return threadRecord.cpuUsageReady
+            ? QString::number(threadRecord.cpuPercent, 'f', 2) + QStringLiteral("%")
+            : QStringLiteral("-");
     default:
         return QString();
     }

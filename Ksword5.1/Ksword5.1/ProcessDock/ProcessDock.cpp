@@ -3648,8 +3648,11 @@ ProcessDock::ProcessDock(QWidget* parent)
 {
     m_mainWindowActionReceiver = parent;
 
-    // 初始化硬件并发参数：至少按 1 核处理，避免除零。
-    m_logicalCpuCount = std::max<std::uint32_t>(1, std::thread::hardware_concurrency());
+    // Processor Group 感知：ALL_PROCESSOR_GROUPS 覆盖超过 64 个逻辑处理器的系统。
+    const DWORD activeProcessorCount = ::GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);
+    m_logicalCpuCount = activeProcessorCount != 0
+        ? static_cast<std::uint32_t>(activeProcessorCount)
+        : std::max<std::uint32_t>(1, std::thread::hardware_concurrency());
 
     // Shell 图标解析可能阻塞磁盘或图标处理程序，使用独立线程池并限制并发数。
     // 至少保留两个工作线程以并行处理应用图标，上限八个避免短时间创建过多 Shell 查询。
@@ -3682,6 +3685,7 @@ ProcessDock::~ProcessDock()
     // - 处理：请求 ProcessNetworkEtwMonitor 退出并等待线程 join；
     // - 返回：无，防止对象销毁后 ETW 回调继续访问成员。
     stopProcessNetworkTrafficCapture();
+    stopCpuCoreUsageCapture();
 
     // 析构阶段主动解除全局事件过滤器，避免 QApplication 后续点击事件访问已销毁 Dock。
     if (QApplication::instance() != nullptr)
@@ -3752,6 +3756,161 @@ void ProcessDock::stopProcessNetworkTrafficCapture()
         m_processNetworkTrafficService->Stop();
     }
     m_processNetworkTrafficCaptureStarted = false;
+}
+
+void ProcessDock::ensureCpuCoreUsageCaptureStarted()
+{
+    if (m_cpuCoreUsageCaptureStarted)
+    {
+        return;
+    }
+    m_cpuCoreUsageCaptureStarted = true;
+    if (m_cpuCoreUsageService == nullptr)
+    {
+        m_cpuCoreUsageService = std::make_unique<ks::process::ProcessCpuCoreEtwMonitor>();
+    }
+
+    const bool started = m_cpuCoreUsageService->Start();
+    kLogEvent logEvent;
+    (started ? info : warn) << logEvent
+        << "[ProcessDock] CSwitch 进程/线程逐核心 CPU 采集器"
+        << (started ? "启动成功" : "启动失败")
+        << (started ? std::string() : (", detail=" + m_cpuCoreUsageService->LastErrorText()))
+        << eol;
+}
+
+void ProcessDock::stopCpuCoreUsageCapture()
+{
+    if (m_cpuCoreUsageService != nullptr)
+    {
+        m_cpuCoreUsageService->Stop();
+    }
+    m_cpuCoreUsageCaptureStarted = false;
+    m_latestCpuCoreUsageSnapshot.monitorRunning = false;
+}
+
+ks::process::CpuCoreUsageSnapshot ProcessDock::snapshotCpuCoreUsage()
+{
+    if (m_cpuCoreUsageService == nullptr)
+    {
+        ks::process::CpuCoreUsageSnapshot snapshot;
+        snapshot.diagnosticText = "CSwitch monitor has not started";
+        return snapshot;
+    }
+    return m_cpuCoreUsageService->SnapshotAndReset();
+}
+
+void ProcessDock::syncCpuCoreUsageToDetailWindow(
+    ProcessDetailWindow* const detailWindow,
+    const ks::process::ProcessRecord& processRecord) const
+{
+    if (detailWindow == nullptr)
+    {
+        return;
+    }
+
+    ProcessDetailWindow::CpuCoreViewSample viewSample;
+    viewSample.monitorRunning = m_latestCpuCoreUsageSnapshot.monitorRunning;
+    viewSample.sampleReady = m_latestCpuCoreUsageSnapshot.sampleReady;
+    viewSample.dataLossDetected = m_latestCpuCoreUsageSnapshot.dataLossDetected;
+    viewSample.eventsLost = m_latestCpuCoreUsageSnapshot.eventsLost;
+    viewSample.contextSwitchEvents = m_latestCpuCoreUsageSnapshot.contextSwitchEvents;
+    viewSample.diagnosticText = ks::i18n::sourceText(
+        QString::fromStdString(m_latestCpuCoreUsageSnapshot.diagnosticText));
+    viewSample.processSystemPercent = processRecord.cpuPercent;
+    viewSample.processCoreEquivalentPercent = processRecord.cpuCorePercent;
+
+    const auto processUsageIt =
+        m_latestCpuCoreUsageSnapshot.processUsageByPid.find(processRecord.pid);
+    const ks::process::CpuCoreUsageSeries* const processUsage =
+        processUsageIt != m_latestCpuCoreUsageSnapshot.processUsageByPid.end()
+        ? &processUsageIt->second
+        : nullptr;
+    viewSample.processCores.reserve(m_latestCpuCoreUsageSnapshot.processors.size());
+    for (std::size_t processorIndex = 0;
+         processorIndex < m_latestCpuCoreUsageSnapshot.processors.size();
+         ++processorIndex)
+    {
+        const ks::process::EtwLogicalProcessorCoordinate& coordinate =
+            m_latestCpuCoreUsageSnapshot.processors[processorIndex];
+        ProcessDetailWindow::CpuCoreValue coreValue;
+        coreValue.processorIndex = coordinate.processorIndex;
+        coreValue.group = coordinate.group;
+        coreValue.number = coordinate.number;
+        coreValue.sampleReady =
+            processorIndex < m_latestCpuCoreUsageSnapshot.sampleReadyByProcessor.size() &&
+            m_latestCpuCoreUsageSnapshot.sampleReadyByProcessor[processorIndex];
+        if (processUsage != nullptr &&
+            processorIndex < processUsage->percentByProcessor.size())
+        {
+            coreValue.percent = processUsage->percentByProcessor[processorIndex];
+        }
+        viewSample.processCores.push_back(coreValue);
+    }
+
+    std::unordered_set<std::uint32_t> populatedThreadIds;
+    populatedThreadIds.reserve(m_latestCpuCoreUsageSnapshot.threadUsageByIdentity.size());
+    for (const auto& threadUsagePair : m_latestCpuCoreUsageSnapshot.threadUsageByIdentity)
+    {
+        const ks::process::CpuCoreUsageSeries& threadUsage = threadUsagePair.second;
+        if (threadUsage.processId != processRecord.pid || threadUsage.threadId == 0)
+        {
+            continue;
+        }
+
+        ProcessDetailWindow::ThreadCpuCoreValue threadValue;
+        threadValue.threadId = threadUsage.threadId;
+        threadValue.cpuPercent = threadUsage.coreEquivalentPercent;
+        threadValue.cores.reserve(viewSample.processCores.size());
+        for (std::size_t processorIndex = 0;
+             processorIndex < viewSample.processCores.size();
+             ++processorIndex)
+        {
+            ProcessDetailWindow::CpuCoreValue coreValue = viewSample.processCores[processorIndex];
+            coreValue.percent = processorIndex < threadUsage.percentByProcessor.size()
+                ? threadUsage.percentByProcessor[processorIndex]
+                : 0.0;
+            threadValue.cores.push_back(coreValue);
+        }
+        viewSample.threads.push_back(std::move(threadValue));
+        populatedThreadIds.insert(threadUsage.threadId);
+    }
+
+    // 生命周期 rundown 中已知但本区间未获调度的存活线程也保留为 0%，
+    // 避免线程矩阵只列出“刚好运行过”的线程而让用户误以为线程已退出。
+    for (const std::uint64_t identity : m_latestCpuCoreUsageSnapshot.liveThreadIdentities)
+    {
+        const std::uint32_t processId = static_cast<std::uint32_t>(identity >> 32U);
+        const std::uint32_t threadId = static_cast<std::uint32_t>(identity & 0xffffffffULL);
+        if (processId != processRecord.pid ||
+            threadId == 0 ||
+            populatedThreadIds.find(threadId) != populatedThreadIds.end())
+        {
+            continue;
+        }
+
+        ProcessDetailWindow::ThreadCpuCoreValue threadValue;
+        threadValue.threadId = threadId;
+        threadValue.cores = viewSample.processCores;
+        for (ProcessDetailWindow::CpuCoreValue& coreValue : threadValue.cores)
+        {
+            coreValue.percent = 0.0;
+        }
+        viewSample.threads.push_back(std::move(threadValue));
+    }
+    std::sort(
+        viewSample.threads.begin(),
+        viewSample.threads.end(),
+        [](const ProcessDetailWindow::ThreadCpuCoreValue& left,
+           const ProcessDetailWindow::ThreadCpuCoreValue& right)
+        {
+            if (left.cpuPercent != right.cpuPercent)
+            {
+                return left.cpuPercent > right.cpuPercent;
+            }
+            return left.threadId < right.threadId;
+        });
+    detailWindow->setCpuCoreViewSample(std::move(viewSample));
 }
 
 void ProcessDock::pruneProcessNetworkTrafficCounters()
@@ -3926,7 +4085,23 @@ void ProcessDock::connectDetailWindowNavigation(ProcessDetailWindow* detailWindo
     {
         return;
     }
+    if (m_monitoringEnabled)
+    {
+        // 详情窗口出现即开始首个采样区间，避免用户进入 CPU 核心页后再多等一轮。
+        ensureCpuCoreUsageCaptureStarted();
+    }
     synchronizeDetailWindowPerformanceHistory(detailWindow, detailWindow->identityKey());
+    const auto coreRecordIt = m_cacheByIdentity.find(detailWindow->identityKey());
+    if (coreRecordIt != m_cacheByIdentity.end())
+    {
+        syncCpuCoreUsageToDetailWindow(detailWindow, coreRecordIt->second.record);
+    }
+    else
+    {
+        ks::process::ProcessRecord fallbackRecord{};
+        fallbackRecord.pid = detailWindow->pid();
+        syncCpuCoreUsageToDetailWindow(detailWindow, fallbackRecord);
+    }
     connect(detailWindow, &ProcessDetailWindow::requestOpenMemoryDockByPid, this,
         [this](const std::uint32_t targetPid) {
             (void)invokeMainWindowPidSlot("focusMemoryDockByPid", targetPid);
@@ -5300,6 +5475,8 @@ void ProcessDock::initializeConnections()
         m_processIconExtractionPool.clear();
         m_processIconPathsInFlight.clear();
         stopProcessNetworkTrafficCapture();
+        stopCpuCoreUsageCapture();
+        m_threadCounterSampleByIdentity.clear();
         updateProcessActivityStatusLabel();
     });
 
@@ -6355,6 +6532,21 @@ void ProcessDock::requestAsyncRefresh(const bool forceRefresh)
     auto previousCounters = m_counterSampleByIdentity;
     ensureProcessNetworkTrafficCaptureStarted();
     auto networkTrafficSnapshot = snapshotProcessNetworkTrafficCounters();
+    const bool cpuCoreUsageDemanded = std::any_of(
+        m_detailWindowByIdentity.cbegin(),
+        m_detailWindowByIdentity.cend(),
+        [](const auto& detailWindowPair) { return detailWindowPair.second != nullptr; });
+    ks::process::CpuCoreUsageSnapshot cpuCoreUsageSnapshot;
+    if (cpuCoreUsageDemanded)
+    {
+        // CSwitch 是高频系统事件：只在至少一个进程详情窗口存活时启用共享会话。
+        ensureCpuCoreUsageCaptureStarted();
+        cpuCoreUsageSnapshot = snapshotCpuCoreUsage();
+    }
+    else if (m_cpuCoreUsageCaptureStarted)
+    {
+        stopCpuCoreUsageCapture();
+    }
 
     // ticket 用于丢弃过期结果（防止乱序覆盖）。
     const std::uint64_t localTicket = ++m_refreshTicket;
@@ -6392,7 +6584,8 @@ void ProcessDock::requestAsyncRefresh(const bool forceRefresh)
         forceUiRefresh,
         previousCache = std::move(previousCache),
         previousCounters = std::move(previousCounters),
-        networkTrafficSnapshot = std::move(networkTrafficSnapshot)]() mutable {
+        networkTrafficSnapshot = std::move(networkTrafficSnapshot),
+        cpuCoreUsageSnapshot = std::move(cpuCoreUsageSnapshot)]() mutable {
         ProcessDock::RefreshResult refreshResult = ProcessDock::buildRefreshResult(
             strategyIndex,
             detailModeEnabled,
@@ -6404,6 +6597,7 @@ void ProcessDock::requestAsyncRefresh(const bool forceRefresh)
             previousCounters,
             networkTrafficSnapshot,
             cpuCount);
+        refreshResult.cpuCoreUsageSnapshot = std::move(cpuCoreUsageSnapshot);
 
         if (guard == nullptr)
         {
@@ -6469,6 +6663,9 @@ void ProcessDock::applyRefreshResult(RefreshResult refreshResult, const bool for
 
     restorePersistedAffinityForNewProcesses(refreshResult);
 
+    // 逐核心快照与本轮进程缓存来自同一次刷新 ticket；先替换再同步详情窗口。
+    m_latestCpuCoreUsageSnapshot = std::move(refreshResult.cpuCoreUsageSnapshot);
+
     // 把最新进程数据同步到已打开的详情窗口（若对应进程仍存在）。
     // 性能策略：
     // 1) 仅同步“可见且未最小化”的详情窗口；
@@ -6510,6 +6707,7 @@ void ProcessDock::applyRefreshResult(RefreshResult refreshResult, const bool for
         if (hasSignificantChange || reachPeriodicSyncTime)
         {
             detailWindow->updateBaseRecord(nextCacheIt->second.record);
+            syncCpuCoreUsageToDetailWindow(detailWindow, nextCacheIt->second.record);
             m_detailWindowLastSyncTimeByIdentity[windowIt->first] = nowTime;
         }
         ++windowIt;
@@ -8111,6 +8309,7 @@ void ProcessDock::appendProcessActivitySample()
         processPoint.creationTime100ns = processRecord.creationTime100ns;
         processPoint.pid = processRecord.pid;
         processPoint.cpuPercent = processRecord.cpuPercent;
+        processPoint.cpuCorePercent = processRecord.cpuCorePercent;
         processPoint.memoryMB = processRecord.workingSetMB;
         processPoint.diskMBps = processRecord.diskMBps;
         processPoint.netKBps = processRecord.netKBps;
@@ -8199,6 +8398,7 @@ void ProcessDock::synchronizeDetailWindowPerformanceHistory(
         ProcessDetailWindow::PerformanceHistorySample detailSample;
         detailSample.unixMilliseconds = activitySample.unixMilliseconds;
         detailSample.cpuPercent = processPointIt->cpuPercent;
+        detailSample.cpuCorePercent = processPointIt->cpuCorePercent;
         detailSample.memoryMB = processPointIt->memoryMB;
         detailSample.diskMBps = processPointIt->diskMBps;
         detailSample.networkRxKBps = processPointIt->netRxKBps;
@@ -8233,6 +8433,7 @@ void ProcessDock::appendProcessActivitySampleToDetailWindows(const ProcessActivi
         ProcessDetailWindow::PerformanceHistorySample detailSample;
         detailSample.unixMilliseconds = sample.unixMilliseconds;
         detailSample.cpuPercent = processPointIt->cpuPercent;
+        detailSample.cpuCorePercent = processPointIt->cpuCorePercent;
         detailSample.memoryMB = processPointIt->memoryMB;
         detailSample.diskMBps = processPointIt->diskMBps;
         detailSample.networkRxKBps = processPointIt->netRxKBps;
@@ -8442,6 +8643,7 @@ void ProcessDock::rebuildProcessActivityTableSnapshotRecords()
             .toString(QStringLiteral("yyyy-MM-dd HH:mm:ss.zzz"))
             .toStdString();
         record.cpuPercent = processPoint.cpuPercent;
+        record.cpuCorePercent = processPoint.cpuCorePercent;
         record.ramMB = processPoint.memoryMB;
         record.workingSetMB = processPoint.memoryMB;
         record.diskMBps = processPoint.diskMBps;
@@ -12872,6 +13074,7 @@ ks::process::ProcessRecord ProcessDock::aggregateFriendlyApplicationRecord(
     aggregateRecord.threadCount = 0U;
     aggregateRecord.handleCount = 0U;
     aggregateRecord.cpuPercent = 0.0;
+    aggregateRecord.cpuCorePercent = 0.0;
     aggregateRecord.ramMB = 0.0;
     aggregateRecord.workingSetMB = 0.0;
     aggregateRecord.diskMBps = 0.0;
@@ -12933,6 +13136,7 @@ ks::process::ProcessRecord ProcessDock::aggregateFriendlyApplicationRecord(
         aggregateRecord.threadCount += memberRecord.threadCount;
         aggregateRecord.handleCount += memberRecord.handleCount;
         aggregateRecord.cpuPercent += memberRecord.cpuPercent;
+        aggregateRecord.cpuCorePercent += memberRecord.cpuCorePercent;
         aggregateRecord.ramMB += memberRecord.ramMB;
         aggregateRecord.workingSetMB += memberRecord.workingSetMB;
         aggregateRecord.diskMBps += memberRecord.diskMBps;

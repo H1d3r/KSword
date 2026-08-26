@@ -10,6 +10,7 @@
 
 #include "../Framework.h"
 #include "../ArkDriverClient/ArkDriverTypes.h"
+#include "../ksword/process/process_cpu_core_etw_monitor.h"
 
 #include <QColor>
 #include <QHash>
@@ -68,6 +69,7 @@ class ProcessActivityTimelineSlider;
 namespace ks::process
 {
     struct CounterSample;
+    struct ThreadCounterSample;
     struct ProcessRecord;
     struct SystemThreadRecord;
 }
@@ -275,6 +277,7 @@ private:
         ContextSwitches,   // 上下文切换次数。
         CreateTime,        // 创建时间。
         ProcessPath,       // 所属进程路径（可为空）。
+        CpuPercent,        // 相邻快照线程 CPU 单核占用（0~100）。
         Count              // 列总数。
     };
 
@@ -437,6 +440,7 @@ private:
     {
         std::unordered_map<std::string, CacheEntry> nextCache;                    // 下一轮缓存。
         std::unordered_map<std::string, ks::process::CounterSample> nextCounters; // 下一轮计数器样本。
+        ks::process::CpuCoreUsageSnapshot cpuCoreUsageSnapshot;                  // CSwitch 区间逐核心快照。
 
         // ======== 统计字段（用于 UI 状态提示 + 详细日志） ========
         std::size_t enumeratedCount = 0;        // 本轮枚举到的“当前存活”进程数。
@@ -479,6 +483,7 @@ public:
         std::uint64_t creationTime100ns = 0; // creationTime100ns：原始进程创建时间，用于历史表格保持 identity。
         std::uint32_t pid = 0;         // pid：快照悬停展示和排查用。
         double cpuPercent = 0.0;       // cpuPercent：该进程采样时 CPU。
+        double cpuCorePercent = 0.0;   // cpuCorePercent：该进程单核等效 CPU，可超过 100%。
         double memoryMB = 0.0;         // memoryMB：该进程采样时工作集。
         double diskMBps = 0.0;         // diskMBps：该进程采样时磁盘吞吐。
         double netKBps = 0.0;          // netKBps：该进程采样时网络吞吐。
@@ -971,6 +976,14 @@ private:
     void pruneProcessNetworkTrafficCounters();
     std::unordered_map<std::uint32_t, NetworkTrafficCounters> snapshotProcessNetworkTrafficCounters() const;
 
+    // ======== 进程/线程逐核心 CPU 采样 ========
+    void ensureCpuCoreUsageCaptureStarted();
+    void stopCpuCoreUsageCapture();
+    ks::process::CpuCoreUsageSnapshot snapshotCpuCoreUsage();
+    void syncCpuCoreUsageToDetailWindow(
+        ProcessDetailWindow* detailWindow,
+        const ks::process::ProcessRecord& processRecord) const;
+
 private:
     QPointer<QObject> m_mainWindowActionReceiver; // 构造时的 MainWindow 接收者，避免 ADS 重挂载后 parent() 变成 Dock 容器。
 
@@ -1153,6 +1166,9 @@ private:
     std::unordered_map<std::string, ks::process::CounterSample> m_counterSampleByIdentity; // 差值样本。
     std::unique_ptr<ks::network::ProcessNetworkEtwMonitor> m_processNetworkTrafficService; // 进程页内部 ETW 网络累计器。
     bool m_processNetworkTrafficCaptureStarted = false; // ETW 采集器是否已经尝试启动。
+    std::unique_ptr<ks::process::ProcessCpuCoreEtwMonitor> m_cpuCoreUsageService; // CSwitch 逐核心累计器。
+    bool m_cpuCoreUsageCaptureStarted = false; // 本轮监视周期内是否已经尝试启动。
+    ks::process::CpuCoreUsageSnapshot m_latestCpuCoreUsageSnapshot; // 最近一次完整刷新取得的区间快照。
     QHash<QString, QIcon> m_iconCacheByPath;  // 进程图标缓存，避免重复提取。
     QHash<QString, QIcon> m_activityIconCacheByProcessKey; // 历史活动图标缓存：进程名+路径 -> 图标。
     QSet<QString> m_processIconPathsInFlight; // 已投递后台线程池、尚未回传结果的 EXE 路径集合。
@@ -1164,6 +1180,7 @@ private:
     std::vector<std::string> m_trackedSelectedIdentityKeys; // 多选进程 identityKey 集合；Ctrl 复选后用于刷新恢复。
     int m_trackedSelectedColumn = 0;          // 当前选中列索引；恢复 currentItem 时尽量保持用户焦点列。
     std::vector<ks::process::SystemThreadRecord> m_threadRecordList; // 线程页最近一次刷新结果缓存。
+    std::unordered_map<std::string, ks::process::ThreadCounterSample> m_threadCounterSampleByIdentity; // 线程 CPU 差分基准。
     std::string m_threadDiagnosticText;       // 线程页最近一次刷新诊断文本。
     std::unordered_set<std::uint32_t> m_hiddenProcessPidSet; // 本会话已通过 R0 标记隐藏的 PID 集合。
     std::vector<ksword::ark::ProcessCrossViewEntry> m_processCrossViewCache; // R0 进程 cross-view 缓存。
