@@ -59,9 +59,10 @@ Ksword5.1 是面向 Windows 的源码公开（“开源”仅表示源码可见�
 当前主线重点是 R3/R0 cross-view、PDB/DynData 动态偏移、只读审计证据页和明确的 mutation/safety gate。大量审计页默认只读，涉及驱动卸载、回调移除、磁盘写入、进程保护位修改等高风险操作时，应通过单独入口、显式确认和能力门禁执行。
 
 ### 近期更新
+- KernelDock 新增双语“内核知识”中心：按 `第二规划.md` 收录 12 类、71 个可全文检索专题；每篇均包含完整八段正文、版本化 R3/R0 现场查询、经中央表核实的业务 IOCTL 来源及对应证据页路由。运行时 unsupported、partial、截断、DynData、权限和硬件限制会继续如实显示。
 - 新增独立“扫描器” Dock，可在后台结构化扫描 PE、ELF 和 Mach-O 文件。其可选字节编辑器只允许等长修改，会复核源文件快照、使用原子替换，并在明确确认风险后可保留备份。
 - 内核与存储取证新增干净已加载镜像和 IDT 基线、描述符表与 IOCTL 解码工具、内核反汇编、扩展的 R0 网络清单，以及原始文件系统浏览和已删除条目分析。
-- HVM 页提供需确认的 VMX 自检和一次性测试来宾，并记录 VM-exit 遥测；仅适用于已获授权的实验和诊断场景。
+- HVM 页提供需确认的 VMX 自检、一次性测试来宾与受生命周期保护的 Intel VT-x/EPT 常驻监控，并记录 VM-exit 遥测；AMD、已有 Hypervisor 或电源/拓扑/卸载保护不完整时会由驱动拒绝，仅适用于已获授权的实验和诊断场景。
 - 发行包 DynData profile 不匹配时，完整主程序和轻量版可在后台解析精确运行时 PDB profile；只有 PE/PDB 身份校验通过的结果才会被下发。
 - 新增表格冻结、平滑滚动和可取消的 UI 卡顿检测器；启动项与网络配置修改也加强了目标校验、恢复和事务处理。
 
@@ -80,6 +81,7 @@ Ksword5.1 是面向 Windows 的源码公开（“开源”仅表示源码可见�
 - 二进制扫描与受控编辑：PE/ELF/Mach-O 结构化扫描；等长字节修改会复核源快照、原子替换目标，并可选保留备份。
 - 网络审计与流量工具：抓包/过滤/连接管理/限速/请求构造/HTTPS 解析、WFP 防火墙事件与规则、NIDS、分段下载，以及 TCP/UDP/AFD/NSI/NDIS/WFP 的 R0 清单和审计视图。
 - 驱动与内核对象：驱动服务与模块、DriverObject/DeviceObject/MajorFunction/FastIo、MajorFunction 与 DriverObject/KLDR 镜像/加载链事务编辑器、Driver Integrity、Module Cross-View、Unloaded/PiDDB、干净已加载镜像与 IDT 基线、描述符表/IOCTL 解码、内核反汇编、对象命名空间、SSDT/SSSDT、Inline Hook、IAT/EAT、回调遍历。
+- 内核知识中心：71 篇中英文专题、全文检索、R3/R0 请求/CPU/时间/WDF-WDM 现场证据、经中央表核实的业务 IOCTL 映射、Microsoft Learn 官方参考，以及通往现有 KernelDock 证据页的只读导航。
 - 文件、存储与设备：双面板文件管理、属性/哈希/签名/PE/字符串/Hex、文件解锁与恢复、Minifilter/FileObject/Section/Storage/BitLocker 证据、原始文件系统和已删除条目取证、硬盘 IO 监控、SetupAPI/CfgMgr 设备树和 R0 设备栈审计。
 - 系统安全姿态：AppLocker、WDAC/Code Integrity、Defender/ASR、VBS/Hyper-V、驱动信任、平台安全和事件日志诊断。
 - UI 与辅助体验：ADS 布局保存/恢复、可见 Dock 惰性初始化、表格冻结、平滑滚动、可取消的 UI 卡顿检测、顶部菜单设置、UIAccess/置顶策略、日志与任务进度面板、Taskbar 顶部 AppBar 与 `S O S Enter` 快速拉起。
@@ -99,7 +101,7 @@ Ksword5.1 是面向 Windows 的源码公开（“开源”仅表示源码可见�
 | 文件 | 文件管理、文件恢复、属性、解锁、Minifilter、FileObject、Section、Storage/BitLocker | 双面板管理、权限接管、哈希/签名/PE/字符串/Hex、NTFS 恢复、文件占用与 Section 映射、存储栈与 BitLocker 只读证据。 |
 | 扫描器 | 结构化扫描、安全字节编辑 | 在后台结构化扫描 PE、ELF 与 Mach-O。可选编辑器只允许等长修改，需明确确认风险；它会复核原始快照、原子替换目标，并可保留备份。 |
 | 驱动 | 驱动概览、驱动操作、调试输出、对象信息、完整性、模块 Cross-View、Unloaded/PiDDB | 驱动服务注册/加载/卸载/删除、已加载模块、DBWIN 输出、DriverObject/DeviceObject/MajorFunction/FastIo、MajorFunction/镜像字段原子事务、加载链摘除与恢复、Driver Integrity、Unloaded/PiDDB 证据和只告警、显式确认的操作入口。 |
-| 内核 | 对象命名空间、原子表、NtQuery、SSDT、SSSDT、Inline Hook、IAT/EAT、CID、IPC、DynData、驱动状态、回调、基线、HVM | 对象目录递归、BaseNamedObjects、NamedPipe、符号链接、设备/驱动对象、对象类型矩阵、CID/cross-view、ALPC/IPC、动态偏移、能力矩阵、干净已加载镜像与 IDT 基线、描述符表/IOCTL 解码、内核反汇编和回调遍历/管理。回调清单覆盖 Notify、注册表、对象、过滤器、BugCheck、Shutdown、文件系统、登录会话、CallbackObject、镜像验证与 NMI 来源，并展示模块归属及 v3 快照/逐行身份诊断。HVM 流程对 VMX 自检和一次性测试来宾设有显式确认。 |
+| 内核 | 对象命名空间、原子表、NtQuery、SSDT、SSSDT、Inline Hook、IAT/EAT、CID、IPC、DynData、驱动状态、回调、基线、HVM、内核知识 | 对象目录递归、BaseNamedObjects、NamedPipe、符号链接、设备/驱动对象、对象类型矩阵、CID/cross-view、ALPC/IPC、动态偏移、能力矩阵、干净已加载镜像与 IDT 基线、描述符表/IOCTL 解码、内核反汇编和回调遍历/管理。“内核知识”新增 71 篇双语可搜索文章、版本化 R0 现场上下文/来源查询、官方参考和通往现有证据页的只读路由，并保留运行态降级。回调清单覆盖 Notify、注册表、对象、过滤器、BugCheck、Shutdown、文件系统、登录会话、CallbackObject、镜像验证与 NMI 来源，并展示模块归属及 v3 快照/逐行身份诊断。HVM 流程对 VMX 自检、一次性测试来宾和受保护的 Intel VT-x/EPT 常驻监控设有显式确认。 |
 | 监控 | 进程定向、直接内核调用、WinAPI、WMI、ETW、Risk Center | 目标进程树 ETW、syscall 采集、WinAPI Agent、WMI 订阅、ETW Provider/Session 管理、ARK 风险聚合。 |
 | 硬件 | 利用率、概览、CPU、GPU、内存、硬盘监控、设备管理、R0 设备审计 | 任务管理器风格性能页、磁盘/网络/GPU 动态卡片、进程 IO 与 ETW 文件活动、SetupAPI/CfgMgr 设备树、DevNode/USB/HID/PCI/ACPI/GPU/display/watchdog 审计。 |
 | 权限 | 账号、权限 | 本地用户、创建用户/重置密码、组信息和当前进程权限快照。 |
@@ -140,7 +142,7 @@ Ksword5.1 是面向 Windows 的源码公开（“开源”仅表示源码可见�
 - R0/R3 共享协议统一位于 `shared/driver/`；新增 IOCTL 头、结构体和版本字段不要散落在 UI 或驱动私有目录。
 - 驱动 IOCTL 分发通过 `KswordARKDriver/src/dispatch/ioctl_registry.c` 注册 handler；`ioctl_dispatch.c` 只负责查表、校验、调用、日志和完成请求。
 - 用户态访问 KswordARK 驱动统一通过 `Ksword5.1/Ksword5.1/ArkDriverClient/` 或轻量版对应封装，Dock/UI 不直接打开设备或调用 `DeviceIoControl`。
-- PDB/DynData 当前以 `tools/pdb_offset_generator/` 生成的 profile pack 为基础；发行包优先同步 `ark_dyndata_pack_v3.json`，驱动侧支持 v4 typed item apply/query 与 capability/missing item 诊断。
+- PDB/DynData 当前以 `tools/pdb_offset_generator/` 生成的 v4 profile pack 为基础；发行包只携带压缩后的 `ark_dyndata_pack_v4.json.qz`。旧 v1/v2/v3 偏移矩阵不再发布，v4 core item 在 R3 内存中投影到 EX 请求以保持现有功能。
 - 依赖未公开字段的 R0 功能必须声明所需 capability，dispatch 层在 handler 前执行 gate；DynData 缺失或 profile 不匹配时应降级或 fail closed。
 - 默认审计页应只读；卸载、删除、patch、bypass、磁盘写入等 mutation 类能力必须走独立入口、风险提示和回滚/审计策略。
 - DynData 第一阶段使用 `third_party/systeminformer_dyn/` 中 vendored System Informer 动态偏移数据；Ksword 只接入 `KphDynConfig` 数据和轻量解析器，不引入 KPH 通信层、对象系统或 session token。

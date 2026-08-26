@@ -763,6 +763,7 @@ private:
     QPushButton* m_clearCriticalButton = nullptr; // 取消关键进程。
 
     QGroupBox* m_affinityActionGroup = nullptr; // CPU 亲和性操作区域。
+    QLabel* m_affinityDescriptionLabel = nullptr; // 根据实际 processor group 数量显示符号说明。
     QLabel* m_affinityStatusLabel = nullptr; // CPU 亲和性当前模式与操作结果。
     QCheckBox* m_affinityPersistenceCheckBox = nullptr; // 是否为当前完整可执行路径保存 CPU 亲和性规则。
     QPushButton* m_affinityRefreshButton = nullptr; // 重新读取亲和性。
@@ -786,7 +787,6 @@ private:
 
     QComboBox* m_priorityCombo = nullptr;      // 优先级选择框。
     QPushButton* m_applyPriorityButton = nullptr; // 应用优先级按钮。
-    QPushButton* m_adjustTokenPrivilegesButton = nullptr; // 打开 R3/R0 进程令牌特权编辑器。
     QPushButton* m_openProcessFolderButton = nullptr; // 打开进程所在目录按钮。
     QPushButton* m_refreshPplProtectionButton = nullptr; // 手动刷新 PPL 保护级别按钮。
     QPushButton* m_enableEfficiencyModeButton = nullptr; // 开启效率模式按钮。

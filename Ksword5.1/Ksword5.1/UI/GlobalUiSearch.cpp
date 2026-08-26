@@ -846,8 +846,7 @@ namespace ks::ui
     void GlobalUiSearchController::activateForTable(
         QTableView* tableView,
         const QString& queryText,
-        const bool focusTopInput,
-        const bool searchResultsOnly)
+        const bool focusTopInput)
     {
         if (tableView == nullptr)
         {
@@ -858,10 +857,7 @@ namespace ks::ui
         m_recentTableView = tableView;
         m_recentPageDockWidget = dockWidgetForWidget(tableView);
         setSearchScope(UiSearchScope::CurrentTable);
-        setSearchResultsOnly(searchResultsOnly);
-        ks::ui::SetTableSearchResultsOnlyChecked(
-            tableView,
-            searchResultsOnly);
+
         emit requestSearchInputActivation(focusTopInput);
 
         if (m_searchInputEdit != nullptr && !queryText.isNull())
@@ -941,9 +937,6 @@ namespace ks::ui
             refreshSearchOptionControls();
             if (m_searchScope == UiSearchScope::CurrentTable)
             {
-                ks::ui::SetTableSearchResultsOnlyChecked(
-                    resolveCurrentTable(),
-                    checked);
             }
             return;
         }
@@ -955,9 +948,6 @@ namespace ks::ui
         refreshSearchOptionControls();
         if (m_searchScope == UiSearchScope::CurrentTable)
         {
-            ks::ui::SetTableSearchResultsOnlyChecked(
-                resolveCurrentTable(),
-                checked);
         }
         if (m_searchModeActive && isCurrentQueryLongEnough(m_pendingQueryText.trimmed()))
         {
@@ -1093,9 +1083,6 @@ namespace ks::ui
                         dismissPopup();
                         clearSearchResultFilters();
                         m_targetTableView = tableView;
-                        ks::ui::SetTableSearchResultsOnlyChecked(
-                            tableView,
-                            m_searchResultsOnly);
                         refreshSearchScopeDisplayText();
                         if (m_searchModeActive
                             && isCurrentQueryLongEnough(m_pendingQueryText.trimmed()))
@@ -1538,8 +1525,8 @@ namespace ks::ui
         {
             auto* listItem = new QListWidgetItem(m_resultListWidget);
             const QString itemHtml = QStringLiteral(
-                "<div style=\"font-size:12px;color:%1;\">%2</div>"
-                "<div style=\"font-size:11px;color:%3;margin-top:3px;\">%4</div>")
+                "<div style=\"color:%1;\">%2</div>"
+                "<div style=\"color:%3;margin-top:3px;\">%4</div>")
                 .arg(
                     textPrimaryHex,
                     buildSnippetHtml(hitEntry.matchedText, queryText, accentTextHex),
@@ -1585,12 +1572,12 @@ namespace ks::ui
             "}"
             "#ksGlobalUiSearchPopup QLabel#ksGlobalUiSearchEmptyHint{"
             "  color:%3;"
-            "  font-size:12px;"
+
             "  padding:14px 0;"
             "}"
             "#ksGlobalUiSearchPopup QLabel#ksGlobalUiSearchProgressLabel{"
             "  color:%3;"
-            "  font-size:11px;"
+
             "}"
             "#ksGlobalUiSearchPopup QProgressBar#ksGlobalUiSearchProgressBar{"
             "  background:%4;"
@@ -1788,9 +1775,6 @@ namespace ks::ui
         if (m_searchScope == UiSearchScope::CurrentTable)
         {
             m_targetTableView = resolveCurrentTable();
-            ks::ui::SetTableSearchResultsOnlyChecked(
-                m_targetTableView.data(),
-                m_searchResultsOnly);
         }
         refreshSearchScopeDisplayText();
         if (m_searchModeActive && isCurrentQueryLongEnough(m_pendingQueryText.trimmed()))
@@ -1992,16 +1976,14 @@ namespace ks::ui
     void ActivateGlobalUiSearchForTable(
         QTableView* tableView,
         const QString& queryText,
-        const bool focusTopInput,
-        const bool searchResultsOnly)
+        const bool focusTopInput)
     {
         if (!g_activeSearchController.isNull())
         {
             g_activeSearchController->activateForTable(
                 tableView,
                 queryText,
-                focusTopInput,
-                searchResultsOnly);
+                focusTopInput);
         }
     }
 }

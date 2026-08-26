@@ -3,6 +3,13 @@
 ## 共享记忆
 
 跨 agent / 开发者共享的项目知识放在 `.claude/memory/`，索引见 `.claude/memory/MEMORY.md`。
+任何 Codex、Claude 或其他 agent 开始处理本仓库任务前，必须同时读取两类记忆：
+
+1. 该 agent 在当前平台可用的自身记忆、用户记忆或历史摘要（如果有）；
+2. 仓库共享记忆索引 `.claude/memory/MEMORY.md`，并按任务关键词继续读取其中链接的相关主题文件。
+
+`.claude/memory/` 是跨 agent 共享的项目记忆，不是 Claude 专用目录；即使 agent 不是 Claude，也不得因目录名而跳过。某一类自身记忆不可用时，应继续读取另一类可用记忆，不得将“没有自身记忆”作为跳过仓库共享记忆的理由。
+
 改动主程序 UI、主题或窗口背景前，先读 `.claude/memory/ksword-ui-architecture.md`：其中记录了主题 token 体系、
 全局样式块链路、透明背景与毛玻璃的平台约束，以及已经踩过的坑。新增可复用经验时请一并更新该目录。
 
@@ -97,8 +104,7 @@ Copy-Item 'third_party\zstd\LICENSE.txt' (Join-Path $licenseDir 'zstd-LICENSE.tx
 
 $profileDir=Join-Path $stage 'profiles'
 if (!(Test-Path $profileDir)) { New-Item -ItemType Directory -Path $profileDir | Out-Null }
-Copy-Item 'Ksword5.1\x64\Release\profiles\ark_dyndata_pack_v3.json' $profileDir -Force
-Copy-Item 'Ksword5.1\x64\Release\profiles\ark_dyndata_pack_v4.json' $profileDir -Force
+Copy-Item 'Ksword5.1\x64\Release\profiles\ark_dyndata_pack_v4.json.qz' $profileDir -Force
 Copy-Item 'Ksword5.1\x64\Release\profiles\launcher_support_manifest.json' $profileDir -Force
 Copy-Item 'Ksword5.1\x64\Release\profiles\registry_optimization_items.json' $profileDir -Force
 Copy-Item 'Ksword5.1\x64\Release\profiles\registry_optimization_assets' $profileDir -Recurse -Force
@@ -137,7 +143,7 @@ if ($exit -ne 0) { exit $exit }
 ```powershell
 $seven='C:\Users\Felix\CLionProjects\Wisdom-Weasel\7z.exe'
 & $seven t $archive
-& $seven l $archive 'Release\Launcher.exe' 'Release\Ksword5.1.exe' 'Release\KswordARKLight.exe' 'Release\Taskbar.exe' 'Release\KswordHUD.exe' 'Release\APIMonitor_x64.dll' 'Release\KswordARK.sys' 'Release\KswordARKDriver\KswordARK.sys' 'Release\LICENSE' 'Release\COMMUNITY_COVENANT.md' 'Release\licenses\third_party\systeminformer-LICENSE.txt' 'Release\licenses\third_party\easy-hwid-spoofer-LICENSE.txt' 'Release\licenses\third_party\fltk-LICENSE.txt' 'Release\licenses\third_party\qt-advanced-docking-system-LICENSE.txt' 'Release\licenses\third_party\zstd-LICENSE.txt' 'Release\profiles\launcher_support_manifest.json' 'Release\profiles\ark_dyndata_pack_v3.json' 'Release\profiles\registry_optimization_items.json' 'Release\profiles\registry_optimization_assets\Config\Data.zip' 'Release\languages\zh-CN.json' 'Release\languages\en-US.json' 'Release\platforms\qwindows.dll'
+& $seven l $archive 'Release\Launcher.exe' 'Release\Ksword5.1.exe' 'Release\KswordARKLight.exe' 'Release\Taskbar.exe' 'Release\KswordHUD.exe' 'Release\APIMonitor_x64.dll' 'Release\KswordARK.sys' 'Release\KswordARKDriver\KswordARK.sys' 'Release\LICENSE' 'Release\COMMUNITY_COVENANT.md' 'Release\licenses\third_party\systeminformer-LICENSE.txt' 'Release\licenses\third_party\easy-hwid-spoofer-LICENSE.txt' 'Release\licenses\third_party\fltk-LICENSE.txt' 'Release\licenses\third_party\qt-advanced-docking-system-LICENSE.txt' 'Release\licenses\third_party\zstd-LICENSE.txt' 'Release\profiles\launcher_support_manifest.json' 'Release\profiles\ark_dyndata_pack_v4.json.qz' 'Release\profiles\registry_optimization_items.json.qz' 'Release\profiles\registry_optimization_assets\Config\Data.zip' 'Release\languages\zh-CN.json' 'Release\languages\en-US.json' 'Release\platforms\qwindows.dll'
 ```
 
 校验通过时，`7z t` 输出应包含 `Everything is Ok`；主程序顶部“许可证”页面从 exe 同目录读取根 `LICENSE`。本流程生成的包根目录必须是 `Release\`，不要把 `dist\KswordARK-release-work\` 或其它临时目录打进包里。
@@ -153,7 +159,7 @@ py -3.12 tools\pdb_offset_generator\launcher_report_intake.py $reportDir --corpu
 
 工具会校验 SHA256 和 PE/RSDS 身份、下载精确 PDB，并生成 NTOS/NTKRLA57 偏移配置；collection-only 模块只保存 PE/PDB。Wine、非 amd64、无 RSDS 或校验和不匹配的报告不得进入正式矩阵。
 
-导入后运行 `ksword_profile_release_sync.py` 重新生成 `ark_dyndata_pack_v3.json` 和默认的 `ark_dyndata_pack_v4.json`，再运行 `Launcher/tools/generate_support_manifest.py` 更新支持清单。最后确认新 PDB GUID/Age 在清单中唯一且 `complete=true`，并构建 Launcher Release。重复导入应显示 `existing`。
+导入后运行 `ksword_profile_release_sync.py` 重新生成唯一发布矩阵 `ark_dyndata_pack_v4.json`，再运行 `Launcher/tools/generate_support_manifest.py` 更新支持清单。最后确认新 PDB GUID/Age 在清单中唯一且 `complete=true`，并构建 Launcher Release。重复导入应显示 `existing`。
 
 
 ## Phase -1 协作规范

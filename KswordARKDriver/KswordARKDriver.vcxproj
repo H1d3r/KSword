@@ -140,6 +140,7 @@
     <ClCompile Include="src\features\debug_output\debug_output_ioctl.c" />
     <ClCompile Include="src\features\bugcheck\bugcheck_decode.c" />
     <ClCompile Include="src\features\bugcheck\bugcheck_runtime.c" />
+    <ClCompile Include="src\features\bugcheck\bugcheck_control.c" />
     <ClCompile Include="src\features\bugcheck\bugcheck_bgp.c" />
     <ClCompile Include="src\features\bugcheck\bugcheck_bgp_lifecycle.c" />
     <ClCompile Include="src\features\bugcheck\bugcheck_layout.c" />
@@ -267,6 +268,7 @@
     <ClCompile Include="src\features\hwid\hwid_dispatch_ioctl.c" />
     <ClCompile Include="src\features\cpu_power\cpu_power_runtime.c" />
     <ClCompile Include="src\features\cpu_power\cpu_power_ioctl.c" />
+    <ClCompile Include="src\features\research\research_topic_ioctl.c" />
     <ClCompile Include="src\features\rxpf\image_protection_manager.c" />
     <ClCompile Include="src\features\rxpf\page_fault_manager.c" />
     <ClCompile Include="src\features\rxpf\page_state_table.c" />
@@ -423,6 +425,7 @@
     <ClInclude Include="..\shared\driver\KswordArkCpuPowerIoctl.h" />
     <ClInclude Include="src\features\cpu_power\cpu_power_runtime.h" />
     <ClInclude Include="..\shared\driver\KswordArkRxPfIoctl.h" />
+    <ClInclude Include="..\shared\driver\KswordArkResearchIoctl.h" />
     <ClInclude Include="src\features\rxpf\image_protection_manager.h" />
     <ClInclude Include="src\features\rxpf\page_fault_manager.h" />
     <ClInclude Include="src\features\rxpf\page_state_table.h" />
@@ -617,16 +620,6 @@
   <ItemGroup>
     <FilesToPackage Include="$(TargetPath)" />
   </ItemGroup>
-  <Target Name="KswordArkSyncDeployableDriverAfterLink" AfterTargets="Link" Condition="'$(Configuration)|$(Platform)'=='Release|x64' and Exists('$(TargetPath)')">
-    <PropertyGroup>
-      <KswordArkDeployableDriverDir>$(TargetDir)KswordARKDriver\</KswordArkDeployableDriverDir>
-    </PropertyGroup>
-    <MakeDir Directories="$(KswordArkDeployableDriverDir)" />
-    <Copy SourceFiles="$(TargetPath)" DestinationFiles="$(KswordArkDeployableDriverDir)KswordARK.sys" SkipUnchangedFiles="false" />
-    <Copy SourceFiles="$(TargetDir)KswordARK.pdb" DestinationFiles="$(KswordArkDeployableDriverDir)KswordARK.pdb" SkipUnchangedFiles="false" Condition="Exists('$(TargetDir)KswordARK.pdb')" />
-    <Copy SourceFiles="$(TargetDir)KswordARKDriver.inf" DestinationFiles="$(KswordArkDeployableDriverDir)KswordARKDriver.inf" SkipUnchangedFiles="false" Condition="Exists('$(TargetDir)KswordARKDriver.inf')" />
-    <Message Importance="High" Text="KswordARK: synchronized deployable driver payload to $(KswordArkDeployableDriverDir)" />
-  </Target>
   <Target Name="KswordArkCopyCleanDriverBeforeVariantSign" BeforeTargets="KswordArkAutoVariantSignAfterBuild" Condition="'$(ConfigurationType)'=='Driver' and Exists('$(TargetPath)') and '$(KswordArkSkipAutoVariantSign)'!='true' and '$(KswordArkSkipAutoTestSign)'!='true'">
     <PropertyGroup>
       <KswordArkCleanDriverPath>$(TargetDir)KswordARK_Clean$(TargetExt)</KswordArkCleanDriverPath>
@@ -647,13 +640,17 @@
     <Exec Command="&quot;$(KswordArkPowerShellExe)&quot; -NoProfile -ExecutionPolicy Bypass -File &quot;$(KswordArkSignScript)&quot; -DriverPath &quot;$(TargetPath)&quot;$(KswordArkSignStrictArg)" IgnoreStandardErrorWarningFormat="true" Condition="Exists('$(KswordArkSignScript)')" />
     <Error Condition="!Exists('$(KswordArkSignScript)')" Text="KswordARK driver variant signing script was not found: $(KswordArkSignScript)" />
   </Target>
-  <Target Name="KswordArkResyncDeployableDriverAfterVariantSign" AfterTargets="KswordArkAutoVariantSignAfterBuild" Condition="'$(Configuration)|$(Platform)'=='Release|x64' and Exists('$(TargetPath)')">
+  <!-- 保持可直接复制的统一 Release 目录自洽；主程序加载根 sys，INF/打包路径使用子目录副本。 -->
+  <Target Name="KswordArkMirrorUnifiedReleaseArtifacts" AfterTargets="Build" DependsOnTargets="KswordArkAutoVariantSignAfterBuild" Condition="'$(Configuration)|$(Platform)'=='Release|x64' and Exists('$(TargetPath)')">
     <PropertyGroup>
-      <KswordArkDeployableDriverDir Condition="'$(KswordArkDeployableDriverDir)'==''">$(TargetDir)KswordARKDriver\</KswordArkDeployableDriverDir>
+      <KswordArkMirrorDir>$(TargetDir)KswordARKDriver\</KswordArkMirrorDir>
+      <KswordArkPdbPath>$(TargetDir)KswordARK.pdb</KswordArkPdbPath>
+      <KswordArkInfPath>$(TargetDir)KswordARKDriver.inf</KswordArkInfPath>
     </PropertyGroup>
-    <MakeDir Directories="$(KswordArkDeployableDriverDir)" />
-    <Copy SourceFiles="$(TargetPath)" DestinationFiles="$(KswordArkDeployableDriverDir)KswordARK.sys" SkipUnchangedFiles="false" />
-    <Message Importance="High" Text="KswordARK: refreshed deployable driver payload after variant signing." />
+    <MakeDir Directories="$(KswordArkMirrorDir)" />
+    <Copy SourceFiles="$(TargetPath)" DestinationFiles="$(KswordArkMirrorDir)KswordARK.sys" SkipUnchangedFiles="false" />
+    <Copy SourceFiles="$(KswordArkPdbPath)" DestinationFiles="$(KswordArkMirrorDir)KswordARK.pdb" SkipUnchangedFiles="false" Condition="Exists('$(KswordArkPdbPath)')" />
+    <Copy SourceFiles="$(KswordArkInfPath)" DestinationFiles="$(KswordArkMirrorDir)KswordARKDriver.inf" SkipUnchangedFiles="false" Condition="Exists('$(KswordArkInfPath)')" />
   </Target>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets" />

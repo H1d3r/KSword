@@ -9,7 +9,9 @@
 // ============================================================
 
 #include "../ArkDriverClient/ArkDriverClient.h"
+#include "../UI/UI_All.h"
 #include "../UI/TableInteractionSupport.h"
+#include "../ksword/log/log.h"
 #include "../theme.h"
 
 #include <QAbstractItemView>
@@ -30,6 +32,7 @@
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
 #include <QResizeEvent>
+#include <QSizePolicy>
 #include <QVBoxLayout>
 
 #include <TlHelp32.h>
@@ -288,7 +291,11 @@ void FileMappedProcessWindow::initializeUi()
     setAutoFillBackground(true);
     setStyleSheet(buildOpaqueDialogStyle(objectName()));
     setWindowTitle(QStringLiteral("文件映射进程(R0 Section/ControlArea)"));
-    setMinimumSize(1120, 680);
+    ks::ui::applyResponsiveWindowGeometry(
+        this,
+        parentWidget(),
+        QSize(1120, 680),
+        QSize(720, 480));
 
     m_rootLayout = new QVBoxLayout(this);
     m_rootLayout->setContentsMargins(8, 8, 8, 8);
@@ -300,15 +307,13 @@ void FileMappedProcessWindow::initializeUi()
 
     m_refreshButton = new QPushButton(this);
     m_refreshButton->setIcon(QIcon(":/Icon/handle_refresh.svg"));
-    m_refreshButton->setIconSize(QSize(16, 16));
-    m_refreshButton->setFixedSize(28, 28);
+    KswordTheme::ApplyCompactIconButtonMetrics(m_refreshButton);
     m_refreshButton->setToolTip(QStringLiteral("刷新 R0 映射进程扫描"));
     m_refreshButton->setStyleSheet(KswordTheme::ThemedButtonStyle());
 
     m_openProcessButton = new QPushButton(this);
     m_openProcessButton->setIcon(QIcon(":/Icon/process_details.svg"));
-    m_openProcessButton->setIconSize(QSize(16, 16));
-    m_openProcessButton->setFixedSize(28, 28);
+    KswordTheme::ApplyCompactIconButtonMetrics(m_openProcessButton);
     m_openProcessButton->setToolTip(QStringLiteral("转到当前行进程详情"));
     m_openProcessButton->setStyleSheet(KswordTheme::ThemedButtonStyle());
 
@@ -318,10 +323,16 @@ void FileMappedProcessWindow::initializeUi()
         targetTextList.push_back(QDir::toNativeSeparators(pathText));
     }
     m_targetLabel = new QLabel(QStringLiteral("目标：%1").arg(targetTextList.join(QStringLiteral(" | "))), this);
+    m_targetLabel->setMinimumWidth(0);
+    m_targetLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    m_targetLabel->setToolTip(m_targetLabel->text());
     m_targetLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
     m_targetLabel->setStyleSheet(QStringLiteral("color:%1;font-weight:600;").arg(KswordTheme::TextPrimaryHex()));
 
     m_statusLabel = new QLabel(QStringLiteral("● 等待扫描"), this);
+    m_statusLabel->setWordWrap(true);
+    m_statusLabel->setMinimumWidth(0);
+    m_statusLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     m_statusLabel->setStyleSheet(QStringLiteral("color:%1;font-weight:600;").arg(KswordTheme::TextSecondaryHex()));
 
     m_resultTable = new QTreeWidget(this);
@@ -564,7 +575,14 @@ void FileMappedProcessWindow::applyRefreshResult(
         .arg(m_rows.size());
     if (!refreshResult.diagnosticText.trimmed().isEmpty())
     {
-        statusText += QStringLiteral(" | %1").arg(refreshResult.diagnosticText);
+        statusText += QStringLiteral(" | 存在诊断；详情已写入日志。");
+        kLogEvent diagnosticEvent;
+        warn << diagnosticEvent
+            << "[FileMappedProcessWindow] scan completed with diagnostics, targetCount="
+            << m_targetPaths.size()
+            << ", rowCount=" << m_rows.size()
+            << ", detail=" << refreshResult.diagnosticText.toStdString()
+            << eol;
     }
     m_statusLabel->setText(statusText);
     m_statusLabel->setStyleSheet(

@@ -87,6 +87,7 @@ typedef struct _KSWORD_ARK_BGP_CONTEXT
     PKSWORD_ARK_BGP_PARSE_BITMAP ParseBitmap;
     PKSWORD_ARK_BGP_DESTROY_RECTANGLE DestroyRectangle;
     PKSWORD_ARK_INBV_ACQUIRE_DISPLAY_OWNERSHIP AcquireOwnership;
+    volatile LONG ResolvedSnapshotReady;
     ULONG FeatureMask;
     ULONG SignatureFamily[KSWORD_ARK_BGP_SIGNATURE_COUNT];
     KSWORD_ARK_BGP_SCREEN_INFO Screen;
@@ -117,6 +118,12 @@ typedef struct _KSWORD_ARK_BGP_CONTEXT
 
 extern KSWORD_ARK_BGP_CONTEXT g_KswordArkBgp;
 
+// Resolver and rectangle preparation use the controller-owned deadline and unload cancellation.
+NTSTATUS
+KswordARKBugcheckControlCheckAbort(
+    VOID
+    );
+
 VOID
 KswordARKBugcheckBgpRecordStage(
     _In_ LONG Stage,
@@ -131,6 +138,29 @@ KswordARKBugcheckBgpResolveFunctions(
 NTSTATUS
 KswordARKBugcheckBgpReadScreen(
     _Out_ PKSWORD_ARK_BGP_SCREEN_INFO Screen
+    );
+
+// Invoke the validated private BGP parser without applying CFG to the private
+// kernel target itself.  The resolver remains responsible for validating the
+// target image, section, signature family, and uniqueness before publication.
+NTSTATUS
+KswordARKBugcheckBgpInvokeParseBitmap(
+    _In_ const VOID* Bitmap,
+    _Out_ PVOID* Rectangle
+    );
+
+// Invoke the validated private BGP rectangle destructor through the same
+// narrowly scoped no-CFG boundary used by the remaining private BGP calls.
+NTSTATUS
+KswordARKBugcheckBgpInvokeDestroyRectangle(
+    _In_opt_ PVOID Rectangle
+    );
+
+// Invoke the validated private BGP lock release routine without extending the
+// CFG exception to the lifecycle caller or any unrelated driver code.
+VOID
+KswordARKBugcheckBgpInvokeRelease(
+    VOID
     );
 
 NTSTATUS

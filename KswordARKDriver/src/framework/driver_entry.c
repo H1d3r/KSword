@@ -164,6 +164,20 @@ Return Value:
         return KswordArkStartupFailure(KswordArkStartStageWdfDriverCreate, status);
     }
 
+    /*
+     * Bind resident-HVM lifecycle guards only after KMDF installs the final
+     * DriverUnload entry.  Failure keeps resident VMX disabled without taking
+     * down the rest of the driver.
+     */
+    status = KswordARKHvmEnableResidentLifecycle(DriverObject);
+    if (!NT_SUCCESS(status)) {
+        TraceEvents(
+            TRACE_LEVEL_WARNING,
+            TRACE_DRIVER,
+            "Resident HVM lifecycle unavailable %!STATUS!",
+            status);
+    }
+
     // 控制设备的内部阶段由 KswordARKDriverCreateControlDevice 自己登记，
     // 失败时它已经写好 breadcrumb，这里只做资源回滚。
     status = KswordARKDriverCreateControlDevice(driverHandle, &controlDevice);
@@ -223,10 +237,25 @@ Return Value:
         TraceEvents(TRACE_LEVEL_WARNING, TRACE_DRIVER, "KswordARKFileMonitorInitialize recorded failure %!STATUS!", status);
     }
 
-    // VMware bugcheck diagnostics are strictly optional. The initializer
-    // returns without registering callbacks on every unsupported environment.
-    (void)KswordARKBugcheckInitialize(DriverObject, controlDevice);
+#if KSWORD_ARK_BUGCHECK_DIAGNOSTICS_ENABLED
+    // DriverEntry 只准备按需安装控制器，避免普通加载时扫描私有 BGP 字段或注册蓝屏回调。
+    status = KswordARKBugcheckControlInitialize(DriverObject, controlDevice);
+    if (!NT_SUCCESS(status)) {
+        TraceEvents(
+            TRACE_LEVEL_WARNING,
+            TRACE_DRIVER,
+            "KswordARKBugcheckControlInitialize degraded %!STATUS!",
+            status);
+    }
+    // Guard 仍是独立的一次性调试能力；初始化本身不会安装 KeBugCheckEx hook。
     KswordARKBugcheckGuardInitialize();
+#else
+    // Fail closed while the crash-time renderer and guard are disabled.
+    TraceEvents(
+        TRACE_LEVEL_INFORMATION,
+        TRACE_DRIVER,
+        "KswordARK: driver-side bugcheck diagnostics disabled at build time");
+#endif
 
     // 所有运行时都已建立后才让控制设备对用户态可见。
     KswordArkStartupStage(KswordArkStartStageControlDevicePublish);
@@ -285,11 +314,11 @@ Return Value:
     // 目录枚举可能缓存了一个用于续扫的目录句柄，卸载前必须关闭。
     KswordARKDriverResetDirectoryScanCache();
 
-    // Stop crash callbacks before any other teardown can invalidate state used
-    // by the nonpaged diagnostic path.
-    // Restore the one-shot KeBugCheckEx entry before the driver image can unload.
+#if KSWORD_ARK_BUGCHECK_DIAGNOSTICS_ENABLED
+    // 先还原一次性 Guard，再由控制器撤销按需安装的 BGP 回调和预生成资源。
     KswordARKBugcheckGuardUninitialize();
-    KswordARKBugcheckUninitialize();
+    KswordARKBugcheckControlUninitialize();
+#endif
 
     // 必须先注销内核调试回调，防止后续卸载阶段再次进入本驱动代码。
     KswordARKDebugOutputUninitialize();

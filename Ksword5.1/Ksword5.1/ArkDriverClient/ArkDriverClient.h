@@ -61,7 +61,9 @@ namespace ksword::ark
         // Install the complete bilingual BGP verdict-card resource set.
         IoResult setBugcheckVerdictResources(
             const std::vector<BugcheckVerdictBitmap>& resources) const;
-
+        // 根据设置文件或用户本次明确操作，按需安装并查询 BGP 蓝屏诊断回调。
+        BugcheckDiagnosticsResult configureBugcheckDiagnostics(
+            unsigned long action) const;
 
         // Confirmation-gated control/status path for the one-shot KeBugCheckEx delay guard.
         BugcheckGuardResult configureBugcheckGuard(
@@ -95,8 +97,15 @@ namespace ksword::ark
             unsigned long outputBytes,
             OVERLAPPED* overlapped) const;
 
-        IoResult terminateProcess(std::uint32_t processId, long exitStatus) const;
-        IoResult terminateProcess(DriverHandle& handle, std::uint32_t processId, long exitStatus) const;
+        IoResult terminateProcess(
+            std::uint32_t processId,
+            long exitStatus,
+            std::uint64_t expectedCreateTime100ns = 0) const;
+        IoResult terminateProcess(
+            DriverHandle& handle,
+            std::uint32_t processId,
+            long exitStatus,
+            std::uint64_t expectedCreateTime100ns = 0) const;
         IoResult terminateThread(std::uint32_t threadId, std::uint32_t processId, long exitStatus) const;
         IoResult terminateThread(DriverHandle& handle, std::uint32_t threadId, std::uint32_t processId, long exitStatus) const;
         IoResult setThreadSuspended(std::uint32_t threadId, std::uint32_t processId, bool suspended) const;
@@ -134,7 +143,11 @@ namespace ksword::ark
             std::int32_t luidHighPart,
             bool enabled,
             DriverHandle* existingHandle = nullptr) const;
-        ProcessSpecialFlagsResult setProcessSpecialFlags(std::uint32_t processId, unsigned long action, unsigned long flags = 0UL) const;
+        ProcessSpecialFlagsResult setProcessSpecialFlags(
+            std::uint32_t processId,
+            unsigned long action,
+            unsigned long flags = 0UL,
+            std::uint64_t expectedCreateTime100ns = 0) const;
         ProcessDkomResult dkomProcess(std::uint32_t processId, unsigned long action, unsigned long flags = 0UL) const;
         ProcessInjectResult injectProcessDll(
             std::uint32_t processId,
@@ -355,6 +368,11 @@ namespace ksword::ark
             bool uiConfirmed) const;
         // queryIoctlRegistry：查询 KswordARK 统一 dispatch 注册表，只读返回元数据。
         IoctlRegistryQueryResult queryIoctlRegistry(unsigned long flags = KSWORD_ARK_IOCTL_REGISTRY_FLAG_INCLUDE_HANDLER, unsigned long maxEntries = KSWORD_ARK_IOCTL_REGISTRY_MAX_ENTRIES) const;
+
+        // queryResearchTopic：查询一个内核知识专题的版本化 R0 现场证据与来源映射。
+        ResearchTopicQueryResult queryResearchTopic(
+            unsigned long topicId,
+            unsigned long maxEntries = KSWORD_ARK_RESEARCH_DEFAULT_MAX_ENTRIES) const;
         // queryDriverIntegrity：
         // - 输入：可选 DriverObject 名称、模块基址和采集预算。
         // - 处理：调用统一驱动完整性 IOCTL，聚合 DriverObject/LDR/FastIo/CPU/IDT 证据。
@@ -663,7 +681,7 @@ namespace ksword::ark
         Win32kWindowsResult queryWin32kWindows(unsigned long flags = KSWORD_ARK_WIN32K_QUERY_FLAG_INCLUDE_ALL, unsigned long sessionId = 0UL, unsigned long processId = 0UL, unsigned long threadId = 0UL, unsigned long maxEntries = KSWORD_ARK_WIN32K_DEFAULT_MAX_ENTRIES) const;
         Win32kGuiThreadsResult queryWin32kGuiThreads(unsigned long flags = KSWORD_ARK_WIN32K_QUERY_FLAG_INCLUDE_ALL, unsigned long sessionId = 0UL, unsigned long processId = 0UL, unsigned long threadId = 0UL, unsigned long maxEntries = KSWORD_ARK_WIN32K_DEFAULT_MAX_ENTRIES) const;
         Win32kHotkeysPdbResult queryWin32kHotkeysPdb(unsigned long flags = KSWORD_ARK_WIN32K_QUERY_FLAG_INCLUDE_ALL, unsigned long sessionId = 0UL, unsigned long processId = 0UL, unsigned long threadId = 0UL, unsigned long maxEntries = KSWORD_ARK_WIN32K_DEFAULT_MAX_ENTRIES) const;
-        Win32kHooksPdbResult queryWin32kHooksPdb(unsigned long flags = KSWORD_ARK_WIN32K_QUERY_FLAG_INCLUDE_ALL, unsigned long sessionId = 0UL, unsigned long processId = 0UL, unsigned long threadId = 0UL, unsigned long maxEntries = KSWORD_ARK_WIN32K_DEFAULT_MAX_ENTRIES) const;
+        Win32kHooksPdbResult queryWin32kHooksPdb(unsigned long flags = KSWORD_ARK_WIN32K_QUERY_FLAG_INCLUDE_ALL, unsigned long sessionId = 0UL, unsigned long processId = 0UL, unsigned long threadId = 0UL, unsigned long maxEntries = KSWORD_ARK_WIN32K_MESSAGE_HOOK_DEFAULT_MAX_ENTRIES) const;
         Win32kTimersResult queryWin32kTimers(unsigned long flags = KSWORD_ARK_WIN32K_QUERY_FLAG_INCLUDE_ALL, unsigned long sessionId = 0UL, unsigned long processId = 0UL, unsigned long threadId = 0UL, unsigned long maxEntries = KSWORD_ARK_WIN32K_DEFAULT_MAX_ENTRIES) const;
         Win32kEventHooksResult queryWin32kEventHooks(unsigned long flags = KSWORD_ARK_WIN32K_QUERY_FLAG_INCLUDE_ALL, unsigned long sessionId = 0UL, unsigned long processId = 0UL, unsigned long threadId = 0UL, unsigned long maxEntries = KSWORD_ARK_WIN32K_DEFAULT_MAX_ENTRIES) const;
         Win32kWindowRuntimeDetailResult queryWin32kWindowDetail(std::uint64_t hwnd, unsigned long processId = 0UL, unsigned long threadId = 0UL, unsigned long flags = KSWORD_ARK_WIN32K_QUERY_FLAG_INCLUDE_DIAGNOSTICS) const;

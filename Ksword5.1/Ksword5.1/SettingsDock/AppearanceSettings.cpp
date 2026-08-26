@@ -271,6 +271,16 @@ namespace
         return std::clamp(rawSeconds, 0, 60);
     }
 
+    int clampNotificationMaximumVisibleLogCards(const int rawCount)
+    {
+        return std::clamp(rawCount, 0, 100);
+    }
+
+    int clampNotificationLogMaximumLines(const int rawLines)
+    {
+        return std::clamp(rawLines, 1, 50);
+    }
+
     // normalizeCustomRgbColor 作用：只接受完整的 RGB 色值，避免无效配置进入配色计算。
     // 空值代表使用对应颜色角色的产品默认值。
     QString normalizeCustomRgbColor(const QString& rawColorText)
@@ -389,9 +399,10 @@ namespace
         defaultSettings.launchMaximizedOnStartup = true;
         defaultSettings.startupTopMostEnabled = false;
         defaultSettings.autoRequestAdminOnStartup = true;
+        defaultSettings.preventMultipleInstances = true;
         defaultSettings.startupWindowScaleFactor = 1.0;
         defaultSettings.startupScaleRecommendPromptDisabled = false;
-        defaultSettings.unlockerShellContextMenuEnabled = true;
+        defaultSettings.unlockerShellContextMenuEnabled = false;
         defaultSettings.useWideScrollBars = false;
         defaultSettings.scrollBarAutoHideEnabled = false;
         defaultSettings.smoothScrollingEnabled = true;
@@ -401,6 +412,9 @@ namespace
         defaultSettings.notificationCardsEnabled = true;
         defaultSettings.notificationMinimumLevel = 2;
         defaultSettings.notificationLogDisplaySeconds = 10;
+        defaultSettings.notificationMaximumVisibleLogCards = 0;
+        defaultSettings.notificationLogHeightLimitEnabled = true;
+        defaultSettings.notificationLogMaximumLines = 5;
         defaultSettings.notificationDisplayPlacement = ks::settings::NotificationDisplayPlacement::Screen;
         defaultSettings.notificationStackDirection = ks::settings::NotificationStackDirection::BottomUp;
         defaultSettings.dumpAutoCheckEnabled = true;
@@ -449,6 +463,43 @@ ks::settings::ThemeMode ks::settings::themeModeFromJsonText(const QString& jsonT
         return ThemeMode::Dark;
     }
     return ThemeMode::FollowSystem;
+}
+
+QString ks::settings::detailDisplaySchemeToJsonText(const DetailDisplayScheme scheme)
+{
+    // JSON 文本保持英文稳定值，避免语言切换影响配置兼容性。
+    switch (scheme)
+    {
+    case DetailDisplayScheme::Right:
+        return QStringLiteral("right");
+    case DetailDisplayScheme::Embedded:
+        return QStringLiteral("embedded");
+    case DetailDisplayScheme::Floating:
+        return QStringLiteral("floating");
+    case DetailDisplayScheme::BottomCollapsed:
+    default:
+        return QStringLiteral("bottom_collapsed");
+    }
+}
+
+ks::settings::DetailDisplayScheme ks::settings::detailDisplaySchemeFromJsonText(
+    const QString& jsonText)
+{
+    // 未知或历史损坏值安全回退到默认方案，不让页面在启动时丢失详情入口。
+    const QString normalizedText = jsonText.trimmed().toLower();
+    if (normalizedText == QStringLiteral("right"))
+    {
+        return DetailDisplayScheme::Right;
+    }
+    if (normalizedText == QStringLiteral("embedded"))
+    {
+        return DetailDisplayScheme::Embedded;
+    }
+    if (normalizedText == QStringLiteral("floating"))
+    {
+        return DetailDisplayScheme::Floating;
+    }
+    return DetailDisplayScheme::BottomCollapsed;
 }
 
 QString ks::settings::appearanceSettingsJsonRelativePath()
@@ -598,6 +649,10 @@ ks::settings::AppearanceSettings ks::settings::loadAppearanceSettings()
     loadedSettings.autoRequestAdminOnStartup = rootObject.value(QStringLiteral("startup_auto_request_admin"))
         .toBool(loadedSettings.autoRequestAdminOnStartup);
 
+    // preventMultipleInstances 作用：读取“防止多开”开关，缺失时默认开启以保持旧版行为。
+    loadedSettings.preventMultipleInstances = rootObject.value(QStringLiteral("prevent_multiple_instances"))
+        .toBool(loadedSettings.preventMultipleInstances);
+
     // startupWindowScaleFactor 作用：读取“启动窗口缩放因子”，兼容旧字段 window_scale_factor。
     double rawWindowScaleFactor = loadedSettings.startupWindowScaleFactor;
     if (rootObject.contains(QStringLiteral("startup_window_scale_factor")))
@@ -631,6 +686,9 @@ ks::settings::AppearanceSettings ks::settings::loadAppearanceSettings()
     loadedSettings.sliderWheelAdjustEnabled = rootObject
         .value(QStringLiteral("slider_wheel_adjust_enabled"))
         .toBool(loadedSettings.sliderWheelAdjustEnabled);
+    loadedSettings.detailDisplayScheme = detailDisplaySchemeFromJsonText(
+        rootObject.value(QStringLiteral("detail_display_scheme"))
+        .toString(detailDisplaySchemeToJsonText(loadedSettings.detailDisplayScheme)));
     loadedSettings.fontFamily = rootObject
         .value(QStringLiteral("font_family"))
         .toString(loadedSettings.fontFamily)
@@ -647,6 +705,15 @@ ks::settings::AppearanceSettings ks::settings::loadAppearanceSettings()
     loadedSettings.notificationLogDisplaySeconds = clampNotificationDisplaySeconds(
         rootObject.value(QStringLiteral("notification_log_display_seconds"))
         .toInt(loadedSettings.notificationLogDisplaySeconds));
+    loadedSettings.notificationMaximumVisibleLogCards = clampNotificationMaximumVisibleLogCards(
+        rootObject.value(QStringLiteral("notification_maximum_visible_log_cards"))
+        .toInt(loadedSettings.notificationMaximumVisibleLogCards));
+    loadedSettings.notificationLogHeightLimitEnabled = rootObject
+        .value(QStringLiteral("notification_log_height_limit_enabled"))
+        .toBool(loadedSettings.notificationLogHeightLimitEnabled);
+    loadedSettings.notificationLogMaximumLines = clampNotificationLogMaximumLines(
+        rootObject.value(QStringLiteral("notification_log_maximum_lines"))
+        .toInt(loadedSettings.notificationLogMaximumLines));
     loadedSettings.notificationDisplayPlacement =
         rootObject.value(QStringLiteral("notification_display_placement")).toString()
         == QStringLiteral("main_window")
@@ -675,6 +742,10 @@ ks::settings::AppearanceSettings ks::settings::loadAppearanceSettings()
     loadedSettings.suppressDangerousActionConfirmations = rootObject
         .value(QStringLiteral("suppress_dangerous_action_confirmations"))
         .toBool(loadedSettings.suppressDangerousActionConfirmations);
+    // 未配置时维持关闭，确保旧版配置升级后也不会在普通驱动加载时扫描 BGP 私有字段。
+    loadedSettings.bugcheckDiagnosticsAutoInstallEnabled = rootObject
+        .value(QStringLiteral("bugcheck_diagnostics_auto_install_enabled"))
+        .toBool(loadedSettings.bugcheckDiagnosticsAutoInstallEnabled);
     loadedSettings.logWindowGeometryBase64 = rootObject
         .value(QStringLiteral("log_window_geometry_base64"))
         .toString();
@@ -747,6 +818,7 @@ bool ks::settings::saveAppearanceSettings(const AppearanceSettings& settings, QS
     rootObject.insert(QStringLiteral("startup_maximized"), settings.launchMaximizedOnStartup);
     rootObject.insert(QStringLiteral("startup_topmost_enabled"), settings.startupTopMostEnabled);
     rootObject.insert(QStringLiteral("startup_auto_request_admin"), settings.autoRequestAdminOnStartup);
+    rootObject.insert(QStringLiteral("prevent_multiple_instances"), settings.preventMultipleInstances);
     rootObject.insert(
         QStringLiteral("startup_window_scale_factor"),
         clampWindowScaleFactorInternal(settings.startupWindowScaleFactor));
@@ -769,6 +841,9 @@ bool ks::settings::saveAppearanceSettings(const AppearanceSettings& settings, QS
         QStringLiteral("slider_wheel_adjust_enabled"),
         settings.sliderWheelAdjustEnabled);
     rootObject.insert(
+        QStringLiteral("detail_display_scheme"),
+        detailDisplaySchemeToJsonText(settings.detailDisplayScheme));
+    rootObject.insert(
         QStringLiteral("font_family"),
         settings.fontFamily.trimmed());
     rootObject.insert(
@@ -783,6 +858,15 @@ bool ks::settings::saveAppearanceSettings(const AppearanceSettings& settings, QS
     rootObject.insert(
         QStringLiteral("notification_log_display_seconds"),
         clampNotificationDisplaySeconds(settings.notificationLogDisplaySeconds));
+    rootObject.insert(
+        QStringLiteral("notification_maximum_visible_log_cards"),
+        clampNotificationMaximumVisibleLogCards(settings.notificationMaximumVisibleLogCards));
+    rootObject.insert(
+        QStringLiteral("notification_log_height_limit_enabled"),
+        settings.notificationLogHeightLimitEnabled);
+    rootObject.insert(
+        QStringLiteral("notification_log_maximum_lines"),
+        clampNotificationLogMaximumLines(settings.notificationLogMaximumLines));
     rootObject.insert(
         QStringLiteral("notification_display_placement"),
         settings.notificationDisplayPlacement == NotificationDisplayPlacement::MainWindow
@@ -808,6 +892,9 @@ bool ks::settings::saveAppearanceSettings(const AppearanceSettings& settings, QS
     rootObject.insert(
         QStringLiteral("suppress_dangerous_action_confirmations"),
         settings.suppressDangerousActionConfirmations);
+    rootObject.insert(
+        QStringLiteral("bugcheck_diagnostics_auto_install_enabled"),
+        settings.bugcheckDiagnosticsAutoInstallEnabled);
     rootObject.insert(
         QStringLiteral("log_window_geometry_base64"),
         settings.logWindowGeometryBase64.trimmed());

@@ -317,11 +317,9 @@ namespace ks::ui
             "}"
             "#ksCommandExecutionPopup QLabel{"
             "color:%3;"
-            "font-size:11px;"
             "}"
             "#ksCommandExecutionPopup QLabel#ksCommandExecutionPopupTitle{"
             "color:%4;"
-            "font-size:13px;"
             "font-weight:600;"
             "}"
             "#ksCommandExecutionPopup QLineEdit,"
@@ -359,11 +357,9 @@ namespace ks::ui
             "}"
             "#ksCommandExecutionPopup QLabel#ksCommandExecutionPopupHint{"
             "color:%3;"
-            "font-size:10px;"
             "}"
             "#ksCommandExecutionPopup QCheckBox{"
             "color:%4;"
-            "font-size:11px;"
             "}")
             .arg(
                 backgroundHex,

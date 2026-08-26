@@ -38,6 +38,7 @@
 #include <QLabel>
 #include <QList>
 #include <QPainter>
+#include <QPainterPath>
 #include <QPaintEvent>
 #include <QPalette>
 #include <QPen>
@@ -49,6 +50,7 @@
 #include <QPropertyAnimation>
 #include <QRectF>
 #include <QResizeEvent>
+#include <QRegion>
 #include <QSizePolicy>
 #include <QScrollBar>
 #include <QScrollArea>
@@ -91,6 +93,7 @@
 #include "PluginHost.h"
 #include "Internationalization/LanguageManager.h"
 #include "UI/CodeEditorWidget.h"
+#include "UI/DetailLayoutRegistry.h"
 #include "UI/GlobalDialogTheme.h"
 #include "UI/GlobalUiBaseStyle.h"
 #include "UI/GlobalUiSearch.h"
@@ -101,6 +104,7 @@
 #include "UI/ThemedMessageBox.h"
 #include "theme.h"
 #include "ksword/process/process.h"
+#include "../../shared/crash/WinCrashHandler.h"
 #include "../../shared/KswordArkLogProtocol.h"
 // 驱动启动阶段记录的键名与阶段枚举，R0/R3 共用同一份定义。
 #include "../../shared/KswordArkStartupProtocol.h"
@@ -1469,6 +1473,28 @@ namespace
         return KswordTheme::ThemedComboBoxPopupViewStyle();
     }
 
+    // applyComboPopupRoundedMask 作用：
+    // - QComboBox Popup 是独立顶层窗口，QSS 的 border-radius 只能改变绘制，不能裁掉原生矩形窗口四角；
+    // - 用与按钮/组合框相同的主题圆角更新窗口区域，避免不透明 palette 在四角露出直角底色；
+    // - Popup 每次显示或尺寸变化后都会重算，兼容条目数量、屏幕可用空间导致的动态高度变化。
+    void applyComboPopupRoundedMask(QWidget* const popupContainer)
+    {
+        if (popupContainer == nullptr ||
+            !popupContainer->windowFlags().testFlag(Qt::Popup) ||
+            popupContainer->width() <= 0 ||
+            popupContainer->height() <= 0)
+        {
+            return;
+        }
+
+        QPainterPath popupPath;
+        popupPath.addRoundedRect(
+            QRectF(QPointF(0.0, 0.0), QSizeF(popupContainer->size())),
+            KswordTheme::ControlCornerRadius,
+            KswordTheme::ControlCornerRadius);
+        popupContainer->setMask(QRegion(popupPath.toFillPolygon().toPolygon()));
+    }
+
     // applyOpaqueComboPopupTheme 作用：
     // - 输入：任意 QComboBox；
     // - 处理：直接主题化其 Popup QFrame、列表视图及 viewport；
@@ -1486,17 +1512,22 @@ namespace
             return;
         }
 
+        QWidget* const popupContainer = itemView->window();
+        const bool hasDedicatedPopupContainer =
+            popupContainer != nullptr &&
+            popupContainer != comboBox &&
+            popupContainer->windowFlags().testFlag(Qt::Popup);
+        if (hasDedicatedPopupContainer)
+        {
+            applyComboPopupRoundedMask(popupContainer);
+        }
+
         const bool autoThemed = itemView->property(kKswordComboPopupAutoThemedPropertyName).toBool();
         if (!autoThemed && !itemView->styleSheet().trimmed().isEmpty())
         {
             return;
         }
 
-        QWidget* const popupContainer = itemView->window();
-        const bool hasDedicatedPopupContainer =
-            popupContainer != nullptr &&
-            popupContainer != comboBox &&
-            popupContainer->windowFlags().testFlag(Qt::Popup);
         if (hasDedicatedPopupContainer)
         {
             applyOpaqueComboPopupPalette(popupContainer);
@@ -1505,10 +1536,12 @@ namespace
                 "  background-color:%1 !important;"
                 "  color:%2 !important;"
                 "  border:1px solid %3 !important;"
+                "  border-radius:%4px;"
                 "}")
                 .arg(KswordTheme::SurfaceColorHex())
                 .arg(KswordTheme::TextPrimaryColorHex())
-                .arg(KswordTheme::BorderColorHex()));
+                .arg(KswordTheme::BorderColorHex())
+                .arg(KswordTheme::ControlCornerRadius));
         }
 
         applyOpaqueComboPopupPalette(itemView);
@@ -1518,7 +1551,7 @@ namespace
     }
 
     // GlobalComboPopupThemeFilter 作用：
-    // - 监听应用范围内的 Popup 显示事件；
+    // - 监听应用范围内的 Popup 显示和尺寸变化事件；
     // - 对新建、懒加载和主题切换后的普通组合框，重新执行不透明列表背景主题化；
     // - 组合框本体可保留业务局部样式，但只要 Popup 没有直接样式就统一补齐不透明列表表面。
     class GlobalComboPopupThemeFilter final : public QObject
@@ -1532,7 +1565,19 @@ namespace
     protected:
         bool eventFilter(QObject* watchedObject, QEvent* eventObject) override
         {
-            if (watchedObject == nullptr || eventObject == nullptr || eventObject->type() != QEvent::Show)
+            if (watchedObject == nullptr || eventObject == nullptr)
+            {
+                return QObject::eventFilter(watchedObject, eventObject);
+            }
+
+            const QEvent::Type eventType = eventObject->type();
+            QWidget* const watchedWidget = qobject_cast<QWidget*>(watchedObject);
+            const bool isPopupResize =
+                eventType == QEvent::Resize &&
+                watchedWidget != nullptr &&
+                watchedWidget == watchedWidget->window() &&
+                watchedWidget->windowFlags().testFlag(Qt::Popup);
+            if (eventType != QEvent::Show && !isPopupResize)
             {
                 return QObject::eventFilter(watchedObject, eventObject);
             }
@@ -1540,9 +1585,9 @@ namespace
             QAbstractItemView* itemView = qobject_cast<QAbstractItemView*>(watchedObject);
             if (itemView == nullptr)
             {
-                if (QWidget* const widget = qobject_cast<QWidget*>(watchedObject))
+                if (watchedWidget != nullptr)
                 {
-                    itemView = widget->findChild<QAbstractItemView*>();
+                    itemView = watchedWidget->findChild<QAbstractItemView*>();
                 }
             }
 
@@ -2973,6 +3018,44 @@ namespace
         {
             argumentList.push_back(markerText);
         }
+        return argumentList;
+    }
+
+    // argumentsWithPrivilegeRestartTakeover 作用：
+    // - 输入 argumentList：当前 Qt 参数；predecessorProcessId：即将退出的旧实例 PID；
+    // - 处理：替换可能由更早重启遗留的等待 PID，并附加本次权限切换接管参数；
+    // - 返回：新实例可用于等待同一可执行文件父进程退出的参数列表。
+    QStringList argumentsWithPrivilegeRestartTakeover(
+        QStringList argumentList,
+        const DWORD predecessorProcessId)
+    {
+        argumentList = argumentsWithPrivilegeRestartMarker(std::move(argumentList));
+        const QString waitPidArgument =
+            QString::fromWCharArray(ks::crash::kCrashRestartWaitPidArgument);
+        for (int index = 1; index < argumentList.size();)
+        {
+            if (QString::compare(
+                    argumentList.at(index),
+                    waitPidArgument,
+                    Qt::CaseInsensitive) != 0)
+            {
+                ++index;
+                continue;
+            }
+
+            argumentList.removeAt(index);
+            if (index < argumentList.size())
+            {
+                bool isProcessId = false;
+                (void)argumentList.at(index).toULongLong(&isProcessId);
+                if (isProcessId)
+                {
+                    argumentList.removeAt(index);
+                }
+            }
+        }
+        argumentList.push_back(waitPidArgument);
+        argumentList.push_back(QString::number(predecessorProcessId));
         return argumentList;
     }
 
@@ -7263,7 +7346,6 @@ QString MainWindow::buildTopActionButtonStyle() const
         "  border-radius:4px;"
         "  margin:0;"
         "  padding:2px 8px 2px 6px;"
-        "  font-size:12px;"
         "  font-weight:600;"
         "  text-align:left;"
         "}"
@@ -7460,6 +7542,34 @@ void MainWindow::showSettingsPanelFromMenu(bool showLanguageTab)
         this,
         [this](const ks::settings::AppearanceSettings& settings) {
             applyAppearanceSettings(settings, QStringLiteral("顶部菜单设置变更"));
+        });
+    connect(
+        settingsPanel,
+        &SettingsDock::bugcheckDiagnosticsAutoInstallChanged,
+        this,
+        [this](const bool enabled)
+        {
+            m_currentAppearanceSettings.bugcheckDiagnosticsAutoInstallEnabled = enabled;
+            updateBugcheckDiagnosticsEntryVisibility();
+        });
+    connect(
+        settingsPanel,
+        &SettingsDock::bugcheckDiagnosticsInstallationStarted,
+        this,
+        [this]()
+        {
+            m_bugcheckDiagnosticsEntryRequestedForSession = true;
+            updateBugcheckDiagnosticsEntryVisibility();
+        });
+    connect(
+        settingsPanel,
+        &SettingsDock::bugcheckDiagnosticsInstalledForSession,
+        this,
+        [this]()
+        {
+            m_bugcheckDiagnosticsInstalledForSession = true;
+            updateBugcheckDiagnosticsEntryVisibility();
+            queueBugcheckVerdictResourceUpload();
         });
     dialogLayout.addWidget(settingsScrollArea, 1);
 
@@ -7846,7 +7956,19 @@ void MainWindow::initPrivilegeStatusButtons()
             wchar_t desktop[] = L"winsta0\\default";
             si.lpDesktop = desktop;          // 显示在交互式桌面
 
-            if (!CreateProcessWithTokenW(hNewToken, LOGON_NETCREDENTIALS_ONLY, selfPath.c_str(), NULL,
+            // SYSTEM 权限切换必须携带内部重启标记，否则默认开启的防多开会让新实例立即退出。
+            const QStringList launchArgumentList = argumentsWithPrivilegeRestartTakeover(
+                QCoreApplication::arguments(),
+                ::GetCurrentProcessId());
+            QString commandLineText = quoteQStringCommandLineArgument(QString::fromStdWString(selfPath));
+            for (int index = 1; index < launchArgumentList.size(); ++index)
+            {
+                commandLineText += QLatin1Char(' ');
+                commandLineText += quoteQStringCommandLineArgument(launchArgumentList.at(index));
+            }
+            std::wstring commandLineWide = commandLineText.toStdWString();
+
+            if (!CreateProcessWithTokenW(hNewToken, LOGON_NETCREDENTIALS_ONLY, selfPath.c_str(), commandLineWide.data(),
                 NORMAL_PRIORITY_CLASS, NULL, NULL, &si, &pi))
             {
                 kLogEvent logEvent;
@@ -7864,6 +7986,7 @@ void MainWindow::initPrivilegeStatusButtons()
             CloseHandle(hNewToken);
             CloseHandle(pi.hProcess);
             CloseHandle(pi.hThread);
+            close();
         }
 
         // Qt ignores the slot return value, but early failure paths in this
@@ -8580,6 +8703,86 @@ void MainWindow::stopR0RuntimeConsumersBeforeServiceStop()
     }
 }
 
+void MainWindow::updateBugcheckDiagnosticsEntryVisibility()
+{
+    const bool shouldShowEntry =
+        m_currentAppearanceSettings.bugcheckDiagnosticsAutoInstallEnabled ||
+        m_bugcheckDiagnosticsInstalledForSession ||
+        m_bugcheckDiagnosticsEntryRequestedForSession;
+    if (m_miscWidget != nullptr)
+    {
+        // 杂项页使用隐藏而非删除的 Tab，自动安装取消后已构造页面仍能安全析构。
+        m_miscWidget->setBugcheckDiagnosticsVisible(shouldShowEntry);
+    }
+}
+
+void MainWindow::installBugcheckDiagnosticsAfterServiceStart()
+{
+    if (!m_r0DriverServiceRunning ||
+        !m_currentAppearanceSettings.bugcheckDiagnosticsAutoInstallEnabled)
+    {
+        return;
+    }
+
+    // BGP 解析和预生成可能耗时，自动安装与手动安装都在工作线程等待 R0 IOCTL。
+    const QPointer<MainWindow> guardedSelf(this);
+    QThreadPool::globalInstance()->start(
+        [guardedSelf]()
+        {
+            const ksword::ark::BugcheckDiagnosticsResult result =
+                ksword::ark::DriverClient().configureBugcheckDiagnostics(
+                    KSWORD_ARK_BUGCHECK_DIAGNOSTICS_ACTION_INSTALL);
+            QCoreApplication* const application = QCoreApplication::instance();
+            if (application == nullptr)
+            {
+                return;
+            }
+
+            if (!guardedSelf.isNull())
+            {
+                QMetaObject::invokeMethod(
+                    guardedSelf,
+                    [guardedSelf, result]()
+                {
+                    if (guardedSelf == nullptr)
+                    {
+                        return;
+                    }
+
+                    kLogEvent logEvent;
+                    if (result.io.ok &&
+                        result.response.status ==
+                            KSWORD_ARK_BUGCHECK_DIAGNOSTICS_STATUS_OK)
+                    {
+                        guardedSelf->m_bugcheckDiagnosticsInstalledForSession = true;
+                        guardedSelf->updateBugcheckDiagnosticsEntryVisibility();
+                        queueBugcheckVerdictResourceUpload();
+                        info << logEvent
+                            << "[MainWindow][R0] 已按配置安装蓝屏诊断, callbackMask=0x"
+                            << std::hex
+                            << result.response.callbackMask
+                            << std::dec
+                            << eol;
+                    }
+                    else
+                    {
+                        warn << logEvent
+                            << "[MainWindow][R0] 自动安装蓝屏诊断失败, win32="
+                            << result.io.win32Error
+                            << ", protocol="
+                            << result.response.status
+                            << ", ntstatus=0x"
+                            << std::hex
+                            << static_cast<unsigned long>(result.response.lastStatus)
+                            << std::dec
+                            << eol;
+                    }
+                },
+                Qt::QueuedConnection);
+            }
+        });
+}
+
 void MainWindow::startR0RuntimeConsumersAfterServiceStart()
 {
     // R0 启动或确认运行后恢复本进程运行时消费者：
@@ -8595,7 +8798,8 @@ void MainWindow::startR0RuntimeConsumersAfterServiceStart()
         return;
     }
 
-    queueBugcheckVerdictResourceUpload();
+    // 蓝屏诊断资源只能在诊断安装成功后上传，避免默认启动触碰未初始化的 BGP 路径。
+    installBugcheckDiagnosticsAfterServiceStart();
     startR0DriverLogPoller();
 
     if (CallbackPromptManager* callbackPromptManager = CallbackPromptManager::ensureGlobalManager(this))
@@ -8923,6 +9127,10 @@ bool MainWindow::stopR0DriverService(const bool suppressErrorDialog)
             if (operationOutcome.succeeded)
             {
                 guardedSelf->m_r0DriverServiceRunning = false;
+                // 本次安装只绑定当前内核驱动映像，服务卸载成功后入口随之恢复配置态可见性。
+                guardedSelf->m_bugcheckDiagnosticsInstalledForSession = false;
+                guardedSelf->m_bugcheckDiagnosticsEntryRequestedForSession = false;
+                guardedSelf->updateBugcheckDiagnosticsEntryVisibility();
                 kLogEvent logEvent;
                 info << logEvent << "[MainWindow][R0] 已停止并删除 KswordARK 驱动服务。" << eol;
                 guardedSelf->refreshPrivilegeStatusButtons();
@@ -9521,17 +9729,11 @@ QWidget* MainWindow::createDockPlaceholderWidget(const QString& titleText) const
     placeholderLayout->setContentsMargins(24, 24, 24, 24);
     placeholderLayout->setSpacing(8);
 
-    QLabel* titleLabel = new QLabel(QStringLiteral("%1 页面正在延迟初始化...").arg(titleText), placeholderWidget);
+    QLabel* titleLabel = new QLabel(QStringLiteral("%1 页面正在初始化...").arg(titleText), placeholderWidget);
     titleLabel->setStyleSheet(QStringLiteral("font-size:16px;font-weight:700;"));
     titleLabel->setAlignment(Qt::AlignCenter);
     placeholderLayout->addStretch(1);
     placeholderLayout->addWidget(titleLabel);
-
-    QLabel* hintLabel = new QLabel(QStringLiteral("主窗口已优先完成首屏加载，页面内容将在首次打开时加载。"), placeholderWidget);
-    hintLabel->setWordWrap(true);
-    hintLabel->setAlignment(Qt::AlignCenter);
-    hintLabel->setStyleSheet(QStringLiteral("font-size:12px;color:%1;").arg(KswordTheme::TextSecondaryHex()));
-    placeholderLayout->addWidget(hintLabel);
 
     // 阶段文案与进度条：初始化各阶段由 updateLazyDockPlaceholderProgress 同步刷新。
     // 首次创建时留空/归零，页面尚未开始加载，不该显示任何进度。
@@ -9709,6 +9911,10 @@ void MainWindow::ensureDockContentInitialized(ads::CDockWidget* dockWidget)
         // 扫描器 / 转储分析 / 插件已并入杂项页，不再各自占用顶层 Dock，
         // 它们随杂项页内部的页签懒加载，这里只需构造杂项容器本身。
         if (m_miscWidget == nullptr) { m_miscWidget = new MiscDock(this); }
+        m_miscWidget->setBugcheckDiagnosticsVisible(
+            m_currentAppearanceSettings.bugcheckDiagnosticsAutoInstallEnabled ||
+            m_bugcheckDiagnosticsInstalledForSession ||
+            m_bugcheckDiagnosticsEntryRequestedForSession);
         realWidget = m_miscWidget;
     }
     if (realWidget == nullptr)
@@ -10227,7 +10433,11 @@ void MainWindow::initDockWidgets()
     if (shouldEagerLoad(QStringLiteral("handle"))) { m_handleWidget = new HandleDock(this); }
     if (shouldEagerLoad(QStringLiteral("startup"))) { m_startupWidget = new StartupDock(this); }
     if (shouldEagerLoad(QStringLiteral("service"))) { m_serviceWidget = new ServiceDock(this); }
-    if (shouldEagerLoad(QStringLiteral("misc"))) { m_miscWidget = new MiscDock(this); }
+    if (shouldEagerLoad(QStringLiteral("misc")))
+    {
+        m_miscWidget = new MiscDock(this);
+        updateBugcheckDiagnosticsEntryVisibility();
+    }
 
     reportStartupProgress(
         60,
@@ -10777,6 +10987,7 @@ void MainWindow::openProcessDetailByIdentity(
             static_cast<std::uint32_t>(pid),
             static_cast<std::uint64_t>(creationTime100ns));
     }
+    // 历史目标失效时 ProcessDock 会弹出明确提示；详情请求不改变当前 Dock 标签。
 }
 
 void MainWindow::focusServiceDockByName(const QString& serviceNameText)
@@ -11045,16 +11256,20 @@ void MainWindow::checkRecentCrashDumps()
         ? QStringLiteral("%1 MB").arg(sizeMegabytes, 0, 'f', 1)
         : QStringLiteral("%1 KB").arg(recent.fileSizeBytes / 1024.0, 0, 'f', 1);
 
-    QString bodyText = QStringLiteral(
-        "检测到系统在最近 24 小时内产生了新的崩溃转储：\n\n"
-        "文件：%1\n时间：%2\n大小：%3\n\n"
-        "是否现在解析它？")
+    QString bodyText = ks::i18n::text(
+        QStringLiteral("mainwindow.dump.found.body"),
+        QStringLiteral(
+            "检测到系统在最近 24 小时内产生了新的崩溃转储：\n\n"
+            "文件：%1\n时间：%2\n大小：%3\n\n"
+            "是否现在解析它？"))
         .arg(recent.filePath)
         .arg(recent.modifiedTime.toString(QStringLiteral("yyyy-MM-dd HH:mm:ss")))
         .arg(sizeText);
     if (recent.totalRecentCount > 1)
     {
-        bodyText += QStringLiteral("\n\n（窗口内共有 %1 个转储，这里列出的是最新的一个。）")
+        bodyText += ks::i18n::text(
+            QStringLiteral("mainwindow.dump.found.multiple"),
+            QStringLiteral("\n\n（窗口内共有 %1 个转储，这里列出的是最新的一个。）"))
             .arg(recent.totalRecentCount);
     }
 
@@ -11063,7 +11278,7 @@ void MainWindow::checkRecentCrashDumps()
     messageBox.setWindowTitle(
         ks::i18n::text(QStringLiteral("mainwindow.dump.found.title"),
             QStringLiteral("发现新的崩溃转储")));
-    messageBox.setText(ks::i18n::sourceText(bodyText));
+    messageBox.setText(bodyText);
 
     QCheckBox* const disableCheckBox = new QCheckBox(
         ks::i18n::text(QStringLiteral("mainwindow.dump.found.disable"),
@@ -11374,6 +11589,7 @@ void MainWindow::applyAppearanceSettings(
         && (themeVisualRefreshRequired || backgroundChanged || fontChanged);
 
     m_currentAppearanceSettings = settings;
+    ks::ui::DetailLayoutRegistry::applyGlobalScheme(settings.detailDisplayScheme);
     if (smoothScrollingChanged)
     {
         ks::ui::SetGlobalSmoothScrollingEnabled(settings.smoothScrollingEnabled);

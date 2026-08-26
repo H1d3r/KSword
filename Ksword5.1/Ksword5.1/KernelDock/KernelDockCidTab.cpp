@@ -12,6 +12,7 @@
 
 #include "../ArkDriverClient/ArkDriverClient.h"
 #include "../UI/CodeEditorWidget.h"
+#include "../UI/DetailLayoutRegistry.h"
 #include "../UI/TableInteractionSupport.h"
 #include "../theme.h"
 
@@ -185,7 +186,7 @@ void KernelDockCidTab::initializeUi()
     m_toolbarLayout->setSpacing(6);
 
     m_refreshButton = new QPushButton(QIcon(":/Icon/process_refresh.svg"), QString(), this);
-    m_refreshButton->setFixedWidth(34);
+    KswordTheme::ApplyCompactIconButtonMetrics(m_refreshButton);
     m_refreshButton->setToolTip(kernelText("kernel.cid.toolbar.refresh.tooltip", QStringLiteral("刷新 CID / cross-view 证据")));
     m_refreshButton->setStyleSheet(blueButtonStyle());
 
@@ -237,6 +238,8 @@ void KernelDockCidTab::initializeUi()
     m_detailEditor->setReadOnly(true);
     m_detailEditor->setText(kernelText("kernel.cid.detail.initial", QStringLiteral("请选择一条 cross-view 记录查看详情。")));
     rootLayout->addWidget(m_detailEditor, 1);
+
+    ks::ui::DetailLayoutRegistry::registerHost(m_table, m_detailEditor, this);
 }
 
 void KernelDockCidTab::initializeConnections()
@@ -502,6 +505,8 @@ void KernelDockCidTab::rebuildTable()
     {
         return;
     }
+
+    ks::ui::DetailLayoutRegistry::prepareDataRebuild(m_detailEditor);
 
     m_table->setSortingEnabled(false);
     m_table->setRowCount(0);

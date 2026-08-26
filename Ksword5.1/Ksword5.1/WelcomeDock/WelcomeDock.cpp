@@ -57,12 +57,12 @@ namespace
     // kReleaseVersionText 作用：
     // - 欢迎页显示的版本号文本；
     // - 由发布脚本按注释标记替换。
-    const QString kReleaseVersionText = QStringLiteral("5.1.4.1 Alpha"); // RELEASE_META_VERSION_MARKER
+    const QString kReleaseVersionText = QStringLiteral("5.1.4.3-Pre"); // RELEASE_META_VERSION_MARKER
 
     // kReleaseBuildTimeText 作用：
     // - 欢迎页显示的精确编译时间；
     // - 由发布脚本按注释标记替换。
-    const QString kReleaseBuildTimeText = QStringLiteral("2026-05-02 22:00:00.093 +08:00"); // RELEASE_META_BUILD_TIME_MARKER
+    const QString kReleaseBuildTimeText = QStringLiteral("2026-08-17 22:41:10.119 +08:00"); // RELEASE_META_BUILD_TIME_MARKER
 
     // kQQGroupInviteUrl 作用：QQ 群按钮点击后打开的官方加群邀请链接。
     const QString kQQGroupInviteUrl = QStringLiteral("https://qm.qq.com/q/5tWNPfIxkk");
@@ -158,7 +158,7 @@ WelcomeDock::WelcomeDock(QWidget* parent) : QWidget(parent) {
     // 捐赠者信息：放在欢迎页底部扩展信息末尾，用于公开感谢当前捐赠者。
     m_donors = new QLabel(this);
     // 文本格式：使用 HTML 加粗标题，名单保持纯文本，便于后续追加更多捐赠者。
-    m_donors->setText(QStringLiteral("<b>捐赠者：</b>Extrella_Explorer,Mapleleaf,存钱买油条（云舟API）,Txt Text,Solicom,東雪蓮可爱捏,JIAN2486,NtKrnl64,一花一树叶,hzh"));
+    m_donors->setText(QStringLiteral("<b>捐赠者：</b>长空落日,Extrella_Explorer,Txt Text,Mapleleaf,存钱买油条（云舟API）,Solicom,東雪蓮可爱捏,JIAN2486,NtKrnl64,一花一树叶,hzh"));
     // 自动换行：当 Dock 宽度较窄时，捐赠者名单可自然折行。
     m_donors->setWordWrap(true);
     // 允许复制：用户可以直接复制捐赠者名单。

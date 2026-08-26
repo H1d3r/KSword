@@ -457,6 +457,10 @@ KswordARKBugcheckRefreshProcessCache(
     while (process != NULL && visited < 65536UL) {
         PEPROCESS nextProcess;
 
+        if (!NT_SUCCESS(KswordARKBugcheckControlCheckAbort())) {
+            break;
+        }
+
         nextProcess = getNextProcess(process);
         KswordARKBugcheckPublishProcess(
             process,
@@ -628,6 +632,9 @@ KswordARKBugcheckRefreshModuleCache(
 
     count = bytes / sizeof(AUX_MODULE_EXTENDED_INFO);
     for (index = 0; index < count; ++index) {
+        if (!NT_SUCCESS(KswordARKBugcheckControlCheckAbort())) {
+            break;
+        }
         name = (PCSTR)modules[index].FullPathName;
         if (modules[index].FileNameOffset < AUX_KLIB_MODULE_PATH_LEN) {
             name = (PCSTR)&modules[index].FullPathName[modules[index].FileNameOffset];
@@ -995,13 +1002,23 @@ KswordARKBugcheckInitialize(
     _In_ WDFDEVICE ControlDevice
     )
 {
+#if !KSWORD_ARK_BUGCHECK_DIAGNOSTICS_ENABLED
+    UNREFERENCED_PARAMETER(DriverObject);
+    UNREFERENCED_PARAMETER(ControlDevice);
+    return STATUS_NOT_SUPPORTED;
+#else
     NTSTATUS bgpStatus;
     NTSTATUS callbackStatus;
+    NTSTATUS abortStatus;
     NTSTATUS logStatus;
     NTSTATUS panelStatus;
 
     if (DriverObject == NULL || ControlDevice == WDF_NO_HANDLE) {
         return STATUS_INVALID_PARAMETER;
+    }
+    abortStatus = KswordARKBugcheckControlCheckAbort();
+    if (!NT_SUCCESS(abortStatus)) {
+        return abortStatus;
     }
 
     RtlZeroMemory(&g_KswordArkBugcheckState, sizeof(g_KswordArkBugcheckState));
@@ -1024,8 +1041,22 @@ KswordARKBugcheckInitialize(
         panelStatus = bgpStatus;
     }
 
+    // 超时或卸载取消属于控制层终止，不得继续注册任何 BugCheck 回调。
+    abortStatus = KswordARKBugcheckControlCheckAbort();
+    if (!NT_SUCCESS(abortStatus)) {
+        return abortStatus;
+    }
+
     KswordARKBugcheckRefreshModuleCache();
+    abortStatus = KswordARKBugcheckControlCheckAbort();
+    if (!NT_SUCCESS(abortStatus)) {
+        return abortStatus;
+    }
     KswordARKBugcheckRefreshProcessCache();
+    abortStatus = KswordARKBugcheckControlCheckAbort();
+    if (!NT_SUCCESS(abortStatus)) {
+        return abortStatus;
+    }
     InterlockedExchange(&g_KswordArkBugcheckState.Active, 1);
 
     KeInitializeCallbackRecord(&g_KswordArkBugcheckState.ClassicRecord);
@@ -1061,6 +1092,12 @@ KswordARKBugcheckInitialize(
             KbCallbackTriageDumpData,
             g_KswordArkBugcheckComponent);
 
+    abortStatus = KswordARKBugcheckControlCheckAbort();
+    if (!NT_SUCCESS(abortStatus)) {
+        KswordARKBugcheckUninitialize();
+        return abortStatus;
+    }
+
     // Persist both successful and failed preparation results before a target
     // machine can be crashed for display testing.
     callbackStatus =
@@ -1093,6 +1130,7 @@ KswordARKBugcheckInitialize(
     }
 
     return STATUS_SUCCESS;
+#endif
 }
 
 VOID
@@ -1100,6 +1138,9 @@ KswordARKBugcheckUninitialize(
     VOID
     )
 {
+#if !KSWORD_ARK_BUGCHECK_DIAGNOSTICS_ENABLED
+    return;
+#else
     InterlockedExchange(&g_KswordArkBugcheckState.TrackingReady, 0);
     KeMemoryBarrier();
     InterlockedExchange(&g_KswordArkBugcheckState.Active, 0);
@@ -1128,4 +1169,5 @@ KswordARKBugcheckUninitialize(
 
     KswordARKBugcheckPanelShutdown();
     KswordARKBugcheckBgpShutdown();
+#endif
 }

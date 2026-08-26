@@ -38,6 +38,9 @@ private slots:
     // refreshSourceDiagnostics：刷新多源连接状态文字。
     void refreshSourceDiagnostics();
 
+    // restartTaskbar：启动等待当前 PID 的接替实例，并退出本进程释放 AppBar。
+    void restartTaskbar();
+
 private:
     // m_notificationService 是全局服务，不由本对话框拥有或销毁。
     TaskbarNotificationService* m_notificationService;
@@ -54,6 +57,9 @@ private:
 
     // m_testEarthquakeButton 立即插播本地测试地震，用于验证红色警报态和队列暂停。
     QPushButton* m_testEarthquakeButton;
+
+    // m_restartTaskbarButton 启动 PID 感知的接替实例，使旧进程先释放所有 AppBar 资源。
+    QPushButton* m_restartTaskbarButton;
 
     // m_refreshTimer 在窗口显示期间周期刷新连接诊断，不修改业务状态。
     QTimer* m_refreshTimer;

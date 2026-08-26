@@ -9,7 +9,9 @@
 // ============================================================
 
 #include "../theme.h"
+#include "../UI/UI_All.h"
 #include "../UI/TableInteractionSupport.h"
+#include "../ksword/log/log.h"
 
 #include <QAbstractItemView>
 #include <QApplication>
@@ -26,6 +28,7 @@
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
 #include <QResizeEvent>
+#include <QSizePolicy>
 #include <QVBoxLayout>
 
 #ifndef NOMINMAX
@@ -480,7 +483,11 @@ void ThreadStackWindow::initializeUi()
     setAutoFillBackground(true);
     setStyleSheet(buildOpaqueDialogStyle(objectName()));
     setWindowTitle(QStringLiteral("线程调用栈 - TID %1").arg(m_target.threadId));
-    setMinimumSize(980, 620);
+    ks::ui::applyResponsiveWindowGeometry(
+        this,
+        parentWidget(),
+        QSize(980, 620),
+        QSize(720, 480));
 
     m_rootLayout = new QVBoxLayout(this);
     m_rootLayout->setContentsMargins(8, 8, 8, 8);
@@ -491,16 +498,18 @@ void ThreadStackWindow::initializeUi()
     m_toolbarLayout->setSpacing(6);
 
     m_refreshButton = new QPushButton(QIcon(":/Icon/process_refresh.svg"), QString(), this);
-    m_refreshButton->setFixedSize(28, 28);
+    KswordTheme::ApplyCompactIconButtonMetrics(m_refreshButton);
     m_refreshButton->setToolTip(QStringLiteral("重新捕获调用栈"));
     m_refreshButton->setStyleSheet(KswordTheme::ThemedButtonStyle());
 
     m_copyButton = new QPushButton(QIcon(":/Icon/process_copy_row.svg"), QString(), this);
-    m_copyButton->setFixedSize(28, 28);
+    KswordTheme::ApplyCompactIconButtonMetrics(m_copyButton);
     m_copyButton->setToolTip(QStringLiteral("复制全部调用栈"));
     m_copyButton->setStyleSheet(KswordTheme::ThemedButtonStyle());
 
     m_targetLabel = new QLabel(this);
+    m_targetLabel->setMinimumWidth(0);
+    m_targetLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     m_targetLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
     m_targetLabel->setText(QStringLiteral("PID=%1 TID=%2 进程=%3 Start=%4 Win32Start=%5")
         .arg(m_target.processId)
@@ -508,6 +517,7 @@ void ThreadStackWindow::initializeUi()
         .arg(m_target.processName.trimmed().isEmpty() ? QStringLiteral("Unknown") : m_target.processName)
         .arg(formatHex(m_target.startAddress, true))
         .arg(formatHex(m_target.win32StartAddress, true)));
+    m_targetLabel->setToolTip(m_targetLabel->text());
     m_targetLabel->setStyleSheet(QStringLiteral("color:%1;font-weight:600;").arg(KswordTheme::TextPrimaryHex()));
 
     m_toolbarLayout->addWidget(m_refreshButton);
@@ -519,6 +529,9 @@ void ThreadStackWindow::initializeUi()
     m_boundaryLabel->setStyleSheet(QStringLiteral("color:%1;font-weight:600;").arg(KswordTheme::TextSecondaryHex()));
 
     m_statusLabel = new QLabel(QStringLiteral("● 等待捕获"), this);
+    m_statusLabel->setWordWrap(true);
+    m_statusLabel->setMinimumWidth(0);
+    m_statusLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     m_statusLabel->setStyleSheet(QStringLiteral("color:%1;font-weight:600;").arg(KswordTheme::TextSecondaryHex()));
 
     m_frameTable = new QTreeWidget(this);
@@ -659,7 +672,15 @@ void ThreadStackWindow::applyCaptureResult(const std::uint64_t ticket, const Cap
         .arg(m_frames.size());
     if (!result.diagnosticText.trimmed().isEmpty())
     {
-        statusText += QStringLiteral(" | %1").arg(result.diagnosticText);
+        statusText += QStringLiteral(" | 存在诊断；详情已写入日志。");
+        kLogEvent diagnosticEvent;
+        warn << diagnosticEvent
+            << "[ThreadStackWindow] capture completed with diagnostics, pid="
+            << m_target.processId
+            << ", tid=" << m_target.threadId
+            << ", frameCount=" << m_frames.size()
+            << ", detail=" << result.diagnosticText.toStdString()
+            << eol;
     }
     m_statusLabel->setText(statusText);
     m_statusLabel->setStyleSheet(

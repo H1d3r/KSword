@@ -90,8 +90,20 @@ KswordARKBugcheckBgpShutdown(
     InterlockedExchange(&g_KswordArkBgp.State, KswordArkBgpStateUnloading);
     if (InterlockedExchange(&g_KswordArkBgp.LockHeld, 0) != 0 &&
         g_KswordArkBgp.Release != NULL) {
-        g_KswordArkBgp.Release();
+        KswordARKBugcheckBgpInvokeRelease();
     }
+    KeMemoryBarrier();
+    InterlockedExchange(&g_KswordArkBgp.ResolvedSnapshotReady, 0);
+    g_KswordArkBgp.Clear = NULL;
+    g_KswordArkBgp.Draw = NULL;
+    g_KswordArkBgp.Acquire = NULL;
+    g_KswordArkBgp.Release = NULL;
+    g_KswordArkBgp.GetResolution = NULL;
+    g_KswordArkBgp.GetBpp = NULL;
+    g_KswordArkBgp.ParseBitmap = NULL;
+    g_KswordArkBgp.DestroyRectangle = NULL;
+    g_KswordArkBgp.AcquireOwnership = NULL;
+    g_KswordArkBgp.FeatureMask = 0UL;
     g_KswordArkBgp.RequiredWidth = 0;
     g_KswordArkBgp.RequiredHeight = 0;
 }
@@ -125,6 +137,7 @@ KswordARKBugcheckBgpParseBitmap(
 {
     PVOID parsedRectangle;
     LONG state;
+    NTSTATUS abortStatus;
     NTSTATUS status;
 
     if (Rectangle == NULL) {
@@ -134,6 +147,10 @@ KswordARKBugcheckBgpParseBitmap(
     if (KeGetCurrentIrql() != PASSIVE_LEVEL) {
         return STATUS_INVALID_DEVICE_STATE;
     }
+    abortStatus = KswordARKBugcheckControlCheckAbort();
+    if (!NT_SUCCESS(abortStatus)) {
+        return abortStatus;
+    }
     state = InterlockedCompareExchange(&g_KswordArkBgp.State, 0, 0);
     if ((state != KswordArkBgpStateReady &&
          state != KswordArkBgpStateArmed) ||
@@ -142,6 +159,10 @@ KswordARKBugcheckBgpParseBitmap(
              &g_KswordArkBgp.ResourceUpdateActive,
              0,
              0) == 0) ||
+        InterlockedCompareExchange(
+            &g_KswordArkBgp.ResolvedSnapshotReady,
+            0,
+            0) == 0 ||
         g_KswordArkBgp.ParseBitmap == NULL) {
         return STATUS_DEVICE_NOT_READY;
     }
@@ -152,9 +173,18 @@ KswordARKBugcheckBgpParseBitmap(
     }
 
     parsedRectangle = NULL;
-    status = g_KswordArkBgp.ParseBitmap(Bitmap, &parsedRectangle);
+    status = KswordARKBugcheckBgpInvokeParseBitmap(
+        Bitmap,
+        &parsedRectangle);
     if (!NT_SUCCESS(status) || parsedRectangle == NULL) {
         return NT_SUCCESS(status) ? STATUS_UNSUCCESSFUL : status;
+    }
+
+    // 私有解析器返回后再检查一次预算；已创建的矩形必须在传播取消前立即销毁。
+    abortStatus = KswordARKBugcheckControlCheckAbort();
+    if (!NT_SUCCESS(abortStatus)) {
+        (VOID)KswordARKBugcheckBgpInvokeDestroyRectangle(parsedRectangle);
+        return abortStatus;
     }
 
     *Rectangle = parsedRectangle;
@@ -207,8 +237,13 @@ KswordARKBugcheckBgpDestroyRectangle(
     _In_opt_ PVOID Rectangle
     )
 {
-    if (Rectangle != NULL && g_KswordArkBgp.DestroyRectangle != NULL) {
-        (VOID)g_KswordArkBgp.DestroyRectangle(Rectangle);
+    if (Rectangle != NULL &&
+        InterlockedCompareExchange(
+            &g_KswordArkBgp.ResolvedSnapshotReady,
+            0,
+            0) != 0 &&
+        g_KswordArkBgp.DestroyRectangle != NULL) {
+        (VOID)KswordARKBugcheckBgpInvokeDestroyRectangle(Rectangle);
     }
 }
 
@@ -219,6 +254,10 @@ KswordARKBugcheckBgpArm(
     )
 {
     if (InterlockedCompareExchange(
+            &g_KswordArkBgp.ResolvedSnapshotReady,
+            0,
+            0) == 0 ||
+        InterlockedCompareExchange(
             &g_KswordArkBgp.State,
             0,
             0) != KswordArkBgpStateReady ||

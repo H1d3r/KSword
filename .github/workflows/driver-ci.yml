@@ -6,11 +6,14 @@ on:
   workflow_dispatch:
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
   group: driver-ci-${{ github.ref }}
-  cancel-in-progress: true
+  # Keep main pushes serialized to completion. A later non-driver push must not
+  # cancel the driver build that provides evidence for the resulting HEAD.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   changes:
@@ -32,10 +35,36 @@ jobs:
           EVENT_BEFORE: ${{ github.event.before }}
           EVENT_SHA: ${{ github.sha }}
           BASE_REF: ${{ github.base_ref }}
+          RUN_BRANCH: ${{ github.head_ref || github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
+          previous_run_id=0
+          previous_status='not_checked'
+          previous_conclusion='none'
+          if [[ "$EVENT_NAME" != "workflow_dispatch" ]]; then
+            if previous_run="$({
+              gh api --method GET \
+                -H 'Accept: application/vnd.github+json' \
+                "/repos/$GITHUB_REPOSITORY/actions/workflows/driver-ci.yml/runs" \
+                -f branch="$RUN_BRANCH" \
+                -f per_page=20 \
+                --jq "[.workflow_runs[] | select(.id != ${GITHUB_RUN_ID})][0] // {} | [(.id // 0), (.status // \"missing\"), (.conclusion // \"none\")] | @tsv"
+            } 2>&1)"; then
+              IFS=$'\t' read -r previous_run_id previous_status previous_conclusion <<< "$previous_run"
+            else
+              echo "Unable to query the previous Driver CI run: $previous_run" >&2
+              previous_status='query_failed'
+            fi
+          fi
+
+          echo "Previous Driver CI run for branch $RUN_BRANCH: id=$previous_run_id status=$previous_status conclusion=$previous_conclusion"
+
           if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            changed='__all__'
+          elif [[ "$previous_status" != "completed" || "$previous_conclusion" != "success" ]]; then
+            echo 'Previous Driver CI run did not complete successfully; treating the driver as affected.' >&2
             changed='__all__'
           elif [[ "$EVENT_NAME" == "pull_request" ]]; then
             git fetch --no-tags origin "$BASE_REF" --depth=1
@@ -52,7 +81,7 @@ jobs:
             changed="$(git diff --name-only HEAD~1 HEAD)"
           fi
 
-          driver_re='^(KswordARKDriver/|KswordARKControllerDriver/|shared/driver/|third_party/systeminformer_dyn/|\.github/workflows/driver-ci\.yml$)'
+          driver_re='^(KswordARKDriver/|shared/driver/|third_party/systeminformer_dyn/|\.github/workflows/driver-ci\.yml$)'
 
           # 回归保护：项目直接编译/包含的 System Informer 动态配置输入必须触发驱动构建。
           for driver_input in \
@@ -114,50 +143,13 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             throw "Driver MSBuild failed with exit code $LASTEXITCODE."
           }
-          & $msbuild 'KswordARKControllerDriver/KswordARKControllerDriver.vcxproj' `
-            /t:Build `
-            /p:Configuration=Release `
-            /p:Platform=x64 `
-            /p:SignMode=Off `
-            /p:SkipPackageVerification=true `
-            /m:1 `
-            /v:minimal
-          if ($LASTEXITCODE -ne 0) {
-            throw "Controller driver MSBuild failed with exit code $LASTEXITCODE."
-          }
-
-      - name: Generate unsigned controller catalog
-        shell: pwsh
-        run: |
-          $inf2Cat = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin' `
-            -Filter Inf2Cat.exe -Recurse -File -ErrorAction SilentlyContinue |
-            Where-Object { $_.FullName -match '\\x86\\Inf2Cat\.exe$' } |
-            Sort-Object LastWriteTime -Descending |
-            Select-Object -First 1
-          if ($null -eq $inf2Cat) {
-            throw 'Could not locate Inf2Cat.exe in the installed WDK.'
-          }
-          $controllerPackage = (Resolve-Path 'KswordARKControllerDriver/x64/Release/KswordARKControllerDriver').Path
-          & $inf2Cat.FullName "/driver:$controllerPackage" '/os:10_X64'
-          if ($LASTEXITCODE -ne 0) {
-            throw "Inf2Cat failed with exit code $LASTEXITCODE."
-          }
-          Copy-Item `
-            (Join-Path $controllerPackage 'KswordARKController.cat') `
-            'KswordARKControllerDriver/x64/Release/KswordARKController.cat' `
-            -Force
-
       - name: Verify driver artifacts
         shell: pwsh
         run: |
           $artifacts = @(
             'Ksword5.1/x64/Release/KswordARK.sys',
             'Ksword5.1/x64/Release/KswordARK.pdb',
-            'Ksword5.1/x64/Release/KswordARKDriver.inf',
-            'KswordARKControllerDriver/x64/Release/KswordARKController.sys',
-            'KswordARKControllerDriver/x64/Release/KswordARKController.pdb',
-            'KswordARKControllerDriver/x64/Release/KswordARKControllerDriver.inf',
-            'KswordARKControllerDriver/x64/Release/KswordARKController.cat'
+            'Ksword5.1/x64/Release/KswordARKDriver.inf'
           )
           $missing = $artifacts | Where-Object { -not (Test-Path $_) }
           if ($missing) {
@@ -172,8 +164,4 @@ jobs:
             Ksword5.1/x64/Release/KswordARK.sys
             Ksword5.1/x64/Release/KswordARK.pdb
             Ksword5.1/x64/Release/KswordARKDriver.inf
-            KswordARKControllerDriver/x64/Release/KswordARKController.sys
-            KswordARKControllerDriver/x64/Release/KswordARKController.pdb
-            KswordARKControllerDriver/x64/Release/KswordARKControllerDriver.inf
-            KswordARKControllerDriver/x64/Release/KswordARKController.cat
           if-no-files-found: error

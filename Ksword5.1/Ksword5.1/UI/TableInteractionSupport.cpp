@@ -70,6 +70,7 @@ namespace
     using ks::ui::TableSnapshotComparisonLimits;
     using ks::ui::TableSnapshotRetentionLimits;
     using ks::ui::TableSnapshotRetentionResult;
+    using ks::ui::TableActionBarMode;
 
     constexpr char kInstalledProperty[] = "KSWORD_TABLE_INTERACTION_SUPPORT_INSTALLED";
     constexpr char kActionBarProperty[] = "KSWORD_TABLE_INTERACTION_ACTION_BAR";
@@ -82,6 +83,47 @@ namespace
     constexpr TableSnapshotCaptureLimits kSnapshotCaptureLimits{};
     constexpr TableSnapshotComparisonLimits kSnapshotComparisonLimits{};
     constexpr TableSnapshotRetentionLimits kSnapshotRetentionLimits{};
+
+    const QString& standardTableHeaderStyle()
+    {
+        static const QString style = QStringLiteral(
+            "QHeaderView{"
+            "  background-color:transparent;"
+            "  border:none;"
+            "}"
+            "QHeaderView::section{"
+            "  background-color:palette(alternate-base);"
+            "  color:palette(text);"
+            "  border:none;"
+            "  border-right:1px solid palette(mid);"
+            "  border-bottom:1px solid palette(midlight);"
+            "  padding:3px 6px;"
+            "  font-weight:400;"
+            "}"
+            "QHeaderView::section:hover{"
+            "  background-color:palette(button);"
+            "}");
+        return style;
+    }
+
+    void applyStandardTableHeaderStyle(QTableView* tableView)
+    {
+        if (tableView == nullptr || ks::ui::PreservesCustomTableHeaderStyle(tableView))
+        {
+            return;
+        }
+
+        const QString& style = standardTableHeaderStyle();
+        const auto applyToHeader = [&style](QHeaderView* header)
+        {
+            if (header != nullptr && header->styleSheet() != style)
+            {
+                header->setStyleSheet(style);
+            }
+        };
+        applyToHeader(tableView->horizontalHeader());
+        applyToHeader(tableView->verticalHeader());
+    }
 
     // DeferredTableUiCommit：
     // - 保存右键菜单打开期间被覆盖合并的 UI 提交；
@@ -728,8 +770,8 @@ namespace
             QStringLiteral("table_selected_export_"));
     }
 
-    // ComparisonTableView 同时用于比对视图和停止刷新视图。它继承表格外框宿主，
-    // 因此停止刷新期间同样能像实时表一样预留冻结窗格所需的视口空间。
+    // ComparisonTableView 同时用于比对视图和冻结视图。它继承表格外框宿主，
+    // 因此冻结视图期间同样能像实时表一样预留冻结窗格所需的视口空间。
     class ComparisonTableView final
         : public ks::ui::visible_table_detail::TableChromeHostView<QTableView>
     {
@@ -794,14 +836,60 @@ namespace
     class TableActionBar final : public QFrame
     {
     public:
-        explicit TableActionBar(QTableView* tableView)
+        explicit TableActionBar(QTableView* tableView, const TableActionBarMode mode)
             : QFrame(tableView)
             , m_table(tableView)
+            , m_mode(mode)
         {
             setObjectName(QString::fromLatin1(kActionBarProperty));
             setFrameShape(QFrame::NoFrame);
             setFixedHeight(kActionBarHeight);
             setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+
+            // 表格操作条会同时出现在 Dock 与普通 QDialog 中，不能继续继承宿主的
+            // QPushButton/QToolButton 几何样式。普通弹窗主题会为按钮增加较大的
+            // padding 和粗体，曾导致插件管理页的同一套操作按钮明显大于进程页，
+            // 甚至挤压 32px 高的操作条。这里用 palette 角色建立自包含的紧凑基线，
+            // 保证换肤仍然生效，同时让所有 TableActionBarHost 的外观完全一致。
+            setStyleSheet(QStringLiteral(
+                "QFrame#KSWORD_TABLE_INTERACTION_ACTION_BAR{"
+                "  background-color:palette(base);"
+                "  border:none;"
+                "  border-bottom:1px solid palette(mid);"
+                "}"
+                "QFrame#KSWORD_TABLE_INTERACTION_ACTION_BAR QToolButton{"
+                "  min-height:20px;"
+                "  padding:2px 7px;"
+                "  color:palette(text) !important;"
+                "  background-color:transparent !important;"
+                "  border:1px solid transparent !important;"
+                "  border-radius:3px;"
+                "  font-weight:400;"
+                "}"
+                "QFrame#KSWORD_TABLE_INTERACTION_ACTION_BAR QToolButton:hover{"
+                "  background-color:palette(alternate-base) !important;"
+                "  border-color:palette(highlight) !important;"
+                "}"
+                "QFrame#KSWORD_TABLE_INTERACTION_ACTION_BAR QToolButton:pressed,"
+                "QFrame#KSWORD_TABLE_INTERACTION_ACTION_BAR QToolButton:checked{"
+                "  background-color:palette(highlight) !important;"
+                "  color:palette(highlighted-text) !important;"
+                "  border-color:palette(highlight) !important;"
+                "}"
+                "QFrame#KSWORD_TABLE_INTERACTION_ACTION_BAR QToolButton:disabled{"
+                "  color:palette(placeholder-text) !important;"
+                "  background-color:transparent !important;"
+                "  border-color:transparent !important;"
+                "}"
+                "QFrame#KSWORD_TABLE_INTERACTION_ACTION_BAR QScrollArea,"
+                "QFrame#KSWORD_TABLE_INTERACTION_ACTION_BAR QScrollArea::viewport{"
+                "  background-color:transparent !important;"
+                "  border:none !important;"
+                "}"
+                "QFrame#KSWORD_TABLE_INTERACTION_ACTION_BAR QCheckBox{"
+                "  background-color:transparent !important;"
+                "  font-weight:400;"
+                "}"));
 
             auto* layout = new QHBoxLayout(this);
             layout->setContentsMargins(4, 2, 4, 2);
@@ -812,7 +900,7 @@ namespace
             m_freezePaneButton = createButton("冻结行列");
             m_freezePaneButton->setToolTip(localizedSourceText(
                 "冻结选中的行或列：行会钉在列标题正下方，列会固定在行表头右侧；支持一次冻结多选行"));
-            m_pauseRefreshButton = createButton("停止刷新");
+            m_pauseRefreshButton = createButton("冻结视图");
             m_pauseRefreshButton->setCheckable(true);
             layout->addWidget(m_copyAllButton);
             layout->addWidget(m_exportButton);
@@ -1001,6 +1089,19 @@ namespace
         }
 
     public:
+        void setMode(const TableActionBarMode mode)
+        {
+            if (m_mode == mode)
+            {
+                applyModeVisibility();
+                return;
+            }
+
+            m_mode = mode;
+            updateControls();
+            updatePosition();
+        }
+
         void updatePosition()
         {
             if (m_table.isNull())
@@ -1015,9 +1116,14 @@ namespace
             }
             if (ks::ui::TableActionBarHost* host = ks::ui::TableActionBarHostFor(m_table.data()))
             {
-                host->setTopActionBarHeight(kActionBarHeight);
-                setGeometry(host->topActionBarGeometry());
-                raise();
+                const bool actionBarVisible = m_mode != TableActionBarMode::None;
+                host->setTopActionBarHeight(actionBarVisible ? kActionBarHeight : 0);
+                setVisible(actionBarVisible);
+                if (actionBarVisible)
+                {
+                    setGeometry(host->topActionBarGeometry());
+                    raise();
+                }
             }
             hideSourceViewportWidgets();
             updateComparisonOverlayGeometry();
@@ -1260,7 +1366,7 @@ namespace
             updateControls();
             const TableSnapshot snapshot = TableSnapshotCompareEngine::capture(
                 m_table.data(),
-                localizedSourceText("刷新已停止"),
+                localizedSourceText("视图已冻结"),
                 0,
                 kSnapshotCaptureLimits);
             if (actionBarGuard.isNull())
@@ -1274,7 +1380,7 @@ namespace
             {
                 QMessageBox::warning(
                     this,
-                    localizedSourceText("停止刷新失败"),
+                    localizedSourceText("冻结视图失败"),
                     localizedSourceText("表格在捕获期间已重建，请重试。"));
                 updateControls();
                 return false;
@@ -1284,9 +1390,9 @@ namespace
             {
                 QMessageBox::warning(
                     this,
-                    localizedSourceText("停止刷新视图已截断"),
+                    localizedSourceText("冻结视图已截断"),
                     localizedSourceText(
-                        "表格规模超过停止刷新快照的安全上限，当前固定视图保留 %1/%2 行和 %3/%4 列；恢复刷新后可回到完整实时表格。")
+                        "表格规模超过冻结视图快照的安全上限，当前冻结视图保留 %1/%2 行和 %3/%4 列；恢复实时视图后可回到完整实时表格。")
                         .arg(snapshot.rows.size())
                         .arg(snapshot.sourceRowCount)
                         .arg(snapshot.visibleColumns.size())
@@ -2198,6 +2304,26 @@ namespace
             raise();
         }
 
+        void applyModeVisibility()
+        {
+            const bool actionBarVisible = m_mode != TableActionBarMode::None;
+            const bool fullMode = m_mode == TableActionBarMode::Full;
+            m_copyAllButton->setVisible(actionBarVisible);
+            m_exportButton->setVisible(actionBarVisible);
+            m_freezePaneButton->setVisible(fullMode);
+            m_pauseRefreshButton->setVisible(fullMode);
+            m_snapshotScrollArea->setVisible(fullMode);
+            m_addSnapshotButton->setVisible(fullMode);
+            m_cleanupButton->setVisible(fullMode && !m_cleanupMode);
+            m_doneCleanupButton->setVisible(fullMode && m_cleanupMode);
+            m_deleteSelectedButton->setVisible(fullMode && m_cleanupMode);
+            m_clearAllButton->setVisible(fullMode && m_cleanupMode);
+            m_differenceOnlyCheckBox->setVisible(fullMode && m_inComparison);
+            m_ignoreColumnsButton->setVisible(fullMode && m_inComparison);
+            m_currentViewButton->setVisible(fullMode);
+            m_compareViewButton->setVisible(fullMode);
+        }
+
         void updateControls()
         {
             const bool hasSnapshots = !m_snapshots.isEmpty();
@@ -2220,12 +2346,12 @@ namespace
                 activeTable->model() != nullptr);
             m_pauseRefreshButton->setText(localizedSourceText(
                 m_pauseCaptureInProgress
-                    ? "正在停止…"
-                    : (m_refreshPaused ? "恢复刷新" : "停止刷新")));
+                    ? "正在冻结…"
+                    : (m_refreshPaused ? "恢复实时视图" : "冻结视图")));
             m_pauseRefreshButton->setToolTip(localizedSourceText(
                 m_refreshPaused
-                    ? "恢复实时表格并显示后台更新后的最新结果"
-                    : "固定当前表格内容；后台采集继续运行，恢复后显示最新结果"));
+                    ? "恢复实时视图并显示后台更新后的最新结果"
+                    : "冻结当前表格内容；后台采集继续运行，恢复后显示最新结果"));
             {
                 const QSignalBlocker blocker(m_pauseRefreshButton);
                 m_pauseRefreshButton->setChecked(
@@ -2278,6 +2404,7 @@ namespace
                     snapshotButton->setEnabled(controlsAvailable);
                 }
             }
+            applyModeVisibility();
         }
 
         QPointer<QTableView> m_table;
@@ -2305,6 +2432,7 @@ namespace
         bool m_snapshotCaptureInProgress = false;
         bool m_comparisonInProgress = false;
         bool m_pauseCaptureInProgress = false;
+        TableActionBarMode m_mode = TableActionBarMode::Full;
         QToolButton* m_copyAllButton = nullptr;
         QToolButton* m_exportButton = nullptr;
         QToolButton* m_freezePaneButton = nullptr;
@@ -2347,11 +2475,18 @@ namespace
         {
             return;
         }
+        const TableActionBarMode mode = ks::ui::EffectiveTableActionBarMode(tableView);
         TableActionBar* actionBar = actionBarForTable(tableView);
         if (actionBar == nullptr)
         {
-            actionBar = new TableActionBar(tableView);
+            if (mode == TableActionBarMode::None)
+            {
+                ks::ui::TableActionBarHostFor(tableView)->setTopActionBarHeight(0);
+                return;
+            }
+            actionBar = new TableActionBar(tableView, mode);
         }
+        actionBar->setMode(mode);
         actionBar->updatePosition();
     }
 
@@ -2499,7 +2634,7 @@ namespace
             return;
         }
 
-        tableView->setSelectionMode(QAbstractItemView::ExtendedSelection);
+        applyStandardTableHeaderStyle(tableView);
         ks::ui::InstallTableHeaderClickSorting(
             qobject_cast<QTableWidget*>(tableView));
         installActionBar(tableView);

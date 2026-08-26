@@ -48,6 +48,7 @@ namespace
     constexpr wchar_t kKswordMainWindowPropertyName[] = L"KswordARK.MainWindow.Singleton.Release";
     constexpr wchar_t kPrivilegeRestartArgument[] = L"--ksword-privilege-restart";
     constexpr ULONG_PTR kUnlockerCopyDataMessageId = 0x4B535755; // "KSWU"：Ksword shell unlocker IPC。
+    constexpr DWORD kRestartPredecessorWaitTimeoutMs = 35000;
 
     // localizedStartupText 作用：
     // - 让原生首启对话框、启动画面和 Qt 启动期弹窗共用 LanguageManager；
@@ -1280,15 +1281,18 @@ int main(int argc, char* argv[])
     crashConfiguration.preferLauncherReporter = true;
     ks::crash::InstallCrashHandler(crashConfiguration);
     const bool crashRestartWait =
-        ks::crash::WaitForCrashRestartTargetFromCommandLine();
+        ks::crash::WaitForCrashRestartTargetFromCommandLine(
+            kRestartPredecessorWaitTimeoutMs);
     startupTraceRaw("startup trace initialized without console binding");
     initializeProcessDpiAwareness();
     startupTraceRaw("initializeProcessDpiAwareness finished");
 
     const std::vector<std::wstring> startupUnlockPathList = collectUnlockPathsFromCommandLine();
+    // startupSettings 需在防多开判定前读取：用户关闭“防止多开”后，新启动必须直接继续创建实例。
+    ks::settings::AppearanceSettings startupSettings = ks::settings::loadAppearanceSettings();
     const bool privilegeRestartLaunch = hasCommandLineArgument(kPrivilegeRestartArgument);
     const bool skipSingleInstanceLaunch = crashRestartWait;
-    if (!privilegeRestartLaunch && !skipSingleInstanceLaunch)
+    if (startupSettings.preventMultipleInstances && !privilegeRestartLaunch && !skipSingleInstanceLaunch)
     {
         if (HWND existingWindowHandle = findExistingKswordMainWindow())
         {
@@ -1333,6 +1337,10 @@ int main(int argc, char* argv[])
     else if (skipSingleInstanceLaunch)
     {
         startupTraceRaw("verified crash restart predecessor exited, skipping single-instance check");
+    }
+    else if (!startupSettings.preventMultipleInstances)
+    {
+        startupTraceRaw("prevent multiple instances disabled in settings, skipping single-instance check");
     }
 
     if (!startupUnlockPathList.empty() && !privilegeRestartLaunch && !isCurrentProcessElevated())
@@ -1383,7 +1391,6 @@ int main(int argc, char* argv[])
         + ", settings_exists="
         + (settingsFileExists ? "true" : "false"));
 
-    ks::settings::AppearanceSettings startupSettings = ks::settings::loadAppearanceSettings();
     QString preQtLanguageMessage;
     (void)ks::i18n::LanguageManager::instance().initialize(
         startupSettings.uiLanguage,
@@ -1396,7 +1403,9 @@ int main(int argc, char* argv[])
         + ", startup_maximized="
         + (startupSettings.launchMaximizedOnStartup ? "true" : "false")
         + ", auto_admin="
-        + (startupSettings.autoRequestAdminOnStartup ? "true" : "false"));
+        + (startupSettings.autoRequestAdminOnStartup ? "true" : "false")
+        + ", prevent_multiple_instances="
+        + (startupSettings.preventMultipleInstances ? "true" : "false"));
     {
         kLogEvent settingsEvent;
         info << settingsEvent
@@ -1406,6 +1415,8 @@ int main(int argc, char* argv[])
             << (startupSettings.launchMaximizedOnStartup ? "true" : "false")
             << ", auto_admin="
             << (startupSettings.autoRequestAdminOnStartup ? "true" : "false")
+            << ", prevent_multiple_instances="
+            << (startupSettings.preventMultipleInstances ? "true" : "false")
             << ", startup_scale_factor="
             << startupSettings.startupWindowScaleFactor
             << ", scale_prompt_disabled="
@@ -1805,13 +1816,9 @@ int main(int argc, char* argv[])
 
         // 兜底策略：
         // - 若首帧事件异常未触发；
-        // - 4 秒后强制隐藏启动页。
+        // - 4 秒后静默强制隐藏启动页，避免兜底动作产生面向用户的警告通知。
         QTimer::singleShot(4000, &window, []()
             {
-                kLogEvent splashFallbackEvent;
-                warn << splashFallbackEvent
-                    << "[main] 首帧隐藏 splash 的 4 秒兜底计时器触发。"
-                    << eol;
                 kSplash.hide();
             });
     }

@@ -6,7 +6,7 @@
 
 #include <QAbstractItemModel>
 #include <QApplication>
-#include <QCheckBox>
+
 #include <QEvent>
 #include <QFrame>
 #include <QGroupBox>
@@ -18,7 +18,7 @@
 #include <QMargins>
 #include <QPoint>
 #include <QScrollBar>
-#include <QSignalBlocker>
+
 #include <QSize>
 #include <QSizePolicy>
 #include <QStackedWidget>
@@ -39,7 +39,6 @@ namespace
     constexpr char kGenericSearchControlPropertyName[] = "ksword_generic_table_search_control";
     constexpr char kGlobalSearchInputPropertyName[] = "ksword_global_ui_search_input";
     constexpr char kExplicitTableNamePropertyName[] = "ksword_table_search_name";
-    constexpr int kFullSearchWidth = 316;
     constexpr int kCollapsedSearchWidth = 28;
     constexpr int kSearchControlHeight = 24;
     constexpr int kSearchOuterMargin = 4;
@@ -173,7 +172,7 @@ namespace
         return std::max(0, headerView->width() - occupiedRight);
     }
 
-    // TableSearchAccessWidget：管理单个表格的自适应搜索框/按钮与宿主空间预留。
+    // TableSearchAccessWidget：管理单个表格的搜索按钮与宿主空间预留。
     class TableSearchAccessWidget final : public QFrame
     {
     public:
@@ -188,20 +187,7 @@ namespace
 
             auto* rootLayout = new QHBoxLayout(this);
             rootLayout->setContentsMargins(0, 0, 0, 0);
-            rootLayout->setSpacing(5);
-
-            m_searchEdit = new QLineEdit(this);
-            m_searchEdit->setProperty(kGenericSearchControlPropertyName, true);
-            m_searchEdit->setClearButtonEnabled(true);
-            m_searchEdit->setFixedHeight(kSearchControlHeight);
-            rootLayout->addWidget(m_searchEdit, 1);
-
-            // 内嵌勾选框只属于通用搜索，不会挂到页面已有的遗留搜索框上。
-            m_resultsOnlyCheck = new QCheckBox(this);
-            m_resultsOnlyCheck->setProperty(kGenericSearchControlPropertyName, true);
-            m_resultsOnlyCheck->setFixedHeight(kSearchControlHeight);
-            m_resultsOnlyCheck->setFocusPolicy(Qt::NoFocus);
-            rootLayout->addWidget(m_resultsOnlyCheck, 0);
+            rootLayout->setSpacing(0);
 
             m_searchButton = new QToolButton(this);
             m_searchButton->setProperty(kGenericSearchControlPropertyName, true);
@@ -217,35 +203,9 @@ namespace
                     ks::ui::ActivateGlobalUiSearchForTable(
                         m_tableView.data(),
                         QString(),
-                        true,
-                        m_resultsOnlyCheck->isChecked());
+                        true);
                 }
             });
-            connect(m_searchEdit, &QLineEdit::textEdited, this, [this](const QString& queryText) {
-                if (!m_tableView.isNull())
-                {
-                    ks::ui::ActivateGlobalUiSearchForTable(
-                        m_tableView.data(),
-                        queryText,
-                        false,
-                        m_resultsOnlyCheck->isChecked());
-                }
-            });
-            connect(
-                m_resultsOnlyCheck,
-                &QCheckBox::toggled,
-                this,
-                [this](const bool checked) {
-                    if (!m_tableView.isNull())
-                    {
-                        ks::ui::ActivateGlobalUiSearchForTable(
-                            m_tableView.data(),
-                            m_searchEdit->text(),
-                            false,
-                            checked);
-                    }
-                });
-
             if (m_hostWidget != nullptr && m_hostWidget->layout() != nullptr)
             {
                 m_originalHostMargins = m_hostWidget->layout()->contentsMargins();
@@ -292,16 +252,14 @@ namespace
             m_resultFilterActive = true;
             m_resultFilterQuery = normalizedQuery;
             applyResultFilterRows();
-            setResultsOnlyChecked(true);
+
             scheduleRefresh();
             return true;
         }
 
         void clearResultFilter()
         {
-            const bool stateChanged = m_resultFilterActive
-                || (m_resultsOnlyCheck != nullptr
-                    && m_resultsOnlyCheck->isChecked());
+            const bool stateChanged = m_resultFilterActive;
             if (m_resultFilterActive)
             {
                 restoreBaselineHiddenRows();
@@ -311,22 +269,13 @@ namespace
             m_keepSearchAccessVisible = false;
             m_resultFilterQuery.clear();
             m_baselineHiddenRowList.clear();
-            setResultsOnlyChecked(false);
+
             if (stateChanged)
             {
                 scheduleRefresh();
             }
         }
 
-        void setResultsOnlyChecked(const bool checked)
-        {
-            if (m_resultsOnlyCheck == nullptr)
-            {
-                return;
-            }
-            const QSignalBlocker signalBlocker(m_resultsOnlyCheck);
-            m_resultsOnlyCheck->setChecked(checked);
-        }
 
         void refreshPresentation()
         {
@@ -338,15 +287,8 @@ namespace
 
             QTableView* tableView = m_tableView.data();
             const QString tableName = ks::ui::ResolveTableSearchDisplayName(tableView);
-            m_searchEdit->setPlaceholderText(
-                ks::i18n::sourceText(QStringLiteral("搜索%1")).arg(tableName));
             m_searchButton->setToolTip(
                 ks::i18n::sourceText(QStringLiteral("搜索当前表格：%1")).arg(tableName));
-            m_resultsOnlyCheck->setText(
-                ks::i18n::sourceText(QStringLiteral("仅显示搜索结果")));
-            m_resultsOnlyCheck->setToolTip(
-                ks::i18n::sourceText(QStringLiteral(
-                    "勾选后隐藏通用表格中不匹配的行；取消勾选后恢复原有可见状态")));
 
             if (hasDedicatedSearchControl(tableView))
             {
@@ -376,11 +318,7 @@ namespace
                     hostWidget->width() - minimumContentWidth + m_reservedHostWidth);
             }
 
-            if (availableWidth >= kFullSearchWidth + kSearchOuterMargin)
-            {
-                applyPresentation(kFullSearchWidth);
-            }
-            else if (availableWidth >= kCollapsedSearchWidth + kSearchOuterMargin)
+            if (availableWidth >= kCollapsedSearchWidth + kSearchOuterMargin)
             {
                 applyPresentation(kCollapsedSearchWidth);
             }
@@ -649,10 +587,7 @@ namespace
             }
 
             QWidget* hostWidget = m_hostWidget.data();
-            const bool fullSearchVisible = requestedWidth == kFullSearchWidth;
-            m_searchEdit->setVisible(fullSearchVisible);
-            m_resultsOnlyCheck->setVisible(fullSearchVisible);
-            m_searchButton->setVisible(!fullSearchVisible);
+            m_searchButton->setVisible(true);
 
             if (hostWidget->layout() != nullptr
                 && hostWidget != m_tableView->horizontalHeader())
@@ -681,7 +616,7 @@ namespace
                 "QFrame#KSWORD_TABLE_SEARCH_SUPPORT{background:transparent;}"
                 "QLineEdit{background:%1;color:%2;border:1px solid %3;border-radius:3px;padding:0 6px;}"
                 "QLineEdit:focus{border-color:%4;}"
-                "QCheckBox{background:transparent;color:%2;border:none;spacing:4px;font-size:11px;}"
+
                 "QToolButton{background:transparent;color:%2;border:1px solid transparent;border-radius:3px;}"
                 "QToolButton:hover{background:%5;border-color:%4;}" )
                 .arg(
@@ -696,9 +631,7 @@ namespace
 
         QPointer<QTableView> m_tableView;    // m_tableView：搜索入口对应的原始表格。
         QPointer<QWidget> m_hostWidget;      // m_hostWidget：操作条或水平表头宿主。
-        QLineEdit* m_searchEdit = nullptr;   // m_searchEdit：空间充足时显示的输入框。
-        QCheckBox* m_resultsOnlyCheck = nullptr; // m_resultsOnlyCheck：仅保留匹配行的通用过滤开关。
-        QToolButton* m_searchButton = nullptr; // m_searchButton：空间不足时显示的图标按钮。
+        QToolButton* m_searchButton = nullptr; // m_searchButton：激活标题栏表格搜索的图标按钮。
         QMargins m_originalHostMargins;      // m_originalHostMargins：操作条原始布局边距。
         QPointer<QAbstractItemModel> m_filterModel; // m_filterModel：过滤启用时观察的当前模型。
         QVector<bool> m_baselineHiddenRowList; // m_baselineHiddenRowList：启用过滤前逐行隐藏快照。
@@ -783,15 +716,6 @@ namespace ks::ui
         }
     }
 
-    void SetTableSearchResultsOnlyChecked(
-        QTableView* tableView,
-        const bool checked)
-    {
-        if (TableSearchAccessWidget* searchSupport = searchSupportForTable(tableView))
-        {
-            searchSupport->setResultsOnlyChecked(checked);
-        }
-    }
 
     QString ResolveTableSearchDisplayName(const QTableView* tableView)
     {

@@ -124,8 +124,7 @@ namespace ks::ui
         void activateForTable(
             QTableView* tableView,
             const QString& queryText,
-            bool focusTopInput,
-            bool searchResultsOnly);
+            bool focusTopInput);
 
         // searchScopeDisplayText：返回标题栏当前应展示的范围文本。
         QString searchScopeDisplayText() const;
@@ -292,6 +291,5 @@ namespace ks::ui
     void ActivateGlobalUiSearchForTable(
         QTableView* tableView,
         const QString& queryText = QString(),
-        bool focusTopInput = true,
-        bool searchResultsOnly = false);
+        bool focusTopInput = true);
 }

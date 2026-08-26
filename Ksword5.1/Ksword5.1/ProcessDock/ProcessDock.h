@@ -419,6 +419,7 @@ private:
     {
         std::string identityKey;            // identityKey：PID+创建时间构成的稳定行标识。
         ks::process::ProcessRecord record;  // record：动作执行线程使用的进程记录副本。
+        bool isKernelOnly = false;           // isKernelOnly：仅 R0 可见目标不能依赖 Win32 句柄校验。
     };
 
     // NetworkTrafficCounters：
@@ -835,8 +836,6 @@ private:
     // - 处理：R0 内核 API 优先写 TokenIntegrityLevel，驱动不可用/旧驱动时回退 R3；
     // - 返回：无返回值，执行结果写入统一动作日志。
     void executeSetProcessIntegrityAction(unsigned long integrityRid, const QString& levelDisplayText);
-    // executeAdjustProcessTokenPrivilegesAction：打开单目标 R3/R0 令牌特权编辑器。
-    void executeAdjustProcessTokenPrivilegesAction();
     // executeSetEfficiencyModeAction 作用：开启/关闭 Windows 进程效率模式。
     void executeSetEfficiencyModeAction(bool enableEfficiencyMode);
     void executeOpenFolderAction();
@@ -961,7 +960,6 @@ private:
         int staticDetailFillBudget,
         std::uint32_t detailDemandFlags,
         std::uint64_t refreshTicket,
-        int progressTaskPid,
         const std::unordered_map<std::string, CacheEntry>& previousCache,
         const std::unordered_map<std::string, ks::process::CounterSample>& previousCounters,
         const std::unordered_map<std::uint32_t, NetworkTrafficCounters>& networkTrafficSnapshot,
@@ -1147,7 +1145,6 @@ private:
     std::uint32_t m_logicalCpuCount = 1;      // CPU 核心数（CPU 百分比换算）。
     std::chrono::steady_clock::time_point m_lastRefreshStartTime{}; // 主线程记录的刷新开始时刻。
     std::chrono::steady_clock::time_point m_lastProcessTableRebuildTime{}; // 最近一次进程表重绘时间。
-    int m_refreshProgressTaskPid = 0;         // 绑定到 kPro 的“进程刷新任务”PID。
 
     // ======== 数据缓存 ========
     std::unordered_map<std::string, CacheEntry> m_cacheByIdentity; // 进程缓存（PID+CreateTime）。

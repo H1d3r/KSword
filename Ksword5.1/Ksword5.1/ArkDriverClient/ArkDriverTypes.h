@@ -31,7 +31,6 @@
 #include "../../../shared/driver/KswordArkNetworkIoctl.h"
 #include "../../../shared/driver/KswordArkStorageIoctl.h"
 #include "../../../shared/driver/KswordArkStorageForensicsIoctl.h"
-#include "../../../shared/driver/KswordArkStorageControllerIoctl.h"
 #include "../../../shared/driver/KswordArkKernelBaselineIoctl.h"
 #include "../../../shared/driver/KswordArkPiDdbIoctl.h"
 #include "../../../shared/driver/KswordArkHvmIoctl.h"
@@ -53,6 +52,7 @@
 #include "../../../shared/driver/KswordArkBugcheckIoctl.h"
 #include "../../../shared/driver/KswordArkUnloadedDriverIoctl.h"
 #include "../../../shared/driver/KswordArkSystemTimeIoctl.h"
+#include "../../../shared/driver/KswordArkResearchIoctl.h"
 
 namespace ksword::ark
 {
@@ -66,6 +66,16 @@ namespace ksword::ark
         long ntStatus = 0;
         std::string message;
         unsigned long bytesReturned = 0;
+    };
+
+    // ResearchTopicQueryResult：保留《第二规划》专题的 R0 现场上下文
+    // 和经中央注册表核实的业务 IOCTL 证据行。
+    struct ResearchTopicQueryResult
+    {
+        IoResult io;
+        bool unsupported = false;
+        KSWORD_ARK_QUERY_RESEARCH_TOPIC_RESPONSE response{};
+        std::vector<KSWORD_ARK_RESEARCH_EVIDENCE_ENTRY> entries;
     };
 
     // HwidDispatchResult：
@@ -137,6 +147,7 @@ namespace ksword::ark
         std::uint64_t objectTableAddress = 0;
         std::uint64_t sectionObjectAddress = 0;
         std::uint64_t dynDataCapabilityMask = 0;
+        std::uint64_t creationTime100ns = 0;
         std::string imageName;
         std::string imagePath;
     };
@@ -1452,6 +1463,15 @@ namespace ksword::ark
         KSWORD_ARK_CONTROL_SYSTEM_TIME_RESPONSE response{}; // response：控制结果。
     };
 
+
+    // BugcheckDiagnosticsResult：保留按需安装蓝屏诊断的传输结果和 R0 准备摘要。
+    // UI 仅展示回调/BGP 状态，不重新扫描私有内核函数或推断故障原因。
+    struct BugcheckDiagnosticsResult
+    {
+        IoResult io;
+        bool unsupported = false;
+        KSWORD_ARK_BUGCHECK_DIAGNOSTICS_RESPONSE response{};
+    };
 
     // BugcheckGuardResult keeps the transport result independent from the R0
     // state snapshot, allowing an older driver to degrade safely in the UI.

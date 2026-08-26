@@ -7,6 +7,7 @@
 #include "../OtherDock/OtherDock.h"
 #include "../MiscDock/SoundSource/SoundSourcePage.h"
 #include "../UI/VisibleTableWidget.h"
+#include "../UI/DetailLayoutRegistry.h"
 #include "../PluginHost.h"
 
 #include <QTimer>
@@ -92,7 +93,49 @@ namespace
             embeddedPlaceholderLabel = nullptr;
         }
 
+        // 内嵌 Dock 的复杂控件树不能把自身 minimumSizeHint 反向传播到详情窗口。
+        // 页面仍会把全部可用空间分给 Dock，超出部分由 Dock 内部表格和滚动区承载。
+        embeddedDockWidget->setMinimumSize(0, 0);
+        embeddedDockWidget->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
         embeddedTabLayout->addWidget(embeddedDockWidget, 1);
+    }
+
+    QWidget* createScrollableTabContent(
+        QWidget* const tabPage,
+        QVBoxLayout*& contentLayout,
+        const int contentMargin,
+        const int contentSpacing)
+    {
+        // 为纵向表单页建立可缩放滚动壳：内容尺寸不足时铺满页面，尺寸过大时显示滚动条。
+        if (tabPage == nullptr)
+        {
+            contentLayout = nullptr;
+            return nullptr;
+        }
+
+        auto* outerLayout = new QVBoxLayout(tabPage);
+        outerLayout->setContentsMargins(0, 0, 0, 0);
+        outerLayout->setSpacing(0);
+
+        auto* scrollArea = new QScrollArea(tabPage);
+        scrollArea->setWidgetResizable(true);
+        scrollArea->setFrameShape(QFrame::NoFrame);
+        scrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+        scrollArea->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+        scrollArea->setMinimumSize(0, 0);
+        scrollArea->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
+
+        auto* contentWidget = new QWidget(scrollArea);
+        contentLayout = new QVBoxLayout(contentWidget);
+        contentLayout->setContentsMargins(
+            contentMargin,
+            contentMargin,
+            contentMargin,
+            contentMargin);
+        contentLayout->setSpacing(contentSpacing);
+        scrollArea->setWidget(contentWidget);
+        outerLayout->addWidget(scrollArea, 1);
+        return contentWidget;
     }
 
     QString buildAffinityCoreButtonStyle()
@@ -863,6 +906,24 @@ void ProcessDetailWindow::rebuildActionAffinityCoreButtons()
         delete layoutItem;
     }
     m_affinityCoreButtons.clear();
+    const bool includeProcessorGroup =
+        m_actionAffinityReadable &&
+        ks::process::logicalProcessorGroupCount(
+            m_actionAffinitySnapshot.processors) > 1U;
+    if (m_affinityDescriptionLabel != nullptr)
+    {
+        QString descriptionText = ks::i18n::text(
+            QStringLiteral("process.detail.affinity.description"),
+            QString());
+        if (includeProcessorGroup)
+        {
+            descriptionText += QStringLiteral("\n") + ks::i18n::text(
+                QStringLiteral(
+                    "process.detail.affinity.description.multigroup"),
+                QString());
+        }
+        m_affinityDescriptionLabel->setText(descriptionText);
+    }
     if (!m_actionAffinityReadable)
     {
         return;
@@ -885,28 +946,32 @@ void ProcessDetailWindow::rebuildActionAffinityCoreButtons()
             }
             currentGroup = processor.coordinate.group;
             matrixColumn = 0;
-            QLabel* const groupLabel = new QLabel(
-                ks::i18n::text(
-                    QStringLiteral("process.detail.affinity.group"),
-                    QString())
-                    .arg(currentGroup),
-                m_affinityActionGroup);
-            groupLabel->setStyleSheet(
-                QStringLiteral("color:%1;font-weight:700;")
-                    .arg(KswordTheme::TextSecondaryHex()));
-            m_affinityMatrixLayout->addWidget(
-                groupLabel,
-                matrixRow++,
-                0,
-                1,
-                kAffinityMatrixColumnCount);
+            if (includeProcessorGroup)
+            {
+                QLabel* const groupLabel = new QLabel(
+                    ks::i18n::text(
+                        QStringLiteral("process.detail.affinity.group"),
+                        QString())
+                        .arg(currentGroup),
+                    m_affinityActionGroup);
+                groupLabel->setStyleSheet(
+                    QStringLiteral("color:%1;font-weight:700;")
+                        .arg(KswordTheme::TextSecondaryHex()));
+                m_affinityMatrixLayout->addWidget(
+                    groupLabel,
+                    matrixRow++,
+                    0,
+                    1,
+                    kAffinityMatrixColumnCount);
+            }
         }
 
         QToolButton* const coreButton =
             new QToolButton(m_affinityActionGroup);
-        const QString identityText = QStringLiteral("G%1:L%2")
-            .arg(processor.coordinate.group)
-            .arg(processor.coordinate.logicalIndex);
+        const QString identityText = QString::fromStdString(
+            ks::process::processorDisplayIdentityText(
+                processor.coordinate,
+                includeProcessorGroup));
         const QString topologyText =
             QString::fromStdString(processor.topologyLabel);
         coreButton->setText(
@@ -982,14 +1047,22 @@ ProcessDetailWindow::ProcessDetailWindow(const ks::process::ProcessRecord& baseR
     setWindowFlag(Qt::Window, true);
     setWindowModality(Qt::NonModal);
     setAttribute(Qt::WA_DeleteOnClose, true);
-    // 独立详情窗不能无限按内容撑宽：
-    // - 以父窗口/客户区宽度为基准，把最大宽度限制为 75%；
-    // - 初始设计宽度也同步裁剪，避免长路径/命令行把窗口撑出屏幕。
-    applyStandaloneWindowWidthLimit(
+    // 保留原有“客户区约 75%”的初始宽度，但不再设置 maximumWidth。
+    // 初始尺寸和最低尺寸只受目标屏幕可用区域约束，用户之后可以自由拖大或最大化。
+    constexpr int kPreferredWindowWidth = 1160;
+    const int initialWindowWidth = std::min(
+        kPreferredWindowWidth,
+        calculateStandaloneWindowInitialWidth(
+            parent,
+            this,
+            0.75,
+            kPreferredWindowWidth));
+    ks::ui::applyResponsiveWindowGeometry(
         this,
         parent,
-        QSize(1160, 760),
-        0.75);
+        QSize(initialWindowWidth, 760),
+        QSize(720, 640),
+        0.9);
 
     // identity 用于日志和窗口复用定位。
     m_identityKey = ks::process::BuildProcessIdentityKey(
@@ -1448,6 +1521,10 @@ void ProcessDetailWindow::initializeUi()
     tabNavigationLayout->setSpacing(4);
 
     m_tabWidget = new QTabWidget(this);
+    // QTabWidget 会取所有已构造页面中最大的 minimumSizeHint。详情页采用懒加载，
+    // 若沿用默认尺寸策略，新页面创建时会把该提示传播给顶层窗口并触发自动扩张。
+    m_tabWidget->setMinimumSize(0, 0);
+    m_tabWidget->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
     m_tabWidget->tabBar()->hide();
     m_tabNavigationButtonGroup = new QButtonGroup(this);
     m_tabNavigationButtonGroup->setExclusive(true);
@@ -2755,7 +2832,7 @@ void ProcessDetailWindow::initializeDetailTab()
     configureCopyableLabel(m_parentInfoLabel);
     m_detailOpenHandleDockButton = new QPushButton(QIcon(":/Icon/process_list.svg"), QString(), detailContent);
     m_detailOpenHandleDockButton->setToolTip(QStringLiteral("跳转到句柄 Dock，并按当前 PID 过滤"));
-    m_detailOpenHandleDockButton->setFixedSize(28, 28);
+    KswordTheme::ApplyCompactIconButtonMetrics(m_detailOpenHandleDockButton);
     m_gotoParentButton = new QPushButton(QIcon(":/Icon/process_details.svg"), QString(), detailContent);
     languageManager.bindText(m_gotoParentButton, QStringLiteral("process.detail.action.goto_parent"), QStringLiteral("转到父进程"));
     m_gotoParentButton->setVisible(false);
@@ -3198,6 +3275,9 @@ void ProcessDetailWindow::initializeThreadTab()
         "选择线程行后可查看 R0 runtime detail；点击“采样PDB字段”可按需读取 thread_detail deep JSON 小字段。"));
     threadGroupLayout->addWidget(m_threadRuntimeSampleOutput, 0);
 
+    ks::ui::DetailLayoutRegistry::registerHost(
+        m_threadInspectTable, m_threadRuntimeSampleOutput, threadGroup);
+
     m_threadLayout->addWidget(threadGroup, 1);
 
     const QString buttonStyle = buildBlueButtonStyle();
@@ -3508,9 +3588,11 @@ void ProcessDetailWindow::initializeActionTab()
         << "[ProcessDetailWindow] initializeActionTab: 构建进程操作页面。"
         << eol;
 
-    m_actionLayout = new QVBoxLayout(m_actionTab);
-    m_actionLayout->setContentsMargins(6, 6, 6, 6);
-    m_actionLayout->setSpacing(10);
+    QWidget* const actionContent = createScrollableTabContent(
+        m_actionTab,
+        m_actionLayout,
+        6,
+        10);
 
     // buildTextActionButton 作用：
     // - 为操作页生成统一文字按钮；
@@ -3529,7 +3611,7 @@ void ProcessDetailWindow::initializeActionTab()
     // 结束与控制组：
     // - “结束方案”改为下拉选择，避免四个宽按钮铺满整行；
     // - 运行控制与关键进程操作改为紧凑图标按钮，保留 tooltip 解释语义。
-    QGroupBox* controlGroup = new QGroupBox("结束与控制", m_actionTab);
+    QGroupBox* controlGroup = new QGroupBox("结束与控制", actionContent);
     QGridLayout* controlLayout = new QGridLayout(controlGroup);
     controlLayout->setHorizontalSpacing(8);
     controlLayout->setVerticalSpacing(8);
@@ -3573,10 +3655,6 @@ void ProcessDetailWindow::initializeActionTab()
         QStringLiteral("应用"),
         QStringLiteral("应用当前选中的进程优先级"),
         controlGroup);
-    m_adjustTokenPrivilegesButton = buildTextActionButton(
-        QStringLiteral("调整特权"),
-        QStringLiteral("读取并调整当前进程主令牌的特权（R3/R0）"),
-        controlGroup);
 
     controlLayout->addWidget(new QLabel("结束方案", controlGroup), 0, 0);
     controlLayout->addWidget(m_terminateActionCombo, 0, 1, 1, 3);
@@ -3590,17 +3668,15 @@ void ProcessDetailWindow::initializeActionTab()
     controlLayout->addWidget(new QLabel("优先级", controlGroup), 3, 0);
     controlLayout->addWidget(m_priorityCombo, 3, 1, 1, 3);
     controlLayout->addWidget(m_applyPriorityButton, 3, 4);
-    controlLayout->addWidget(new QLabel(QStringLiteral("进程令牌"), controlGroup), 4, 0);
-    controlLayout->addWidget(m_adjustTokenPrivilegesButton, 4, 1, 1, 2);
     m_actionLayout->addWidget(controlGroup);
 
     // CPU 亲和性：
-    // - 按 processor group 分段，以 6 列矩阵展示稳定 Gx:Ly 身份；
+    // - 以 6 列矩阵展示稳定逻辑处理器身份；仅多组时显示 Gx 前缀和分组标题；
     // - 仅在“操作”页首次进入后读取实际 CPU Set，保持详情窗口首次打开的轻量路径；
     // - 每个按钮独立切换，蓝色主题背景代表该逻辑处理器已启用。
     m_affinityActionGroup = new QGroupBox(
         ks::i18n::text(QStringLiteral("process.detail.affinity.title"), QString()),
-        m_actionTab);
+        actionContent);
     QVBoxLayout* affinityGroupLayout = new QVBoxLayout(m_affinityActionGroup);
     affinityGroupLayout->setContentsMargins(10, 10, 10, 10);
     affinityGroupLayout->setSpacing(8);
@@ -3631,18 +3707,25 @@ void ProcessDetailWindow::initializeActionTab()
             });
     };
 
-    QLabel* affinityDescriptionLabel = new QLabel(
+    m_affinityDescriptionLabel = new QLabel(
         ks::i18n::text(QStringLiteral("process.detail.affinity.description"), QString()),
         m_affinityActionGroup);
-    affinityDescriptionLabel->setWordWrap(true);
-    affinityDescriptionLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    affinityDescriptionLabel->setStyleSheet(
+    m_affinityDescriptionLabel->setWordWrap(true);
+    m_affinityDescriptionLabel->setMinimumWidth(0);
+    m_affinityDescriptionLabel->setSizePolicy(
+        QSizePolicy::Ignored,
+        QSizePolicy::Preferred);
+    m_affinityDescriptionLabel->setTextInteractionFlags(
+        Qt::TextSelectableByMouse);
+    m_affinityDescriptionLabel->setStyleSheet(
         QStringLiteral("color:%1;").arg(KswordTheme::TextSecondaryHex()));
-    installCopyMenu(affinityDescriptionLabel, [affinityDescriptionLabel]()
+    installCopyMenu(m_affinityDescriptionLabel, [this]()
     {
-        return affinityDescriptionLabel->text();
+        return m_affinityDescriptionLabel != nullptr
+            ? m_affinityDescriptionLabel->text()
+            : QString();
     });
-    affinityGroupLayout->addWidget(affinityDescriptionLabel);
+    affinityGroupLayout->addWidget(m_affinityDescriptionLabel);
 
     m_affinityPersistenceCheckBox = new QCheckBox(
         ks::i18n::text(QStringLiteral("process.detail.affinity.persistence"), QString()),
@@ -3655,6 +3738,11 @@ void ProcessDetailWindow::initializeActionTab()
     affinityTopLayout->setContentsMargins(0, 0, 0, 0);
     affinityTopLayout->setSpacing(8);
     m_affinityStatusLabel = new QLabel(m_affinityActionGroup);
+    m_affinityStatusLabel->setWordWrap(true);
+    m_affinityStatusLabel->setMinimumWidth(0);
+    m_affinityStatusLabel->setSizePolicy(
+        QSizePolicy::Ignored,
+        QSizePolicy::Preferred);
     m_affinityStatusLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
     m_affinityStatusLabel->setStyleSheet(buildStateLabelStyle(statusSecondaryColor(), 600));
     installCopyMenu(m_affinityStatusLabel, [this]()
@@ -3723,6 +3811,13 @@ void ProcessDetailWindow::initializeActionTab()
         {
             const QSignalBlocker signalBlocker(m_affinityPersistenceCheckBox);
             m_affinityPersistenceCheckBox->setChecked(!enabled);
+            kLogEvent persistenceEvent;
+            warn << persistenceEvent
+                << "[ProcessDetailWindow] CPU affinity persistence toggle failed, pid="
+                << m_baseRecord.pid
+                << ", enabled=" << (enabled ? "true" : "false")
+                << ", detail=" << detailText
+                << eol;
         }
         if (m_affinityStatusLabel != nullptr)
         {
@@ -3734,8 +3829,9 @@ void ProcessDetailWindow::initializeActionTab()
                             : QStringLiteral("process.detail.affinity.persistence.removed"),
                         QString())
                     : ks::i18n::text(
-                        QStringLiteral("process.detail.affinity.status.unavailable"),
-                        QString()).arg(QString::fromStdString(detailText)));
+                        QStringLiteral(
+                            "process.detail.affinity.persistence.update_failed"),
+                        QString()));
             m_affinityStatusLabel->setStyleSheet(buildStateLabelStyle(
                 persistenceOk ? statusIdleColor() : statusWarningColor(),
                 persistenceOk ? 600 : 700));
@@ -3752,7 +3848,7 @@ void ProcessDetailWindow::initializeActionTab()
     // - 所有复选框右键都提供复制特权名称，保持详情页内容可复制。
     m_privilegeActionGroup = new QGroupBox(
         ks::i18n::text(QStringLiteral("process.detail.privileges.title"), QString()),
-        m_actionTab);
+        actionContent);
     QVBoxLayout* privilegeGroupLayout = new QVBoxLayout(m_privilegeActionGroup);
     privilegeGroupLayout->setContentsMargins(10, 10, 10, 10);
     privilegeGroupLayout->setSpacing(8);
@@ -3774,6 +3870,11 @@ void ProcessDetailWindow::initializeActionTab()
     privilegeActionTopLayout->setContentsMargins(0, 0, 0, 0);
     privilegeActionTopLayout->setSpacing(8);
     m_actionPrivilegeStatusLabel = new QLabel(m_privilegeActionGroup);
+    m_actionPrivilegeStatusLabel->setWordWrap(true);
+    m_actionPrivilegeStatusLabel->setMinimumWidth(0);
+    m_actionPrivilegeStatusLabel->setSizePolicy(
+        QSizePolicy::Ignored,
+        QSizePolicy::Preferred);
     m_actionPrivilegeStatusLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
     m_actionPrivilegeStatusLabel->setStyleSheet(
         buildStateLabelStyle(statusSecondaryColor(), 600));
@@ -3844,7 +3945,7 @@ void ProcessDetailWindow::initializeActionTab()
     privilegeGroupLayout->addLayout(privilegeGridLayout);
     m_actionLayout->addWidget(m_privilegeActionGroup);
 
-    QGroupBox* gotoGroup = new QGroupBox(QStringLiteral("转到"), m_actionTab);
+    QGroupBox* gotoGroup = new QGroupBox(QStringLiteral("转到"), actionContent);
     QGridLayout* gotoLayout = new QGridLayout(gotoGroup);
     gotoLayout->setHorizontalSpacing(8);
     gotoLayout->setVerticalSpacing(8);
@@ -3866,7 +3967,7 @@ void ProcessDetailWindow::initializeActionTab()
     // 补充操作组：
     // - 与进程列表右键菜单对齐，把详情页原先遗漏的效率模式、PPL 刷新和 R0 能力放进来；
     // - R0 按钮使用明确文字和对应业务图标，菜单弹出项在点击时动态生成。
-    QGroupBox* extendedActionGroup = new QGroupBox(QStringLiteral("右键菜单同步能力"), m_actionTab);
+    QGroupBox* extendedActionGroup = new QGroupBox(QStringLiteral("右键菜单同步能力"), actionContent);
     QGridLayout* extendedActionLayout = new QGridLayout(extendedActionGroup);
     extendedActionLayout->setHorizontalSpacing(8);
     extendedActionLayout->setVerticalSpacing(8);
@@ -3950,7 +4051,7 @@ void ProcessDetailWindow::initializeActionTab()
     // 注入与载入组：
     // - 把 DLL / Shellcode 两套操作收成统一两行；
     // - 浏览与执行按钮使用文字按钮，保证操作面板不再依赖图标表达含义。
-    QGroupBox* injectGroup = new QGroupBox("注入与载入", m_actionTab);
+    QGroupBox* injectGroup = new QGroupBox("注入与载入", actionContent);
     QGridLayout* injectLayout = new QGridLayout(injectGroup);
     injectLayout->setHorizontalSpacing(8);
     injectLayout->setVerticalSpacing(8);
@@ -4163,11 +4264,13 @@ void ProcessDetailWindow::initializeKernelObjectTab()
         << "[ProcessDetailWindow] initializeKernelObjectTab: 构建 Process Detail Evidence 页面。"
         << eol;
 
-    m_kernelObjectLayout = new QVBoxLayout(m_kernelObjectTab);
-    m_kernelObjectLayout->setContentsMargins(6, 6, 6, 6);
-    m_kernelObjectLayout->setSpacing(8);
+    QWidget* const kernelObjectContent = createScrollableTabContent(
+        m_kernelObjectTab,
+        m_kernelObjectLayout,
+        6,
+        8);
 
-    QGroupBox* summaryGroup = new QGroupBox(QStringLiteral("R0 扩展摘要"), m_kernelObjectTab);
+    QGroupBox* summaryGroup = new QGroupBox(QStringLiteral("R0 扩展摘要"), kernelObjectContent);
     QFormLayout* summaryFormLayout = new QFormLayout(summaryGroup);
     summaryFormLayout->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
     summaryFormLayout->setHorizontalSpacing(18);
@@ -4186,7 +4289,7 @@ void ProcessDetailWindow::initializeKernelObjectTab()
     summaryFormLayout->addRow(QStringLiteral("R0 镜像路径"), m_kernelObjectImagePathValue);
     m_kernelObjectLayout->addWidget(summaryGroup);
 
-    QGroupBox* objectGroup = new QGroupBox(QStringLiteral("对象字段可用性"), m_kernelObjectTab);
+    QGroupBox* objectGroup = new QGroupBox(QStringLiteral("对象字段可用性"), kernelObjectContent);
     QFormLayout* objectFormLayout = new QFormLayout(objectGroup);
     objectFormLayout->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
     objectFormLayout->setHorizontalSpacing(18);
@@ -4200,7 +4303,7 @@ void ProcessDetailWindow::initializeKernelObjectTab()
     objectFormLayout->addRow(QStringLiteral("SectionObject"), m_kernelObjectSectionObjectValue);
     m_kernelObjectLayout->addWidget(objectGroup);
 
-    QGroupBox* protectionGroup = new QGroupBox(QStringLiteral("保护与签名字段"), m_kernelObjectTab);
+    QGroupBox* protectionGroup = new QGroupBox(QStringLiteral("保护与签名字段"), kernelObjectContent);
     QFormLayout* protectionFormLayout = new QFormLayout(protectionGroup);
     protectionFormLayout->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
     protectionFormLayout->setHorizontalSpacing(18);
@@ -4217,7 +4320,7 @@ void ProcessDetailWindow::initializeKernelObjectTab()
     protectionFormLayout->addRow(QStringLiteral("SectionSignatureLevel"), m_kernelObjectSectionSignatureValue);
     m_kernelObjectLayout->addWidget(protectionGroup);
 
-    QGroupBox* sourceGroup = new QGroupBox(QStringLiteral("字段来源"), m_kernelObjectTab);
+    QGroupBox* sourceGroup = new QGroupBox(QStringLiteral("字段来源"), kernelObjectContent);
     QFormLayout* sourceFormLayout = new QFormLayout(sourceGroup);
     sourceFormLayout->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
     sourceFormLayout->setHorizontalSpacing(18);
@@ -4239,7 +4342,7 @@ void ProcessDetailWindow::initializeKernelObjectTab()
     sourceFormLayout->addRow(QStringLiteral("SectionObject"), m_kernelObjectSectionObjectSourceValue);
     m_kernelObjectLayout->addWidget(sourceGroup);
 
-    QGroupBox* offsetGroup = new QGroupBox(QStringLiteral("EPROCESS 偏移"), m_kernelObjectTab);
+    QGroupBox* offsetGroup = new QGroupBox(QStringLiteral("EPROCESS 偏移"), kernelObjectContent);
     QFormLayout* offsetFormLayout = new QFormLayout(offsetGroup);
     offsetFormLayout->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
     offsetFormLayout->setHorizontalSpacing(18);
@@ -4257,7 +4360,7 @@ void ProcessDetailWindow::initializeKernelObjectTab()
     offsetFormLayout->addRow(QStringLiteral("SectionObject"), m_kernelObjectSectionObjectOffsetValue);
     m_kernelObjectLayout->addWidget(offsetGroup);
 
-    QGroupBox* sectionGroup = new QGroupBox(QStringLiteral("Section / ControlArea 映射关系"), m_kernelObjectTab);
+    QGroupBox* sectionGroup = new QGroupBox(QStringLiteral("Section / ControlArea 映射关系"), kernelObjectContent);
     QVBoxLayout* sectionGroupLayout = new QVBoxLayout(sectionGroup);
     sectionGroupLayout->setContentsMargins(8, 8, 8, 8);
     sectionGroupLayout->setSpacing(6);
@@ -4292,28 +4395,32 @@ void ProcessDetailWindow::initializeTokenSwitchTab()
         << "[ProcessDetailWindow] initializeTokenSwitchTab: 构建完整令牌设置页面。"
         << eol;
 
-    m_tokenSwitchLayout = new QVBoxLayout(m_tokenSwitchTab);
-    m_tokenSwitchLayout->setContentsMargins(6, 6, 6, 6);
-    m_tokenSwitchLayout->setSpacing(8);
+    QWidget* const tokenSwitchContent = createScrollableTabContent(
+        m_tokenSwitchTab,
+        m_tokenSwitchLayout,
+        6,
+        8);
 
     // 顶部工具栏按钮：
     // - 刷新开关：只刷新快捷开关复选框；
     // - 应用开关：提交快捷开关；
     // - 刷新全部：触发令牌详情页“全信息类枚举”刷新。
     QHBoxLayout* tokenSwitchTopBarLayout = new QHBoxLayout();
-    m_refreshTokenSwitchButton = new QPushButton(QIcon(":/Icon/process_refresh.svg"), QString(), m_tokenSwitchTab);
+    m_refreshTokenSwitchButton = new QPushButton(QIcon(":/Icon/process_refresh.svg"), QString(), tokenSwitchContent);
     m_refreshTokenSwitchButton->setToolTip(QStringLiteral("刷新当前进程令牌的各项开关状态"));
-    m_refreshTokenSwitchButton->setFixedSize(34, 34);
-    m_refreshTokenSwitchButton->setIconSize(QSize(16, 16));
-    m_applyTokenSwitchButton = new QPushButton(QIcon(":/Icon/process_start.svg"), QString(), m_tokenSwitchTab);
+    KswordTheme::ApplyStandardIconButtonMetrics(m_refreshTokenSwitchButton);
+    m_applyTokenSwitchButton = new QPushButton(QIcon(":/Icon/process_start.svg"), QString(), tokenSwitchContent);
     m_applyTokenSwitchButton->setToolTip(QStringLiteral("把下方复选框状态写回目标进程令牌"));
-    m_applyTokenSwitchButton->setFixedSize(34, 34);
-    m_applyTokenSwitchButton->setIconSize(QSize(16, 16));
-    m_refreshTokenAllInfoButton = new QPushButton(QIcon(":/Icon/process_refresh.svg"), QString(), m_tokenSwitchTab);
+    KswordTheme::ApplyStandardIconButtonMetrics(m_applyTokenSwitchButton);
+    m_refreshTokenAllInfoButton = new QPushButton(QIcon(":/Icon/process_refresh.svg"), QString(), tokenSwitchContent);
     m_refreshTokenAllInfoButton->setToolTip(QStringLiteral("刷新完整令牌信息（包含全部 TokenInformationClass 枚举）"));
-    m_refreshTokenAllInfoButton->setFixedSize(34, 34);
-    m_refreshTokenAllInfoButton->setIconSize(QSize(16, 16));
-    m_tokenSwitchStatusLabel = new QLabel(QStringLiteral("● 尚未刷新令牌开关"), m_tokenSwitchTab);
+    KswordTheme::ApplyStandardIconButtonMetrics(m_refreshTokenAllInfoButton);
+    m_tokenSwitchStatusLabel = new QLabel(QStringLiteral("● 尚未刷新令牌开关"), tokenSwitchContent);
+    m_tokenSwitchStatusLabel->setWordWrap(true);
+    m_tokenSwitchStatusLabel->setMinimumWidth(0);
+    m_tokenSwitchStatusLabel->setSizePolicy(
+        QSizePolicy::Ignored,
+        QSizePolicy::Preferred);
     m_tokenSwitchStatusLabel->setStyleSheet(
         QStringLiteral("color:%1; font-weight:600;")
         .arg(KswordTheme::TextSecondaryHex()));
@@ -4326,7 +4433,7 @@ void ProcessDetailWindow::initializeTokenSwitchTab()
     // 快捷开关组：
     // - 对应常见 Token 布尔位与 MandatoryPolicy 位；
     // - 适合“一眼可见 + 一键应用”的高频修改场景。
-    QGroupBox* tokenSwitchGroup = new QGroupBox(QStringLiteral("Token 快捷开关"), m_tokenSwitchTab);
+    QGroupBox* tokenSwitchGroup = new QGroupBox(QStringLiteral("Token 快捷开关"), tokenSwitchContent);
     QGridLayout* tokenSwitchGridLayout = new QGridLayout(tokenSwitchGroup);
     tokenSwitchGridLayout->setHorizontalSpacing(12);
     tokenSwitchGridLayout->setVerticalSpacing(8);
@@ -4356,7 +4463,7 @@ void ProcessDetailWindow::initializeTokenSwitchTab()
     // - 这些项都来自 TokenInformationClass 下拉中的高频类；
     // - 通过复选框直接读写，减少“选类 + 填值”的重复操作。
     QGroupBox* tokenCommonClassGroup =
-        new QGroupBox(QStringLiteral("Token 常用信息类（布尔语义）"), m_tokenSwitchTab);
+        new QGroupBox(QStringLiteral("Token 常用信息类（布尔语义）"), tokenSwitchContent);
     QGridLayout* tokenCommonClassGridLayout = new QGridLayout(tokenCommonClassGroup);
     tokenCommonClassGridLayout->setHorizontalSpacing(12);
     tokenCommonClassGridLayout->setVerticalSpacing(8);
@@ -4397,7 +4504,7 @@ void ProcessDetailWindow::initializeTokenSwitchTab()
     // 原始设置组：
     // - 允许用户选择任意 TokenInformationClass；
     // - 负载支持 UInt32/UInt64/HexBytes，直接进入 NtSetInformationToken。
-    QGroupBox* rawSetGroup = new QGroupBox(QStringLiteral("原始 NtSetInformationToken（全部信息类）"), m_tokenSwitchTab);
+    QGroupBox* rawSetGroup = new QGroupBox(QStringLiteral("原始 NtSetInformationToken（全部信息类）"), tokenSwitchContent);
     QGridLayout* rawSetLayout = new QGridLayout(rawSetGroup);
     rawSetLayout->setHorizontalSpacing(10);
     rawSetLayout->setVerticalSpacing(8);
@@ -4483,8 +4590,7 @@ void ProcessDetailWindow::initializeTokenSwitchTab()
 
     m_tokenRawApplyButton = new QPushButton(QIcon(":/Icon/process_start.svg"), QString(), rawSetGroup);
     m_tokenRawApplyButton->setToolTip(QStringLiteral("应用原始 NtSetInformationToken 设置"));
-    m_tokenRawApplyButton->setFixedSize(34, 34);
-    m_tokenRawApplyButton->setIconSize(QSize(16, 16));
+    KswordTheme::ApplyStandardIconButtonMetrics(m_tokenRawApplyButton);
 
     rawSetLayout->addWidget(new QLabel(QStringLiteral("信息类"), rawSetGroup), 0, 0);
     rawSetLayout->addWidget(m_tokenRawInfoClassCombo, 0, 1, 1, 2);
@@ -4497,7 +4603,7 @@ void ProcessDetailWindow::initializeTokenSwitchTab()
 
     QLabel* tokenSwitchHintLabel = new QLabel(
         QStringLiteral("提示：可先点“刷新全部令牌信息”查看所有 TokenInformationClass 的当前状态，再按快捷或原始模式应用。"),
-        m_tokenSwitchTab);
+        tokenSwitchContent);
     tokenSwitchHintLabel->setStyleSheet(QStringLiteral("color:%1;").arg(KswordTheme::TextSecondaryHex()));
     m_tokenSwitchLayout->addWidget(tokenSwitchHintLabel);
     m_tokenSwitchLayout->addStretch(1);
@@ -4958,17 +5064,6 @@ void ProcessDetailWindow::initializeConnections()
     connect(m_setCriticalButton, &QPushButton::clicked, this, [this]() { executeSetCriticalAction(true); });
     connect(m_clearCriticalButton, &QPushButton::clicked, this, [this]() { executeSetCriticalAction(false); });
     connect(m_applyPriorityButton, &QPushButton::clicked, this, [this]() { executeSetPriorityAction(); });
-    connect(m_adjustTokenPrivilegesButton, &QPushButton::clicked, this, [this]() {
-        const bool changed = ks::process_ui::showProcessTokenPrivilegeDialog(
-            this,
-            m_baseRecord.pid,
-            m_baseRecord.creationTime100ns,
-            QString::fromStdString(m_baseRecord.processName));
-        if (changed)
-        {
-            requestAsyncTokenRefresh();
-        }
-    });
     connect(m_actionPrivilegeRefreshButton, &QPushButton::clicked, this, [this]() { requestAsyncActionPrivilegeRefresh(); });
     connect(m_applyActionPrivilegeR3Button, &QPushButton::clicked, this, [this]() { executeApplyActionPrivileges(false); });
     connect(m_applyActionPrivilegeR0Button, &QPushButton::clicked, this, [this]() { executeApplyActionPrivileges(true); });

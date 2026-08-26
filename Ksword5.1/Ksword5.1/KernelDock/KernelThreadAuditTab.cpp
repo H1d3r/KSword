@@ -3,6 +3,7 @@
 #include "../ArkDriverClient/ArkDriverClient.h"
 #include "../Internationalization/LanguageManager.h"
 #include "../UI/CodeEditorWidget.h"
+#include "../UI/DetailLayoutRegistry.h"
 #include "../UI/TableInteractionSupport.h"
 #include "../theme.h"
 
@@ -148,8 +149,7 @@ void KernelThreadAuditTab::initializeUi()
     m_terminateButton = new QPushButton(QIcon(QStringLiteral(":/Icon/process_terminate.svg")), QString(), this);
     for (QPushButton* actionButton : { m_refreshButton, m_suspendButton, m_resumeButton, m_terminateButton })
     {
-        actionButton->setFixedSize(30, 30);
-        actionButton->setIconSize(QSize(16, 16));
+        KswordTheme::ApplyCompactIconButtonMetrics(actionButton);
     }
     const bool managementVisible = m_mode == Mode::SystemThreads;
     m_suspendButton->setVisible(managementVisible);
@@ -197,6 +197,8 @@ void KernelThreadAuditTab::initializeUi()
     splitter->setStretchFactor(0, 4);
     splitter->setStretchFactor(1, 2);
     rootLayout->addWidget(splitter, 1);
+
+    ks::ui::DetailLayoutRegistry::registerHost(m_table, m_detailEditor, this);
 
     // 连接：刷新、筛选、选择、A/B 列组、表头菜单和行操作菜单。
     connect(m_refreshButton, &QPushButton::clicked, this, [this]() { requestRefresh(); });
@@ -342,6 +344,7 @@ void KernelThreadAuditTab::applySnapshot(const Snapshot& snapshot)
 
 void KernelThreadAuditTab::rebuildTable()
 {
+    ks::ui::DetailLayoutRegistry::prepareDataRebuild(m_detailEditor);
     const QString filterText = m_filterEdit->text().trimmed();
     m_table->setSortingEnabled(false);
     m_table->setRowCount(0);

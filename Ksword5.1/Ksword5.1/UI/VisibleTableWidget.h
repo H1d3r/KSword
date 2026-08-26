@@ -22,6 +22,32 @@
 
 namespace ks::ui
 {
+    enum class TableActionBarMode
+    {
+        None = 0,
+        Compact = 1,
+        Full = 2
+    };
+
+    inline constexpr char TableActionBarModeProperty[] =
+        "KSWORD_TABLE_INTERACTION_ACTION_BAR_MODE";
+    inline constexpr char PreserveCustomTableHeaderStyleProperty[] =
+        "KSWORD_TABLE_INTERACTION_PRESERVE_CUSTOM_HEADER_STYLE";
+
+    inline void SetPreserveCustomTableHeaderStyle(QTableView* tableView, const bool preserve)
+    {
+        if (tableView != nullptr)
+        {
+            tableView->setProperty(PreserveCustomTableHeaderStyleProperty, preserve);
+        }
+    }
+
+    inline bool PreservesCustomTableHeaderStyle(const QTableView* tableView)
+    {
+        return tableView != nullptr
+            && tableView->property(PreserveCustomTableHeaderStyleProperty).toBool();
+    }
+
     // Implemented by table subclasses that can reserve a strip immediately above the column
     // header. The action widget remains owned by its caller; this interface only manages the
     // table's layout reservation and supplies the matching geometry for that widget.
@@ -478,6 +504,40 @@ namespace ks::ui
             QTableView::paintEvent(eventObject);
         }
     };
+
+    // All table chrome hosts default to the complete snapshot/freeze workflow.
+    // Tiny or purely presentational tables can explicitly select Compact or None.
+    inline TableActionBarMode EffectiveTableActionBarMode(const QTableView* tableView)
+    {
+        if (tableView == nullptr)
+        {
+            return TableActionBarMode::None;
+        }
+
+        const QVariant configuredMode = tableView->property(TableActionBarModeProperty);
+        if (configuredMode.isValid())
+        {
+            switch (configuredMode.toInt())
+            {
+            case static_cast<int>(TableActionBarMode::None):
+                return TableActionBarMode::None;
+            case static_cast<int>(TableActionBarMode::Full):
+                return TableActionBarMode::Full;
+            default:
+                return TableActionBarMode::Compact;
+            }
+        }
+
+        return TableActionBarMode::Full;
+    }
+
+    inline void SetTableActionBarMode(QTableView* tableView, const TableActionBarMode mode)
+    {
+        if (tableView != nullptr)
+        {
+            tableView->setProperty(TableActionBarModeProperty, static_cast<int>(mode));
+        }
+    }
 
     inline TableActionBarHost* TableActionBarHostFor(QTableView* tableView)
     {

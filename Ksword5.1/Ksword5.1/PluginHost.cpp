@@ -3,6 +3,7 @@
 
 #include "theme.h"
 #include "Internationalization/LanguageManager.h"
+#include "ksword/log/log.h"
 
 #include <QAbstractItemView>
 #include <QBrush>
@@ -41,6 +42,7 @@
 #include <QSaveFile>
 #include <QSettings>
 #include <QShowEvent>
+#include <QSizePolicy>
 #include <QStandardPaths>
 #include <QTableWidget>
 #include <QTableWidgetItem>
@@ -1935,27 +1937,66 @@ namespace
         {
             setAttribute(Qt::WA_DeleteOnClose, true);
             setWindowTitle(QStringLiteral("插件管理"));
-            resize(900, 520);
+            resize(840, 460);
             setModal(false);
             auto* layout = new QVBoxLayout(this);
+            layout->setContentsMargins(8, 8, 8, 8);
+            layout->setSpacing(6);
+
+            // 插件列表与进程列表采用同一套紧凑表格几何基线。只在页面本地设置
+            // 行高和滚动等几何属性，避免把尺寸规则放进 app 级 QSS 后污染标题栏
+            // 或其它需要可变行高的表格。
+            const auto configurePluginTable = [](QTableWidget* table) {
+                if (table == nullptr)
+                {
+                    return;
+                }
+                table->setAlternatingRowColors(true);
+                table->setShowGrid(false);
+                table->setWordWrap(false);
+                table->setCornerButtonEnabled(false);
+                table->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
+                table->setHorizontalScrollMode(QAbstractItemView::ScrollPerPixel);
+                if (QHeaderView* verticalHeader = table->verticalHeader())
+                {
+                    verticalHeader->setVisible(false);
+                    verticalHeader->setSectionResizeMode(QHeaderView::Fixed);
+                    verticalHeader->setMinimumSectionSize(20);
+                    verticalHeader->setDefaultSectionSize(24);
+                }
+            };
 
             m_networkManager = new QNetworkAccessManager(this);
             auto* tabWidget = new QTabWidget(this);
             auto* localPage = new QWidget(tabWidget);
             auto* localLayout = new QVBoxLayout(localPage);
-            m_table = new ks::ui::VisibleTableWidget(this);
+            localLayout->setContentsMargins(6, 6, 6, 6);
+            localLayout->setSpacing(4);
+            m_table = new ks::ui::VisibleTableWidget(localPage);
             m_table->setColumnCount(4);
             m_table->setHorizontalHeaderLabels(QStringList{ QStringLiteral("名称"), QStringLiteral("版本"), QStringLiteral("目标"), QStringLiteral("说明") });
             m_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
             m_table->setSelectionBehavior(QAbstractItemView::SelectRows);
             m_table->setSelectionMode(QAbstractItemView::SingleSelection);
             m_table->horizontalHeader()->setStretchLastSection(true);
-            m_table->setAlternatingRowColors(true);
+            configurePluginTable(m_table);
+            auto* localActions = new QHBoxLayout();
+            localActions->setSpacing(4);
+            auto* refreshButton = new QPushButton(QStringLiteral("重新扫描本地"), localPage);
+            auto* detailButton = new QPushButton(QStringLiteral("查看清单详情"), localPage);
+            m_openFolderButton = new QPushButton(QStringLiteral("打开插件目录"), localPage);
+            localActions->addWidget(refreshButton);
+            localActions->addWidget(detailButton);
+            localActions->addWidget(m_openFolderButton);
+            localActions->addStretch(1);
+            localLayout->addLayout(localActions);
             localLayout->addWidget(m_table);
             tabWidget->addTab(localPage, QStringLiteral("已安装"));
 
             auto* marketplacePage = new QWidget(tabWidget);
             auto* marketplaceLayout = new QVBoxLayout(marketplacePage);
+            marketplaceLayout->setContentsMargins(6, 6, 6, 6);
+            marketplaceLayout->setSpacing(4);
             m_marketplaceTable = new ks::ui::VisibleTableWidget(marketplacePage);
             m_marketplaceTable->setColumnCount(6);
             m_marketplaceTable->setHorizontalHeaderLabels(QStringList{
@@ -1964,40 +2005,40 @@ namespace
             m_marketplaceTable->setSelectionBehavior(QAbstractItemView::SelectRows);
             m_marketplaceTable->setSelectionMode(QAbstractItemView::SingleSelection);
             m_marketplaceTable->horizontalHeader()->setStretchLastSection(true);
-            m_marketplaceTable->setAlternatingRowColors(true);
+            configurePluginTable(m_marketplaceTable);
+            auto* marketplaceActions = new QHBoxLayout();
+            marketplaceActions->setSpacing(4);
+            auto* refreshMarketplaceButton = new QPushButton(QStringLiteral("刷新商城"), marketplacePage);
+            auto* checkUpdatesButton = new QPushButton(QStringLiteral("检查插件更新"), marketplacePage);
+            auto* installButton = new QPushButton(QStringLiteral("同意许可证并一键安装"), marketplacePage);
+            m_autoUpdateCheck = new QCheckBox(QStringLiteral("自动更新已授权插件"), marketplacePage);
+            m_autoUpdateCheck->setToolTip(QStringLiteral("检查更新时，自动安装已确认当前许可证且有新版本的插件。许可证变化时会要求重新确认。"));
+            QSettings settings;
+            m_autoUpdateCheck->setChecked(settings.value(QStringLiteral("PluginMarketplace/AutoUpdate"), false).toBool());
+            marketplaceActions->addWidget(refreshMarketplaceButton);
+            marketplaceActions->addWidget(checkUpdatesButton);
+            marketplaceActions->addWidget(installButton);
+            marketplaceActions->addWidget(m_autoUpdateCheck);
+            marketplaceActions->addStretch(1);
+            marketplaceLayout->addLayout(marketplaceActions);
             marketplaceLayout->addWidget(m_marketplaceTable);
             tabWidget->addTab(marketplacePage, QStringLiteral("插件商城"));
             layout->addWidget(tabWidget, 1);
 
             m_status = new QLabel(this);
             m_status->setWordWrap(true);
+            m_status->setMinimumWidth(0);
+            m_status->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
             layout->addWidget(m_status);
             m_installProgress = new QProgressBar(this);
             m_installProgress->setTextVisible(true);
             m_installProgress->setVisible(false);
             layout->addWidget(m_installProgress);
-            auto* buttons = new QHBoxLayout();
-            auto* refreshButton = new QPushButton(QStringLiteral("重新扫描本地"), this);
-            auto* refreshMarketplaceButton = new QPushButton(QStringLiteral("刷新商城"), this);
-            auto* checkUpdatesButton = new QPushButton(QStringLiteral("检查插件更新"), this);
-            auto* detailButton = new QPushButton(QStringLiteral("查看清单详情"), this);
-            auto* installButton = new QPushButton(QStringLiteral("同意许可证并一键安装"), this);
-            m_autoUpdateCheck = new QCheckBox(QStringLiteral("自动更新已授权插件"), this);
-            m_autoUpdateCheck->setToolTip(QStringLiteral("检查更新时，自动安装已确认当前许可证且有新版本的插件。许可证变化时会要求重新确认。"));
-            QSettings settings;
-            m_autoUpdateCheck->setChecked(settings.value(QStringLiteral("PluginMarketplace/AutoUpdate"), false).toBool());
-            m_openFolderButton = new QPushButton(QStringLiteral("打开插件目录"), this);
+            auto* footer = new QHBoxLayout();
             auto* closeButton = new QPushButton(QStringLiteral("关闭"), this);
-            buttons->addWidget(refreshButton);
-            buttons->addWidget(refreshMarketplaceButton);
-            buttons->addWidget(checkUpdatesButton);
-            buttons->addWidget(detailButton);
-            buttons->addWidget(installButton);
-            buttons->addWidget(m_autoUpdateCheck);
-            buttons->addWidget(m_openFolderButton);
-            buttons->addStretch(1);
-            buttons->addWidget(closeButton);
-            layout->addLayout(buttons);
+            footer->addStretch(1);
+            footer->addWidget(closeButton);
+            layout->addLayout(footer);
             connect(refreshButton, &QPushButton::clicked, this, [this]() { refreshPlugins(); });
             connect(refreshMarketplaceButton, &QPushButton::clicked, this, [this]() { refreshMarketplace(); });
             connect(checkUpdatesButton, &QPushButton::clicked, this, [this]() { checkForUpdates(); });
@@ -2032,7 +2073,13 @@ namespace
             m_pluginRoot.clear();
             if (!discoverPlugins(&result, &errorText))
             {
-                m_status->setText(QStringLiteral("插件目录不可用：%1").arg(errorText));
+                m_status->setText(
+                    QStringLiteral("插件目录不可用；详情已写入日志。"));
+                kLogEvent discoveryEvent;
+                warn << discoveryEvent
+                    << "[PluginHost] plugin discovery failed, detail="
+                    << errorText.toStdString()
+                    << eol;
                 m_openFolderButton->setEnabled(false);
                 return;
             }
@@ -2058,7 +2105,18 @@ namespace
                 .arg(QDir::toNativeSeparators(m_pluginRoot));
             if (!result.ignoredManifests.isEmpty())
             {
-                status += QStringLiteral("\n忽略的清单：%1").arg(result.ignoredManifests.join(QStringLiteral("；")));
+                status += QStringLiteral(
+                    "\n已忽略 %1 个清单；详情已写入日志。")
+                    .arg(result.ignoredManifests.size());
+                kLogEvent ignoredManifestEvent;
+                warn << ignoredManifestEvent
+                    << "[PluginHost] ignored plugin manifests, count="
+                    << result.ignoredManifests.size()
+                    << ", details="
+                    << result.ignoredManifests
+                        .join(QStringLiteral(" | "))
+                        .toStdString()
+                    << eol;
             }
             m_status->setText(status);
         }
@@ -2102,14 +2160,26 @@ namespace
                 reply->deleteLater();
                 if (!networkOk)
                 {
-                    m_status->setText(QStringLiteral("商城目录读取失败：%1").arg(networkError));
+                    m_status->setText(QStringLiteral(
+                        "商城目录读取失败；详情已写入日志。"));
+                    kLogEvent requestEvent;
+                    warn << requestEvent
+                        << "[PluginHost] marketplace catalog request failed, detail="
+                        << networkError.toStdString()
+                        << eol;
                     return;
                 }
                 QJsonParseError parseError;
                 const QJsonDocument document = QJsonDocument::fromJson(payload, &parseError);
                 if (parseError.error != QJsonParseError::NoError || !document.isObject())
                 {
-                    m_status->setText(QStringLiteral("商城目录不是有效 JSON：%1").arg(parseError.errorString()));
+                    m_status->setText(QStringLiteral(
+                        "商城目录不是有效 JSON；详情已写入日志。"));
+                    kLogEvent parseEvent;
+                    warn << parseEvent
+                        << "[PluginHost] marketplace catalog parse failed, detail="
+                        << parseError.errorString().toStdString()
+                        << eol;
                     return;
                 }
                 const QJsonObject root = document.object();
@@ -2138,7 +2208,21 @@ namespace
                 QString status = QStringLiteral("插件商城已从 KSwordDEV/Plugins 刷新：%1 个可下载插件，%2 个插件可更新。")
                     .arg(m_marketplacePlugins.size())
                     .arg(updates.size());
-                if (!ignoredEntries.isEmpty()) status += QStringLiteral(" 已忽略 %1 个无效条目。").arg(ignoredEntries.size());
+                if (!ignoredEntries.isEmpty())
+                {
+                    status += QStringLiteral(
+                        " 已忽略 %1 个无效条目；详情已写入日志。")
+                        .arg(ignoredEntries.size());
+                    kLogEvent ignoredEntryEvent;
+                    warn << ignoredEntryEvent
+                        << "[PluginHost] ignored marketplace entries, count="
+                        << ignoredEntries.size()
+                        << ", details="
+                        << ignoredEntries
+                            .join(QStringLiteral(" | "))
+                            .toStdString()
+                        << eol;
+                }
                 m_status->setText(status);
                 if (checkForUpdates && !m_autoUpdateInProgress &&
                     m_autoUpdateCheck != nullptr && m_autoUpdateCheck->isChecked())
@@ -2353,10 +2437,21 @@ namespace
                 }
                 else
                 {
-                    m_status->setText(QStringLiteral("自动更新完成：%1 个成功，%2 个失败。%3")
+                    m_status->setText(QStringLiteral(
+                        "自动更新完成：%1 个成功，%2 个失败；详情已写入日志。")
                         .arg(m_autoUpdateCompleted - m_autoUpdateFailures.size())
-                        .arg(m_autoUpdateFailures.size())
-                        .arg(m_autoUpdateFailures.join(QStringLiteral("；"))));
+                        .arg(m_autoUpdateFailures.size()));
+                    kLogEvent autoUpdateEvent;
+                    warn << autoUpdateEvent
+                        << "[PluginHost] automatic update completed with failures, completed="
+                        << m_autoUpdateCompleted
+                        << ", failureCount="
+                        << m_autoUpdateFailures.size()
+                        << ", failureDetails="
+                        << m_autoUpdateFailures
+                            .join(QStringLiteral(" | "))
+                            .toStdString()
+                        << eol;
                 }
                 finishInstallProgress();
                 return;
@@ -2867,16 +2962,16 @@ QWidget* ks::plugin_host::createTabPluginContainer(QWidget* parent)
     // 宿主侧基础样式只锚定插件容器，不污染其它 Dock 或插件原生子窗口。
     const QString pluginContainerStyle = QStringLiteral(
         "QWidget#ksTabPluginContainer{background-color:%1;color:%2;}"
-        "QTabWidget#ksTabPluginHost::pane{background-color:%1;border:1px solid %3;border-radius:3px;}"
-        "QTabWidget#ksTabPluginHost QTabBar::tab{background-color:%4;color:%2;border:1px solid %3;"
-        "border-bottom:none;padding:6px 14px;margin-right:2px;}"
-        "QTabWidget#ksTabPluginHost QTabBar::tab:selected{background-color:%5;color:%6;border-color:%5;}"
+        "QTabWidget#ksTabPluginHost::pane{background-color:%1;border:none;}"
+        "QTabWidget#ksTabPluginHost QTabBar::tab{background-color:%4;color:%2;border:none;"
+        "border-radius:0;padding:3px 12px;min-height:22px;margin:0;}"
+        "QTabWidget#ksTabPluginHost QTabBar::tab:selected{background-color:%5;color:%6;font-weight:700;}"
         "QTabWidget#ksTabPluginHost QTabBar::tab:hover:!selected{background-color:%7;}"
         "QWidget#ksTabPluginEmptyState{background-color:%1;color:%2;}"
         "QLabel#ksTabPluginEmptyTitle{color:%2;font-size:16px;font-weight:600;}"
         "QLabel#ksTabPluginEmptyHint{color:%8;}"
         "QPushButton#ksTabPluginManageButton{background-color:%5;color:%6;border:1px solid %5;"
-        "border-radius:3px;padding:6px 14px;font-weight:600;}"
+        "border-radius:3px;padding:4px 10px;font-weight:600;}"
         "QPushButton#ksTabPluginManageButton:hover{background-color:%9;border-color:%9;}"
         "QPushButton#ksTabPluginManageButton:pressed{background-color:%10;border-color:%10;}"
         "QWidget#ksTabPluginTransparencyWarning{background-color:%11;border:1px solid %12;"

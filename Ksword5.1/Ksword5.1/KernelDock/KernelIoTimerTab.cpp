@@ -4,6 +4,7 @@
 #include "../ArkDriverClient/ArkDriverClient.h"
 #include "../Internationalization/LanguageManager.h"
 #include "../UI/CodeEditorWidget.h"
+#include "../UI/DetailLayoutRegistry.h"
 #include "../theme.h"
 
 #include <QAbstractItemView>
@@ -148,8 +149,7 @@ void KernelIoTimerTab::initializeUi()
     toolbarLayout->setSpacing(6);
 
     m_refreshButton = new QPushButton(QIcon(QStringLiteral(":/Icon/process_refresh.svg")), QString(), this);
-    m_refreshButton->setFixedSize(32, 30);
-    m_refreshButton->setIconSize(QSize(16, 16));
+    KswordTheme::ApplyCompactIconButtonMetrics(m_refreshButton);
     m_startButton = new QPushButton(QIcon(QStringLiteral(":/Icon/process_resume.svg")), QString(), this);
     m_startButton->setMinimumHeight(30);
     m_stopButton = new QPushButton(QIcon(QStringLiteral(":/Icon/process_suspend.svg")), QString(), this);
@@ -187,6 +187,8 @@ void KernelIoTimerTab::initializeUi()
     splitter->setStretchFactor(0, 4);
     splitter->setStretchFactor(1, 2);
     rootLayout->addWidget(splitter, 1);
+
+    ks::ui::DetailLayoutRegistry::registerHost(m_table, m_detailEditor, this);
 
     connect(m_refreshButton, &QPushButton::clicked, this, [this]() {
         m_initialRefreshRequested = true;
@@ -409,6 +411,7 @@ void KernelIoTimerTab::applySnapshot(const Snapshot& snapshot)
 
 void KernelIoTimerTab::rebuildTable()
 {
+    ks::ui::DetailLayoutRegistry::prepareDataRebuild(m_detailEditor);
     const QString filterText = m_filterEdit != nullptr ? m_filterEdit->text().trimmed() : QString();
     m_table->setSortingEnabled(false);
     m_table->setRowCount(0);

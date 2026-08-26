@@ -6,7 +6,6 @@
 
 #include "../theme.h"
 #include "ProcessDetailWindow.h"
-#include "ProcessTokenPrivilegeDialog.h"
 #include "ProcessMessageHookWindow.h"
 #include "../ArkDriverClient/ArkDriverClient.h"
 #include "../OnlineScan/SandboxUploadActions.h"
@@ -485,10 +484,7 @@ namespace
         { SECURITY_MANDATORY_PROTECTED_PROCESS_RID, "ProtectedProcess", "受保护进程完整性" }
     };
 
-    // 默认按钮图标尺寸。
-    constexpr QSize DefaultIconSize(18, 18);
     constexpr QSize SideTabIconSize(22, 22);
-    constexpr QSize CompactIconButtonSize(28, 28);
     constexpr int ProcessTabMinHeightPx = 22;
     constexpr int ProcessNumericSortRole = Qt::UserRole + 200;
     constexpr int ProcessEfficiencyModeRole = Qt::UserRole + 201;
@@ -2472,7 +2468,10 @@ namespace
     // terminateProcessByR0Driver 作用：
     // - 通过 ArkDriverClient 发送“结束进程”IOCTL；
     // - Dock 不再直接打开 KswordARK 设备或调用 DeviceIoControl。
-    bool terminateProcessByR0Driver(const std::uint32_t targetPid, std::string* const detailTextOut)
+    bool terminateProcessByR0Driver(
+        const std::uint32_t targetPid,
+        const std::uint64_t expectedCreationTime100ns,
+        std::string* const detailTextOut)
     {
         if (detailTextOut != nullptr)
         {
@@ -2491,7 +2490,8 @@ namespace
         const ksword::ark::DriverClient driverClient;
         const ksword::ark::IoResult result = driverClient.terminateProcess(
             targetPid,
-            static_cast<long>(0xC0000005u));
+            static_cast<long>(0xC0000005u),
+            expectedCreationTime100ns);
         if (detailTextOut != nullptr)
         {
             *detailTextOut = processDockIoMessageStdString(result.message);
@@ -2694,6 +2694,7 @@ namespace
     bool setProcessSpecialFlagsByR0Driver(
         const std::uint32_t targetPid,
         const unsigned long action,
+        const std::uint64_t expectedCreationTime100ns,
         std::string* const detailTextOut)
     {
         // 作用：封装 BreakOnTermination/APC 插入控制 IOCTL。
@@ -2713,7 +2714,11 @@ namespace
 
         const ksword::ark::DriverClient driverClient;
         const ksword::ark::ProcessSpecialFlagsResult result =
-            driverClient.setProcessSpecialFlags(targetPid, action);
+            driverClient.setProcessSpecialFlags(
+                targetPid,
+                action,
+                0UL,
+                expectedCreationTime100ns);
         if (detailTextOut != nullptr)
         {
             *detailTextOut = processDockIoMessageStdString(result.io.message);
@@ -2785,12 +2790,21 @@ namespace
         std::uint64_t objectTableAddress = 0;
         std::uint64_t sectionObjectAddress = 0;
         std::uint64_t dynDataCapabilityMask = 0;
+        std::uint64_t creationTime100ns = 0;
         std::string imageName;
         std::string imagePath;
     };
 
     // 内核专属记录使用固定创建时间种子，避免与 R3 常规 identity 发生冲突。
     constexpr std::uint64_t KernelOnlyCreationTimeSeed = 0xFFFFFFFF00000000ULL;
+
+    // r0ActionExpectedCreationTime：真实创建时间交给驱动校验，旧驱动的合成占位值不参与对象身份判断。
+    std::uint64_t r0ActionExpectedCreationTime(const ks::process::ProcessRecord& processRecord)
+    {
+        return processRecord.creationTime100ns >= KernelOnlyCreationTimeSeed
+            ? 0ULL
+            : processRecord.creationTime100ns;
+    }
 
     QString processFieldSourceText(const std::uint32_t sourceValue)
     {
@@ -3147,6 +3161,7 @@ namespace
             processEntry.objectTableAddress = entry.objectTableAddress;
             processEntry.sectionObjectAddress = entry.sectionObjectAddress;
             processEntry.dynDataCapabilityMask = entry.dynDataCapabilityMask;
+            processEntry.creationTime100ns = entry.creationTime100ns;
             processEntry.imageName = entry.imageName;
             processEntry.imagePath = entry.imagePath;
             processListOut->push_back(std::move(processEntry));
@@ -4081,10 +4096,8 @@ void ProcessDock::initializeTopControls()
     // 开始/暂停按钮：按需求仅显示图标。
     m_startButton = new QPushButton(QIcon(IconStart), "", this);
     m_pauseButton = new QPushButton(QIcon(IconPause), "", this);
-    m_startButton->setIconSize(DefaultIconSize);
-    m_pauseButton->setIconSize(DefaultIconSize);
-    m_startButton->setFixedSize(CompactIconButtonSize);
-    m_pauseButton->setFixedSize(CompactIconButtonSize);
+    KswordTheme::ApplyCompactIconButtonMetrics(m_startButton);
+    KswordTheme::ApplyCompactIconButtonMetrics(m_pauseButton);
     m_startButton->setToolTip("开始周期性刷新进程列表，并同步记录进程活动");
     m_pauseButton->setToolTip("暂停周期性刷新进程列表，并同步停止记录");
     languageManager.bindToolTip(
@@ -4370,8 +4383,7 @@ void ProcessDock::initializeProcessActivityPanel()
     // - 释放后不打开窗口详情，而是按目标窗口所属 PID 过滤进程列表并打开进程详情。
     ProcessWindowPickerDragButton* processPickerButton = new ProcessWindowPickerDragButton(m_activityPanelWidget);
     processPickerButton->setIcon(QIcon(IconWindowPickerTarget));
-    processPickerButton->setIconSize(QSize(16, 16));
-    processPickerButton->setFixedSize(CompactIconButtonSize);
+    KswordTheme::ApplyCompactIconButtonMetrics(processPickerButton);
     processPickerButton->setStyleSheet(buildBlueButtonStyle(true));
     processPickerButton->setToolTip(QStringLiteral("按住并拖拽准星到目标窗口，松开后按该窗口 PID 筛选进程并打开进程详细信息"));
     languageManager.bindToolTip(
@@ -6320,13 +6332,6 @@ void ProcessDock::requestAsyncRefresh(const bool forceRefresh)
     }
     m_refreshInProgress = true;
 
-    // 创建并复用“进程刷新”进度任务，避免每轮刷新都新增新卡片。
-    if (m_refreshProgressTaskPid <= 0)
-    {
-        m_refreshProgressTaskPid = kPro.addReusable(this, "进程列表刷新", "初始化刷新任务");
-    }
-    kPro.set(m_refreshProgressTaskPid, forceRefresh ? "准备刷新列表参数..." : "准备监视采样参数...", 0, 0.02f);
-
     // 复制当前缓存快照给后台线程，避免跨线程读写冲突。
     const int strategyIndex = m_strategyCombo->currentIndex();
     // 静态详情预算按“当前是否真的显示了需要打开进程才能补齐的列”判定，
@@ -6375,7 +6380,6 @@ void ProcessDock::requestAsyncRefresh(const bool forceRefresh)
     // 注意：forceUiRefresh 必须在进入后台 lambda 前保存成局部值；
     // 否则内层 QueuedConnection lambda 在工作线程里无法再引用 requestAsyncRefresh 的参数。
     const bool forceUiRefresh = forceRefresh;
-    const int progressPid = m_refreshProgressTaskPid;
     QRunnable* backgroundTask = QRunnable::create([
         guard,
         localTicket,
@@ -6385,7 +6389,6 @@ void ProcessDock::requestAsyncRefresh(const bool forceRefresh)
         staticDetailFillBudget,
         detailDemandFlags,
         cpuCount,
-        progressPid,
         forceUiRefresh,
         previousCache = std::move(previousCache),
         previousCounters = std::move(previousCounters),
@@ -6397,7 +6400,6 @@ void ProcessDock::requestAsyncRefresh(const bool forceRefresh)
             staticDetailFillBudget,
             detailDemandFlags,
             localTicket,
-            progressPid,
             previousCache,
             previousCounters,
             networkTrafficSnapshot,
@@ -6534,12 +6536,6 @@ void ProcessDock::applyRefreshResult(RefreshResult refreshResult, const bool for
     if (m_sideTabWidget != nullptr && m_sideTabWidget->currentWidget() == m_threadPage)
     {
         requestAsyncThreadRefresh(false);
-    }
-
-    // 更新进度任务：本轮刷新完成后自动隐藏卡片。
-    if (m_refreshProgressTaskPid > 0)
-    {
-        kPro.set(m_refreshProgressTaskPid, "刷新完成", 100, 1.0f);
     }
 
     // 输出详细刷新日志，便于后续性能与正确性排查。
@@ -6727,7 +6723,6 @@ ProcessDock::RefreshResult ProcessDock::buildRefreshResult(
     const int staticDetailFillBudget,
     const std::uint32_t detailDemandFlags,
     const std::uint64_t refreshTicket,
-    const int progressTaskPid,
     const std::unordered_map<std::string, CacheEntry>& previousCache,
     const std::unordered_map<std::string, ks::process::CounterSample>& previousCounters,
     const std::unordered_map<std::uint32_t, ProcessDock::NetworkTrafficCounters>& networkTrafficSnapshot,
@@ -6744,12 +6739,6 @@ ProcessDock::RefreshResult ProcessDock::buildRefreshResult(
     refreshResult.detailModeEnabled = detailModeEnabled;
     refreshResult.kernelCompareEnabled = queryKernelProcessList;
 
-    // 进度条阶段 1：开始枚举。
-    if (progressTaskPid > 0)
-    {
-        kPro.set(progressTaskPid, "正在枚举进程列表...", 10, 0.10f);
-    }
-
     const ks::process::ProcessEnumStrategy strategy = toStrategy(strategyIndex);
     std::vector<ks::process::ProcessRecord> latestProcessList = ks::process::EnumerateProcesses(
         strategy,
@@ -6762,11 +6751,6 @@ ProcessDock::RefreshResult ProcessDock::buildRefreshResult(
     // 可选阶段：向 R0 请求内核进程列表，并追加“仅内核可见”的记录。
     if (queryKernelProcessList)
     {
-        if (progressTaskPid > 0)
-        {
-            kPro.set(progressTaskPid, "正在请求内核进程列表...", 18, 0.18f);
-        }
-
         std::vector<KernelProcessSnapshotEntry> kernelProcessList;
         std::string kernelQueryDetailText;
         const bool queryKernelOk = enumerateProcessesByR0Driver(&kernelProcessList, &kernelQueryDetailText);
@@ -6804,8 +6788,9 @@ ProcessDock::RefreshResult ProcessDock::buildRefreshResult(
                     (kernelProcess.flags &
                         (KSWORD_ARK_PROCESS_FLAG_CID_TABLE_REFERENCE_FAILED |
                             KSWORD_ARK_PROCESS_FLAG_TERMINATING_OR_EXITED)) != 0U;
-                kernelOnlyRecord.creationTime100ns =
-                    KernelOnlyCreationTimeSeed + static_cast<std::uint64_t>(kernelProcess.processId);
+                kernelOnlyRecord.creationTime100ns = kernelProcess.creationTime100ns != 0ULL
+                    ? kernelProcess.creationTime100ns
+                    : KernelOnlyCreationTimeSeed + static_cast<std::uint64_t>(kernelProcess.processId);
                 kernelOnlyRecord.processName = kernelProcess.imageName.empty()
                     ? std::string("[R0] Unknown")
                     : std::string("[R0] ") + kernelProcess.imageName;
@@ -6840,11 +6825,6 @@ ProcessDock::RefreshResult ProcessDock::buildRefreshResult(
     }
 
     refreshResult.enumeratedCount = latestProcessList.size();
-
-    if (progressTaskPid > 0)
-    {
-        kPro.set(progressTaskPid, "正在复用缓存并计算性能计数...", 25, 0.25f);
-    }
 
     // 静态详情预算控制：
     // - 预算用于限制“路径/命令行/用户/签名”等慢操作，避免首轮刷新过慢；
@@ -7055,11 +7035,6 @@ ProcessDock::RefreshResult ProcessDock::buildRefreshResult(
         }
     }
 
-    if (progressTaskPid > 0)
-    {
-        kPro.set(progressTaskPid, "正在并行补齐路径/签名/参数...", 40, 0.40f);
-    }
-
     if (!staticFillIndices.empty())
     {
         // 线程数量策略：
@@ -7136,11 +7111,6 @@ ProcessDock::RefreshResult ProcessDock::buildRefreshResult(
             continue;
         }
         imagePathFillIndices.push_back(recordIndex);
-    }
-
-    if (progressTaskPid > 0)
-    {
-        kPro.set(progressTaskPid, "正在补齐进程图标路径...", 48, 0.48f);
     }
 
     if (!imagePathFillIndices.empty())
@@ -7240,11 +7210,6 @@ ProcessDock::RefreshResult ProcessDock::buildRefreshResult(
             onDemandIndices.push_back(recordIndex);
         }
 
-        if (progressTaskPid > 0 && !onDemandIndices.empty())
-        {
-            kPro.set(progressTaskPid, "正在采集按需展示的进程详细列...", 49, 0.49f);
-        }
-
         if (!onDemandIndices.empty())
         {
             // 这些查询以 OpenProcess + 若干轻量信息类为主，并发度与图标路径补齐保持一致；
@@ -7294,10 +7259,8 @@ ProcessDock::RefreshResult ProcessDock::buildRefreshResult(
     }
 
     // 第三阶段：计算性能差值并写回缓存（该阶段仍串行，保证逻辑简单稳定）。
-    std::size_t processIndex = 0;
     for (std::size_t recordIndex = 0; recordIndex < latestProcessList.size(); ++recordIndex)
     {
-        ++processIndex;
         ks::process::ProcessRecord& processRecord = latestProcessList[recordIndex];
         const std::string& identityKey = identityKeys[recordIndex];
 
@@ -7384,15 +7347,6 @@ ProcessDock::RefreshResult ProcessDock::buildRefreshResult(
         }
         refreshResult.nextCache.emplace(identityKey, std::move(cacheEntry));
 
-        // 进度条阶段 3：按处理进度更新（频率做了抽样，避免过度抖动）。
-        if (progressTaskPid > 0 && (processIndex % 48 == 0 || processIndex == latestProcessList.size()))
-        {
-            const double ratio = latestProcessList.empty()
-                ? 1.0
-                : (static_cast<double>(processIndex) / static_cast<double>(latestProcessList.size()));
-            const float progressValue = static_cast<float>(0.50 + ratio * 0.35); // 50% -> 85%
-            kPro.set(progressTaskPid, "正在处理缓存与性能差值...", 55, progressValue);
-        }
     }
 
     // 再处理退出进程：上一轮存在、本轮不存在，则保留显示 1 轮灰底。
@@ -7431,11 +7385,6 @@ ProcessDock::RefreshResult ProcessDock::buildRefreshResult(
         {
             refreshResult.nextCounters.emplace(oldPair.first, oldCounterIt->second);
         }
-    }
-
-    if (progressTaskPid > 0)
-    {
-        kPro.set(progressTaskPid, "后台刷新结果构建完成，等待主线程应用...", 90, 0.90f);
     }
 
     refreshResult.workerElapsedMs = static_cast<std::uint64_t>(
@@ -9164,6 +9113,7 @@ ProcessDock::ProcessActionTarget ProcessDock::processActionTargetFromTableRow(co
         return actionTarget;
     }
     actionTarget.identityKey = tableRow.identityKey;
+    actionTarget.isKernelOnly = tableRow.isKernelOnly;
     if (actionTarget.identityKey.empty())
     {
         return actionTarget;
@@ -9173,6 +9123,7 @@ ProcessDock::ProcessActionTarget ProcessDock::processActionTargetFromTableRow(co
     if (cacheIt != m_cacheByIdentity.end())
     {
         actionTarget.record = cacheIt->second.record;
+        actionTarget.isKernelOnly = cacheIt->second.isKernelOnlyInLatestRound;
         return actionTarget;
     }
     actionTarget.record = tableRow.record;
@@ -9198,10 +9149,12 @@ void ProcessDock::appendProcessActionTargetsFromTableRow(
         if (cacheIt != m_cacheByIdentity.end())
         {
             actionTarget.record = cacheIt->second.record;
+            actionTarget.isKernelOnly = cacheIt->second.isKernelOnlyInLatestRound;
         }
         else if (tableRow.rowKind == ProcessTableRowKind::Process && identityKey == tableRow.identityKey)
         {
             actionTarget.record = tableRow.record;
+            actionTarget.isKernelOnly = tableRow.isKernelOnly;
         }
         else
         {
@@ -10282,7 +10235,7 @@ void ProcessDock::showTableContextMenu(const QPoint& localPosition)
         processContextText("process.menu.message_hooks", QStringLiteral("消息 Hook")));
     openMessageHooksAction->setToolTip(processContextText(
         "process.menu.message_hooks.tooltip",
-        QStringLiteral("显示作用于该进程线程的消息 Hook，排除全局 Hook。")));
+        QStringLiteral("默认显示作用于该进程线程的非全局 Hook；窗口内可切换为安装者或双侧相关范围。")));
     openMemoryAction->setEnabled(!hasBatchSelection);
     openMessageHooksAction->setEnabled(
         !hasBatchSelection &&
@@ -10308,7 +10261,7 @@ void ProcessDock::showTableContextMenu(const QPoint& localPosition)
 
     // 令牌特权二级菜单：
     // - 查询和调整均在线程池执行，避免 OpenProcessToken/AdjustTokenPrivileges 阻塞 GUI；
-    // - 每一项用 QWidgetAction 承载无边框 QToolButton，点击后菜单保持展开；
+    // - 每一项用 QWidgetAction 承载无边框 QPushButton，前缀显示勾选状态，点击后菜单保持展开；
     // - 多选时只有全部目标都包含该特权才允许切换，一次点击立即提交到全部目标。
     QMenu* privilegeSubMenu = contextMenu.addMenu(
         blueTintedIcon(":/Icon/process_critical.svg"),
@@ -10445,31 +10398,74 @@ void ProcessDock::showTableContextMenu(const QPoint& localPosition)
             }
 
             const QString privilegeButtonStyle = QStringLiteral(
-                "QToolButton {"
-                "  min-width:300px; min-height:26px; padding:3px 10px;"
-                "  text-align:left; color:%1; background:transparent; border:none;"
+                "QPushButton {"
+                "  min-width:300px; min-height:30px; max-height:30px;"
+                "  padding:0 12px; text-align:left;"
+                "  color:%1; background:transparent;"
+                "  border:none; border-bottom:1px solid %4;"
                 "}"
-                "QToolButton:hover { background:%2; }"
-                "QToolButton:disabled { color:%3; }"
-                "QToolButton[ks_privilege_mixed=\"true\"] { color:%4; }")
+                "QPushButton:hover { background:%2; }"
+                "QPushButton:pressed { background:%2; }"
+                "QPushButton:disabled { color:%3; }")
                 .arg(KswordTheme::TextPrimaryHex())
                 .arg(KswordTheme::SurfaceAltHex())
                 .arg(KswordTheme::TextSecondaryHex())
-                .arg(KswordTheme::AccentHex(KswordTheme::AccentRole::Blue));
+                .arg(KswordTheme::BorderHex());
 
             const std::size_t privilegeCount = ks::process::KnownTokenPrivilegeNames().size();
-            for (std::size_t privilegeIndex = 0U; privilegeIndex < privilegeCount; ++privilegeIndex)
+            std::vector<std::size_t> controllablePrivilegeIndices;
+            controllablePrivilegeIndices.reserve(privilegeCount);
+            for (std::size_t privilegeIndex = 0U;
+                 privilegeIndex < privilegeCount;
+                 ++privilegeIndex)
+            {
+                bool controllableForAll = true;
+                for (const ContextPrivilegeTargetState& targetState : *targetStates)
+                {
+                    if (!targetState.querySucceeded
+                        || privilegeIndex >= targetState.privileges.size())
+                    {
+                        controllableForAll = false;
+                        break;
+                    }
+                    const ks::process::TokenPrivilegeState privilegeState =
+                        targetState.privileges[privilegeIndex].state;
+                    if (privilegeState != ks::process::TokenPrivilegeState::Enabled
+                        && privilegeState != ks::process::TokenPrivilegeState::Disabled)
+                    {
+                        controllableForAll = false;
+                        break;
+                    }
+                }
+                if (controllableForAll)
+                {
+                    controllablePrivilegeIndices.push_back(privilegeIndex);
+                }
+            }
+
+            if (controllablePrivilegeIndices.empty())
+            {
+                QAction* unavailableAction = privilegeMenuGuard->addAction(
+                    processContextText(
+                        "process.menu.privileges.none",
+                        QStringLiteral("没有可调整的令牌特权。")));
+                unavailableAction->setEnabled(false);
+                return;
+            }
+
+            for (const std::size_t privilegeIndex : controllablePrivilegeIndices)
             {
                 QWidgetAction* rowAction = new QWidgetAction(privilegeMenuGuard);
-                QToolButton* privilegeButton = new QToolButton(privilegeMenuGuard);
+                QPushButton* privilegeButton = new QPushButton(privilegeMenuGuard);
                 privilegeButton->setCheckable(true);
-                privilegeButton->setAutoRaise(true);
+                privilegeButton->setFlat(true);
                 privilegeButton->setFocusPolicy(Qt::NoFocus);
+                privilegeButton->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
                 privilegeButton->setStyleSheet(privilegeButtonStyle);
                 rowAction->setDefaultWidget(privilegeButton);
                 privilegeMenuGuard->addAction(rowAction);
 
-                const QPointer<QToolButton> privilegeButtonGuard(privilegeButton);
+                const QPointer<QPushButton> privilegeButtonGuard(privilegeButton);
                 const auto updatePrivilegeButton = [
                     targetStates,
                     privilegeButtonGuard,
@@ -10480,68 +10476,44 @@ void ProcessDock::showTableContextMenu(const QPoint& localPosition)
                         return;
                     }
 
-                    bool availableForAll = !targetStates->empty();
                     std::size_t enabledCount = 0U;
-                    QStringList unavailableDetails;
                     for (const ContextPrivilegeTargetState& targetState : *targetStates)
                     {
-                        if (!targetState.querySucceeded || privilegeIndex >= targetState.privileges.size())
-                        {
-                            availableForAll = false;
-                            unavailableDetails.push_back(QStringLiteral("PID %1: %2")
-                                .arg(targetState.processId)
-                                .arg(QString::fromStdString(targetState.detailText)));
-                            continue;
-                        }
-
                         const ks::process::TokenPrivilegeState privilegeState =
                             targetState.privileges[privilegeIndex].state;
                         if (privilegeState == ks::process::TokenPrivilegeState::Enabled)
                         {
                             ++enabledCount;
                         }
-                        else if (privilegeState != ks::process::TokenPrivilegeState::Disabled)
-                        {
-                            availableForAll = false;
-                            unavailableDetails.push_back(QStringLiteral("PID %1: %2")
-                                .arg(targetState.processId)
-                                .arg(processContextText(
-                                    "process.menu.privileges.not_present",
-                                    QStringLiteral("目标令牌不包含此特权。"))));
-                        }
                     }
 
-                    const bool enabledForAll = availableForAll
-                        && enabledCount == targetStates->size();
-                    const bool mixedState = availableForAll
-                        && enabledCount > 0U
+                    const bool enabledForAll = enabledCount == targetStates->size();
+                    const bool mixedState = enabledCount > 0U
                         && enabledCount < targetStates->size();
-                    const QString statePrefix = mixedState
-                        ? QStringLiteral("≈")
-                        : (enabledForAll ? QStringLiteral("✓") : QStringLiteral("×"));
-                    const std::string& privilegeName =
-                        ks::process::KnownTokenPrivilegeNames().at(privilegeIndex);
 
+                    const QString checkMark = enabledForAll
+                        ? QStringLiteral("✓")
+                        : (mixedState ? QStringLiteral("—") : QStringLiteral(" "));
                     const QSignalBlocker signalBlocker(privilegeButtonGuard);
                     privilegeButtonGuard->setText(
                         QStringLiteral("%1  %2")
-                            .arg(statePrefix, QString::fromLatin1(privilegeName.c_str())));
+                            .arg(
+                                checkMark,
+                                QString::fromLatin1(
+                                    ks::process::KnownTokenPrivilegeNames().at(privilegeIndex).c_str())));
                     privilegeButtonGuard->setChecked(enabledForAll);
-                    privilegeButtonGuard->setEnabled(availableForAll);
-                    privilegeButtonGuard->setProperty("ks_privilege_mixed", mixedState);
+                    privilegeButtonGuard->setEnabled(true);
                     privilegeButtonGuard->setToolTip(
-                        availableForAll
-                            ? processContextText(
-                                "process.menu.privileges.toggle",
-                                QStringLiteral("点击切换全部选中进程的此项令牌特权。"))
-                            : unavailableDetails.join(QStringLiteral("\n")));
+                        processContextText(
+                            "process.menu.privileges.toggle",
+                            QStringLiteral("点击切换全部选中进程的此项令牌特权。")));
                     privilegeButtonGuard->style()->unpolish(privilegeButtonGuard);
                     privilegeButtonGuard->style()->polish(privilegeButtonGuard);
                     privilegeButtonGuard->update();
                 };
                 updatePrivilegeButton();
 
-                connect(privilegeButton, &QToolButton::clicked, privilegeMenuGuard, [
+                connect(privilegeButton, &QPushButton::clicked, privilegeMenuGuard, [
                     privilegeDockGuard,
                     privilegeMenuGuard,
                     targetStates,
@@ -10557,10 +10529,6 @@ void ProcessDock::showTableContextMenu(const QPoint& localPosition)
                     }
 
                     privilegeButtonGuard->setEnabled(false);
-                    privilegeButtonGuard->setText(
-                        QStringLiteral("…  %1")
-                            .arg(QString::fromLatin1(
-                                ks::process::KnownTokenPrivilegeNames().at(privilegeIndex).c_str())));
 
                     const std::string privilegeName =
                         ks::process::KnownTokenPrivilegeNames().at(privilegeIndex);
@@ -10687,9 +10655,6 @@ void ProcessDock::showTableContextMenu(const QPoint& localPosition)
                                 }
                                 if (adjustResult.succeeded)
                                 {
-                                    targetState.privileges[privilegeIndex].state = enablePrivilege
-                                        ? ks::process::TokenPrivilegeState::Enabled
-                                        : ks::process::TokenPrivilegeState::Disabled;
                                     continue;
                                 }
 
@@ -10699,6 +10664,15 @@ void ProcessDock::showTableContextMenu(const QPoint& localPosition)
                                     .arg(QString::fromStdString(adjustResult.detailText)));
                             }
 
+                            if (allSucceeded)
+                            {
+                                for (ContextPrivilegeTargetState& targetState : *targetStates)
+                                {
+                                    targetState.privileges[privilegeIndex].state = enablePrivilege
+                                        ? ks::process::TokenPrivilegeState::Enabled
+                                        : ks::process::TokenPrivilegeState::Disabled;
+                                }
+                            }
                             updatePrivilegeButton();
                             if (!allSucceeded)
                             {
@@ -10742,9 +10716,6 @@ void ProcessDock::showTableContextMenu(const QPoint& localPosition)
         processContextText("process.menu.affinity", QStringLiteral("CPU 亲和性")));
     affinitySubMenu->setStyleSheet(buildThreadContextMenuStyle());
     affinitySubMenu->setToolTipsVisible(true);
-    affinitySubMenu->setToolTip(processContextText(
-        "process.menu.affinity.tooltip",
-        QStringLiteral("按 Gx:Ly 切换跨 processor group CPU Set；蓝色按钮表示已启用。")));
 
     struct ContextAffinityTargetState
     {
@@ -10818,6 +10789,18 @@ void ProcessDock::showTableContextMenu(const QPoint& localPosition)
     }
     ks::process::normalizeLogicalProcessorCoordinates(
         &commonProcessorCoordinates);
+    const bool includeProcessorGroup =
+        ks::process::logicalProcessorGroupCount(
+            commonProcessorCoordinates) > 1U;
+    affinitySubMenu->setToolTip(processContextText(
+        includeProcessorGroup
+            ? "process.menu.affinity.tooltip.multigroup"
+            : "process.menu.affinity.tooltip",
+        includeProcessorGroup
+            ? QStringLiteral(
+                "检测到多个 Windows Processor Group；按 Gx:Ly 切换 CPU Set，蓝色按钮表示已启用。")
+            : QStringLiteral(
+                "按 Lx 切换 CPU Set，蓝色按钮表示已启用。")));
     if (hasHardConstrainedProcessor)
     {
         affinitySubMenu->setToolTip(
@@ -10845,10 +10828,16 @@ void ProcessDock::showTableContextMenu(const QPoint& localPosition)
         affinitySubMenu->setToolTip(
             processContextText(
                 "process.menu.affinity.unavailable",
-                QStringLiteral("无法读取全部选中进程的 CPU 亲和性。")) +
-            (affinityReadDetailText.empty()
-                ? QString()
-                : QStringLiteral("\n") + QString::fromStdString(affinityReadDetailText)));
+                QStringLiteral("无法读取全部选中进程的 CPU 亲和性。")));
+        kLogEvent affinityReadEvent;
+        warn << affinityReadEvent
+            << "[ProcessDock] context CPU affinity query failed, targetCount="
+            << contextActionTargets.size()
+            << ", detail="
+            << (affinityReadDetailText.empty()
+                ? "none"
+                : affinityReadDetailText)
+            << eol;
     }
     else
     {
@@ -10955,9 +10944,10 @@ void ProcessDock::showTableContextMenu(const QPoint& localPosition)
                     {
                         return processor.coordinate == coordinate;
                     });
-                const QString identityText = QStringLiteral("G%1:L%2")
-                    .arg(coordinate.group)
-                    .arg(coordinate.logicalIndex);
+                const QString identityText = QString::fromStdString(
+                    ks::process::processorDisplayIdentityText(
+                        coordinate,
+                        includeProcessorGroup));
                 const QString topologyText =
                     topologyIt !=
                         affinityTargetStates->front().snapshot.processors.end()
@@ -11142,16 +11132,16 @@ void ProcessDock::showTableContextMenu(const QPoint& localPosition)
                         }
                         if (!allUpdated)
                         {
-                            const QString failureText =
-                                failedProcessDetails.join(
-                                    QStringLiteral("\n"));
+                            const QString failureText = processContextText(
+                                "process.menu.affinity.update_failed",
+                                QStringLiteral(
+                                    "CPU 亲和性更新未完全生效；详细信息已写入日志。"));
                             affinitySubMenu->setToolTip(failureText);
                             QMessageBox::warning(
                                 affinitySubMenu,
                                 processContextText(
-                                    "process.menu.affinity.unavailable",
-                                    QStringLiteral(
-                                        "CPU 亲和性更新未完全生效")),
+                                    "process.menu.affinity",
+                                    QStringLiteral("CPU 亲和性")),
                                 failureText);
                         }
                         updateAffinityCoreButtons();
@@ -11167,6 +11157,12 @@ void ProcessDock::showTableContextMenu(const QPoint& localPosition)
                             << affinityTargetStates->size()
                             << ", allUpdated="
                             << (allUpdated ? "true" : "false")
+                            << ", failed="
+                            << (failedProcessDetails.isEmpty()
+                                ? "none"
+                                : failedProcessDetails
+                                    .join(QStringLiteral(" | "))
+                                    .toStdString())
                             << eol;
                     });
             }
@@ -11193,17 +11189,6 @@ void ProcessDock::showTableContextMenu(const QPoint& localPosition)
     aboveNormalPriority->setData(3);
     highPriority->setData(4);
     realtimePriority->setData(5);
-
-    QAction* adjustTokenPrivilegesAction = contextMenu.addAction(
-        blueTintedIcon(":/Icon/process_critical.svg"),
-        processContextText(
-            "process.menu.adjust_token_privileges",
-            QStringLiteral("调整进程令牌特权（R3/R0）")));
-    adjustTokenPrivilegesAction->setEnabled(!hasBatchSelection);
-    adjustTokenPrivilegesAction->setToolTip(
-        processContextText(
-            "process.menu.adjust_token_privileges.tooltip",
-            QStringLiteral("读取目标主令牌的实际特权，并按项启用、禁用或永久移除。")));
 
     // 完整性二级菜单：
     // - 读取右键目标（批量时取第一个目标）的 TokenIntegrityLevel；
@@ -11331,7 +11316,6 @@ void ProcessDock::showTableContextMenu(const QPoint& localPosition)
         }
         else if (selectedAction == injectionPageAction) { openSelectedProcessInjectionPage(); }
         else if (selectedAction == scanHotkeyAction) { openSelectedProcessHotkeyScanner(); }
-        else if (selectedAction == adjustTokenPrivilegesAction) { executeAdjustProcessTokenPrivilegesAction(); }
         else if (selectedAction == detailsAction) { openProcessDetailsPlaceholder(); }
         else if (selectedAction->parent() == prioritySubMenu)
         {
@@ -11869,7 +11853,7 @@ void ProcessDock::dispatchProcessActionTargetsInParallel(
         const ProcessActionTarget& actionTarget,
         std::string* const detailTextOut) -> bool
     {
-        if (!requireVerifiedProcessIdentity)
+        if (!requireVerifiedProcessIdentity || actionTarget.isKernelOnly)
         {
             return actionInvoker(actionTarget, detailTextOut);
         }
@@ -13682,7 +13666,10 @@ void ProcessDock::executeR0TerminateProcessActions(
         [](const ProcessActionTarget& actionTarget, std::string* detailTextOut)
         {
             // 每个动作目标都会单独调用 ArkDriverClient，形成独立的结束进程 IOCTL。
-            return terminateProcessByR0Driver(actionTarget.record.pid, detailTextOut);
+            return terminateProcessByR0Driver(
+                actionTarget.record.pid,
+                r0ActionExpectedCreationTime(actionTarget.record),
+                detailTextOut);
         },
         true,
         false,
@@ -13907,7 +13894,11 @@ void ProcessDock::executeR0SetBreakOnTerminationAction(const bool enabled)
         actionTargets,
         [action](const ProcessActionTarget& actionTarget, std::string* detailTextOut)
         {
-            return setProcessSpecialFlagsByR0Driver(actionTarget.record.pid, action, detailTextOut);
+            return setProcessSpecialFlagsByR0Driver(
+                actionTarget.record.pid,
+                action,
+                r0ActionExpectedCreationTime(actionTarget.record),
+                detailTextOut);
         },
         false,
         false,
@@ -13949,6 +13940,7 @@ void ProcessDock::executeR0DisableApcInsertionAction()
             return setProcessSpecialFlagsByR0Driver(
                 actionTarget.record.pid,
                 KSWORD_ARK_PROCESS_SPECIAL_ACTION_DISABLE_APC_INSERTION,
+                r0ActionExpectedCreationTime(actionTarget.record),
                 detailTextOut);
         },
         false,
@@ -14785,33 +14777,6 @@ void ProcessDock::executeSetProcessIntegrityAction(
         false,
         false,
         true);
-}
-
-void ProcessDock::executeAdjustProcessTokenPrivilegesAction()
-{
-    // 输入：右键菜单冻结的单个进程动作目标。
-    // 处理：打开共享 R3/R0 令牌特权编辑器，并在成功变更后刷新列表快照。
-    // 返回：无；批量选择或身份缺失时安全拒绝。
-    const std::vector<ProcessActionTarget> actionTargets = selectedActionTargets();
-    if (actionTargets.size() != 1U)
-    {
-        kLogEvent logEvent;
-        warn << logEvent
-            << "[ProcessDock] 调整进程令牌特权被忽略：该操作仅支持单个目标。"
-            << eol;
-        return;
-    }
-
-    const ks::process::ProcessRecord& targetRecord = actionTargets.front().record;
-    const bool changed = ks::process_ui::showProcessTokenPrivilegeDialog(
-        this,
-        targetRecord.pid,
-        targetRecord.creationTime100ns,
-        QString::fromStdString(targetRecord.processName));
-    if (changed)
-    {
-        requestAsyncRefresh(true);
-    }
 }
 
 void ProcessDock::executeSetEfficiencyModeAction(const bool enableEfficiencyMode)

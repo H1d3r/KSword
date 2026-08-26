@@ -14,6 +14,7 @@
 
 #include "../theme.h"
 #include "../UI/CodeEditorWidget.h"
+#include "../UI/DetailLayoutRegistry.h"
 
 #include <QAbstractItemView>
 #include <QAction>
@@ -129,22 +130,19 @@ void KernelNamedPipeTab::initializeUi()
 
     m_refreshButton = new QPushButton(this);
     m_refreshButton->setIcon(QIcon(":/Icon/handle_refresh.svg"));
-    m_refreshButton->setIconSize(QSize(16, 16));
-    m_refreshButton->setFixedSize(28, 28);
+    KswordTheme::ApplyCompactIconButtonMetrics(m_refreshButton);
     m_refreshButton->setToolTip(kernelText("kernel.named_pipe.toolbar.refresh.tooltip", QStringLiteral("刷新命名管道列表")));
     m_refreshButton->setStyleSheet(KswordTheme::ThemedButtonStyle());
 
     m_copyButton = new QPushButton(this);
     m_copyButton->setIcon(QIcon(":/Icon/handle_copy_row.svg"));
-    m_copyButton->setIconSize(QSize(16, 16));
-    m_copyButton->setFixedSize(28, 28);
+    KswordTheme::ApplyCompactIconButtonMetrics(m_copyButton);
     m_copyButton->setToolTip(kernelText("kernel.named_pipe.toolbar.copy.tooltip", QStringLiteral("复制当前行")));
     m_copyButton->setStyleSheet(KswordTheme::ThemedButtonStyle());
 
     m_detailButton = new QPushButton(this);
     m_detailButton->setIcon(QIcon(":/Icon/process_details.svg"));
-    m_detailButton->setIconSize(QSize(16, 16));
-    m_detailButton->setFixedSize(28, 28);
+    KswordTheme::ApplyCompactIconButtonMetrics(m_detailButton);
     m_detailButton->setToolTip(kernelText("kernel.named_pipe.toolbar.detail.tooltip", QStringLiteral("刷新详情面板")));
     m_detailButton->setStyleSheet(KswordTheme::ThemedButtonStyle());
 
@@ -202,6 +200,8 @@ void KernelNamedPipeTab::initializeUi()
 
     m_rootLayout->addWidget(m_resultTable, 1);
     m_rootLayout->addWidget(m_detailEdit, 0);
+
+    ks::ui::DetailLayoutRegistry::registerHost(m_resultTable, m_detailEdit, this);
     applyAdaptiveColumnWidths();
 }
 
@@ -343,6 +343,8 @@ void KernelNamedPipeTab::rebuildTable()
         return;
     }
 
+    ks::ui::DetailLayoutRegistry::prepareDataRebuild(m_detailEdit);
+
     m_resultTable->setSortingEnabled(false);
     m_resultTable->clear();
 
@@ -373,6 +375,8 @@ void KernelNamedPipeTab::applyFilter()
     {
         return;
     }
+
+    ks::ui::DetailLayoutRegistry::prepareDataRebuild(m_detailEdit);
 
     const QString filterText = m_filterEdit->text().trimmed().toCaseFolded();
     for (int rowIndex = 0; rowIndex < m_resultTable->topLevelItemCount(); ++rowIndex)

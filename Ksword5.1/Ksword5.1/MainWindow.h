@@ -118,14 +118,14 @@ public slots:
     void focusWindowDockByPids(const QString& pidListText);
 
     // openProcessDetailByPid 作用：
-    // - 打开指定 PID 的独立进程详情窗口，不切换当前 Dock；
-    // - 供其他 Dock 的关联进程跳转入口调用。
+    // - 打开指定 PID 的独立进程详情窗口，不改变当前 Dock 标签；
+    // - 供 FileDock 的“占用句柄扫描结果”窗口跳转调用。
     // 调用方式：QMetaObject::invokeMethod(mainWindow, "openProcessDetailByPid", ... )。
     // 入参 pid：目标进程 PID。
     void openProcessDetailByPid(quint32 pid);
 
     // openProcessDetailByIdentity 作用：
-    // - 不切换当前 Dock，按 PID+创建时间打开历史记录对应的独立详情窗口；
+    // - 按 PID+创建时间打开历史记录对应的独立进程详情窗口，不改变当前 Dock 标签；
     // - 调用方式：TableInteractionSupport 的历史事件跳转入口调用；
     // - 入参 pid：历史记录 PID；
     // - 入参 creationTime100ns：捕获时的进程创建时间；
@@ -390,6 +390,15 @@ private:
     // - 启动时立即应用一次外观。
     // 调用方式：MainWindow 构造末尾调用。
     void initAppearanceSettings();
+
+    // updateBugcheckDiagnosticsEntryVisibility 作用：把持久化配置与本次安装状态同步到杂项页入口。
+    // 调用方式：杂项页构造后、设置页修改自动安装选项或安装 IOCTL 成功后调用。
+    // 返回：无。
+    void updateBugcheckDiagnosticsEntryVisibility();
+
+    // installBugcheckDiagnosticsAfterServiceStart 作用：自动安装已启用时，在 R0 服务运行后后台发送安装 IOCTL。
+    // 调用方式：startR0RuntimeConsumersAfterServiceStart 内部调用；返回：无，失败只记录日志。
+    void installBugcheckDiagnosticsAfterServiceStart();
 
     // reattachDetachedFeatureDocks 作用：
     // - 把布局恢复后仍游离在浮动容器里的主功能 Dock 收回主 Dock 区；
@@ -730,6 +739,8 @@ private:
     bool m_deferredDockInitializationStarted = false; // m_deferredDockInitializationStarted：是否已启动显示后补载流程。
     bool m_dockLayoutRestoredFromConfig = false;     // m_dockLayoutRestoredFromConfig：启动时是否已从配置恢复 ADS 布局。
     bool m_pendingR0DynDataRefresh = false;          // m_pendingR0DynDataRefresh：KernelDock 惰性创建后是否需要补跑 DynData 刷新。
+    bool m_bugcheckDiagnosticsInstalledForSession = false; // m_bugcheckDiagnosticsInstalledForSession：当前驱动生命周期内是否已成功安装蓝屏诊断。
+    bool m_bugcheckDiagnosticsEntryRequestedForSession = false; // m_bugcheckDiagnosticsEntryRequestedForSession：用户本次操作是否已请求显示诊断入口。
     std::size_t m_nextDeferredDockIndex = 0;          // m_nextDeferredDockIndex：下一个待补载 Dock 队列索引。
     std::vector<ads::CDockWidget*> m_deferredDockLoadQueue; // m_deferredDockLoadQueue：显示后依次补载的 Dock 队列。
 };

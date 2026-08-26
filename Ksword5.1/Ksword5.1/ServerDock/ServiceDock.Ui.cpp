@@ -6,9 +6,6 @@ using namespace service_dock_detail;
 
 namespace
 {
-    // kToolbarIconSize 作用：统一工具栏图标尺寸，保持视觉节奏一致。
-    constexpr QSize kToolbarIconSize(16, 16);
-
     // createServiceTable 作用：创建服务主列表控件并配置列结构。
     QTableWidget* createServiceTable(QWidget* parentWidget)
     {
@@ -108,65 +105,60 @@ void ServiceDock::initializeToolbar()
     // 基础刷新按钮组：
     // - 全量刷新与当前服务刷新拆分，避免误触全局重扫。
     m_refreshAllButton = new QToolButton(m_toolbarWidget);
-    m_refreshAllButton->setIcon(createBlueIcon(":/Icon/process_refresh.svg", kToolbarIconSize));
-    m_refreshAllButton->setIconSize(kToolbarIconSize);
-    m_refreshAllButton->setFixedSize(28, 28);
+    m_refreshAllButton->setIcon(createBlueIcon(":/Icon/process_refresh.svg", KswordTheme::CompactIconSize()));
+    KswordTheme::ApplyCompactIconButtonMetrics(m_refreshAllButton);
     m_refreshAllButton->setToolTip(QStringLiteral("刷新全部服务列表"));
 
     m_refreshCurrentButton = new QToolButton(m_toolbarWidget);
-    m_refreshCurrentButton->setIcon(createBlueIcon(":/Icon/process_details.svg", kToolbarIconSize));
-    m_refreshCurrentButton->setIconSize(kToolbarIconSize);
-    m_refreshCurrentButton->setFixedSize(28, 28);
+    m_refreshCurrentButton->setIcon(createBlueIcon(":/Icon/process_details.svg", KswordTheme::CompactIconSize()));
+    KswordTheme::ApplyCompactIconButtonMetrics(m_refreshCurrentButton);
     m_refreshCurrentButton->setToolTip(QStringLiteral("刷新当前选中服务详情"));
 
     // 服务控制按钮组：
     // - 全部使用图标按钮；
     // - 具体释义通过 tooltip 提示。
     m_startButton = new QToolButton(m_toolbarWidget);
-    m_startButton->setIcon(createBlueIcon(":/Icon/process_start.svg", kToolbarIconSize));
-    m_startButton->setIconSize(kToolbarIconSize);
-    m_startButton->setFixedSize(28, 28);
+    m_startButton->setIcon(createBlueIcon(":/Icon/process_start.svg", KswordTheme::CompactIconSize()));
+    KswordTheme::ApplyCompactIconButtonMetrics(m_startButton);
     m_startButton->setToolTip(QStringLiteral("启动当前服务"));
 
     m_stopButton = new QToolButton(m_toolbarWidget);
-    m_stopButton->setIcon(createBlueIcon(":/Icon/process_terminate.svg", kToolbarIconSize));
-    m_stopButton->setIconSize(kToolbarIconSize);
-    m_stopButton->setFixedSize(28, 28);
+    m_stopButton->setIcon(createBlueIcon(":/Icon/process_terminate.svg", KswordTheme::CompactIconSize()));
+    KswordTheme::ApplyCompactIconButtonMetrics(m_stopButton);
     m_stopButton->setToolTip(QStringLiteral("停止当前服务（高风险动作）"));
 
     m_pauseButton = new QToolButton(m_toolbarWidget);
-    m_pauseButton->setIcon(createBlueIcon(":/Icon/process_pause.svg", kToolbarIconSize));
-    m_pauseButton->setIconSize(kToolbarIconSize);
-    m_pauseButton->setFixedSize(28, 28);
+    m_pauseButton->setIcon(createBlueIcon(":/Icon/process_pause.svg", KswordTheme::CompactIconSize()));
+    KswordTheme::ApplyCompactIconButtonMetrics(m_pauseButton);
     m_pauseButton->setToolTip(QStringLiteral("暂停当前服务"));
 
     m_continueButton = new QToolButton(m_toolbarWidget);
-    m_continueButton->setIcon(createBlueIcon(":/Icon/process_resume.svg", kToolbarIconSize));
-    m_continueButton->setIconSize(kToolbarIconSize);
-    m_continueButton->setFixedSize(28, 28);
+    m_continueButton->setIcon(createBlueIcon(":/Icon/process_resume.svg", KswordTheme::CompactIconSize()));
+    KswordTheme::ApplyCompactIconButtonMetrics(m_continueButton);
     m_continueButton->setToolTip(QStringLiteral("继续当前服务"));
 
     // 快捷筛选按钮组：
+    // - 使用短文本筛选片，避免把“启动/停止服务”的动作图标复用成筛选含义；
     // - checkable 形式可直观看到过滤状态。
     m_runningOnlyButton = new QToolButton(m_toolbarWidget);
     m_runningOnlyButton->setCheckable(true);
-    m_runningOnlyButton->setIcon(createBlueIcon(":/Icon/process_start.svg", kToolbarIconSize));
-    m_runningOnlyButton->setIconSize(kToolbarIconSize);
-    m_runningOnlyButton->setFixedSize(28, 28);
+    m_runningOnlyButton->setText(QStringLiteral("运行中"));
+    m_runningOnlyButton->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    m_runningOnlyButton->setFixedHeight(28);
     m_runningOnlyButton->setToolTip(QStringLiteral("仅显示运行中服务"));
 
     m_autoStartOnlyButton = new QToolButton(m_toolbarWidget);
     m_autoStartOnlyButton->setCheckable(true);
-    m_autoStartOnlyButton->setIcon(createBlueIcon(":/Icon/process_main.svg", kToolbarIconSize));
-    m_autoStartOnlyButton->setIconSize(kToolbarIconSize);
-    m_autoStartOnlyButton->setFixedSize(28, 28);
+    m_autoStartOnlyButton->setText(QStringLiteral("自动启动"));
+    m_autoStartOnlyButton->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    m_autoStartOnlyButton->setFixedHeight(28);
     m_autoStartOnlyButton->setToolTip(QStringLiteral("仅显示自动启动服务"));
 
     m_riskOnlyButton = new QToolButton(m_toolbarWidget);
     m_riskOnlyButton->setCheckable(true);
-    m_riskOnlyButton->setIcon(createBlueIcon(":/Icon/process_terminate.svg", kToolbarIconSize));
-    m_riskOnlyButton->setIconSize(kToolbarIconSize);
-    m_riskOnlyButton->setFixedSize(28, 28);
+    m_riskOnlyButton->setText(QStringLiteral("风险"));
+    m_riskOnlyButton->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    m_riskOnlyButton->setFixedHeight(28);
     m_riskOnlyButton->setToolTip(QStringLiteral("仅显示带风险标签的服务"));
 
     // 文本过滤与排序：
@@ -201,9 +193,8 @@ void ServiceDock::initializeToolbar()
     m_startTypeCombo->setItemData(3, false, Qt::UserRole + 1);
 
     m_applyStartTypeButton = new QToolButton(m_toolbarWidget);
-    m_applyStartTypeButton->setIcon(createBlueIcon(":/Icon/process_start.svg", kToolbarIconSize));
-    m_applyStartTypeButton->setIconSize(kToolbarIconSize);
-    m_applyStartTypeButton->setFixedSize(28, 28);
+    m_applyStartTypeButton->setIcon(createBlueIcon(":/Icon/service_apply.svg", KswordTheme::CompactIconSize()));
+    KswordTheme::ApplyCompactIconButtonMetrics(m_applyStartTypeButton);
     m_applyStartTypeButton->setToolTip(QStringLiteral("应用当前启动类型修改"));
 
     m_summaryLabel = new QLabel(QStringLiteral("状态：等待首次刷新"), m_toolbarWidget);

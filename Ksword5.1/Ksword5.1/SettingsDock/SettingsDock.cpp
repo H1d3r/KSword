@@ -22,6 +22,7 @@
 #include <QMessageBox>
 #include <QProcess>
 #include <QPushButton>
+#include <QRadioButton>
 #include <QSlider>
 #include <QSpinBox>
 #include <QStringList>
@@ -229,6 +230,7 @@ void SettingsDock::changeEvent(QEvent* event)
     if (event->type() == QEvent::LanguageChange)
     {
         updateSystemDefaultFontItemText();
+        refreshBugcheckDiagnosticsStatusText();
         updateApplyButtonState();
     }
     // 跟随系统模式下深浅色由系统翻转，不经过“应用”按钮，
@@ -332,8 +334,7 @@ void SettingsDock::initializeAppearanceTab()
     m_followSystemButton = new QToolButton(themeGroupBox);
     m_followSystemButton->setIcon(QIcon(QString::fromUtf8(IconThemeFollowSystem)));
     m_followSystemButton->setCheckable(true);
-    m_followSystemButton->setIconSize(QSize(20, 20));
-    m_followSystemButton->setFixedSize(36, 36);
+    KswordTheme::ApplyStandardIconButtonMetrics(m_followSystemButton);
     m_followSystemButton->setToolTip(QStringLiteral("跟随系统主题（Windows 深浅切换时自动同步）"));
     languageManager.bindToolTip(m_followSystemButton, QStringLiteral("settings.theme.system.tooltip"), QStringLiteral("跟随系统主题（Windows 深浅切换时自动同步）"));
 
@@ -341,8 +342,7 @@ void SettingsDock::initializeAppearanceTab()
     m_lightModeButton = new QToolButton(themeGroupBox);
     m_lightModeButton->setIcon(QIcon(QString::fromUtf8(IconThemeLight)));
     m_lightModeButton->setCheckable(true);
-    m_lightModeButton->setIconSize(QSize(20, 20));
-    m_lightModeButton->setFixedSize(36, 36);
+    KswordTheme::ApplyStandardIconButtonMetrics(m_lightModeButton);
     m_lightModeButton->setToolTip(QStringLiteral("强制浅色模式（白底深色字）"));
     languageManager.bindToolTip(m_lightModeButton, QStringLiteral("settings.theme.light.tooltip"), QStringLiteral("强制浅色模式（白底深色字）"));
 
@@ -350,8 +350,7 @@ void SettingsDock::initializeAppearanceTab()
     m_darkModeButton = new QToolButton(themeGroupBox);
     m_darkModeButton->setIcon(QIcon(QString::fromUtf8(IconThemeDark)));
     m_darkModeButton->setCheckable(true);
-    m_darkModeButton->setIconSize(QSize(20, 20));
-    m_darkModeButton->setFixedSize(36, 36);
+    KswordTheme::ApplyStandardIconButtonMetrics(m_darkModeButton);
     m_darkModeButton->setToolTip(QStringLiteral("强制深色模式（黑底白字）"));
     languageManager.bindToolTip(m_darkModeButton, QStringLiteral("settings.theme.dark.tooltip"), QStringLiteral("强制深色模式（黑底白字）"));
 
@@ -499,8 +498,7 @@ void SettingsDock::initializeAppearanceTab()
     // m_browseBackgroundButton 作用：打开文件对话框选择背景图。
     m_browseBackgroundButton = new QToolButton(backgroundGroupBox);
     m_browseBackgroundButton->setIcon(QIcon(QString::fromUtf8(IconBrowseBackground)));
-    m_browseBackgroundButton->setIconSize(QSize(18, 18));
-    m_browseBackgroundButton->setFixedSize(34, 30);
+    KswordTheme::ApplyStandardIconButtonMetrics(m_browseBackgroundButton);
     m_browseBackgroundButton->setToolTip(QStringLiteral("浏览背景图文件"));
     languageManager.bindToolTip(m_browseBackgroundButton, QStringLiteral("settings.background.browse.tooltip"), QStringLiteral("浏览背景图文件"));
     pathLayout->addWidget(m_browseBackgroundButton);
@@ -508,8 +506,7 @@ void SettingsDock::initializeAppearanceTab()
     // m_resetBackgroundButton 作用：恢复默认背景路径。
     m_resetBackgroundButton = new QToolButton(backgroundGroupBox);
     m_resetBackgroundButton->setIcon(QIcon(QString::fromUtf8(IconResetBackground)));
-    m_resetBackgroundButton->setIconSize(QSize(18, 18));
-    m_resetBackgroundButton->setFixedSize(34, 30);
+    KswordTheme::ApplyStandardIconButtonMetrics(m_resetBackgroundButton);
     m_resetBackgroundButton->setToolTip(QStringLiteral("恢复默认背景路径"));
     languageManager.bindToolTip(m_resetBackgroundButton, QStringLiteral("settings.background.reset.tooltip"), QStringLiteral("恢复默认背景路径"));
     pathLayout->addWidget(m_resetBackgroundButton);
@@ -731,6 +728,59 @@ void SettingsDock::initializeAppearanceTab()
 
     appearanceRootLayout->addWidget(interactionGroupBox);
 
+    // ===== 详情页显示方案分组 =====
+    // 该设置只作用于严格命中页面，选择后点击“应用”会立即重排已创建页面。
+    QGroupBox* detailSchemeGroupBox = new QGroupBox(
+        QStringLiteral("详情页显示方案"),
+        m_appearanceTab);
+    languageManager.bindText(
+        detailSchemeGroupBox,
+        QStringLiteral("settings.detail_layout.group"),
+        QStringLiteral("详情页显示方案"));
+    QVBoxLayout* detailSchemeLayout = new QVBoxLayout(detailSchemeGroupBox);
+    detailSchemeLayout->setSpacing(6);
+
+    QLabel* detailSchemeHintLabel = new QLabel(
+        QStringLiteral("统一设置表格当前行详情的显示位置；点击应用后立即生效。"),
+        detailSchemeGroupBox);
+    detailSchemeHintLabel->setWordWrap(true);
+    languageManager.bindText(
+        detailSchemeHintLabel,
+        QStringLiteral("settings.detail_layout.hint"),
+        QStringLiteral("统一设置表格当前行详情的显示位置；点击应用后立即生效。"));
+    detailSchemeLayout->addWidget(detailSchemeHintLabel);
+
+    m_detailSchemeButtonGroup = new QButtonGroup(detailSchemeGroupBox);
+    m_detailSchemeButtonGroup->setExclusive(true);
+    const auto addDetailSchemeRadio = [this, detailSchemeGroupBox, detailSchemeLayout, &languageManager](
+        const ks::settings::DetailDisplayScheme scheme,
+        const QString& textKey,
+        const QString& fallbackText)
+        {
+            // 每项使用 QRadioButton：显示明确文字，避免四种布局只靠图标难以分辨。
+            QRadioButton* radioButton = new QRadioButton(fallbackText, detailSchemeGroupBox);
+            languageManager.bindText(radioButton, textKey, fallbackText);
+            m_detailSchemeButtonGroup->addButton(radioButton, static_cast<int>(scheme));
+            detailSchemeLayout->addWidget(radioButton);
+        };
+    addDetailSchemeRadio(
+        ks::settings::DetailDisplayScheme::BottomCollapsed,
+        QStringLiteral("settings.detail_layout.bottom_collapsed"),
+        QStringLiteral("下方折叠（默认）"));
+    addDetailSchemeRadio(
+        ks::settings::DetailDisplayScheme::Right,
+        QStringLiteral("settings.detail_layout.right"),
+        QStringLiteral("表格右侧"));
+    addDetailSchemeRadio(
+        ks::settings::DetailDisplayScheme::Embedded,
+        QStringLiteral("settings.detail_layout.embedded"),
+        QStringLiteral("行内嵌入"));
+    addDetailSchemeRadio(
+        ks::settings::DetailDisplayScheme::Floating,
+        QStringLiteral("settings.detail_layout.floating"),
+        QStringLiteral("独立窗口"));
+    appearanceRootLayout->addWidget(detailSchemeGroupBox);
+
     // ===== 启动行为分组 =====
     QGroupBox* startupGroupBox = new QGroupBox(QStringLiteral("启动行为"), m_startupTab);
     languageManager.bindText(startupGroupBox, QStringLiteral("settings.startup.group"), QStringLiteral("启动行为"));
@@ -766,6 +816,14 @@ void SettingsDock::initializeAppearanceTab()
         QStringLiteral("下次启动时请求管理员权限；若取消或失败，将以普通权限继续"));
     languageManager.bindToolTip(m_startupAutoAdminCheckBox, QStringLiteral("settings.startup.admin.tooltip"), QStringLiteral("下次启动时请求管理员权限；若取消或失败，将以普通权限继续"));
     startupLayout->addWidget(m_startupAutoAdminCheckBox);
+
+    // m_preventMultipleInstancesCheckBox 作用：控制普通启动是否激活已有窗口并退出新进程。
+    m_preventMultipleInstancesCheckBox = new QCheckBox(QStringLiteral("防止多开"), startupGroupBox);
+    languageManager.bindText(m_preventMultipleInstancesCheckBox, QStringLiteral("settings.startup.prevent_multiple_instances"), QStringLiteral("防止多开"));
+    m_preventMultipleInstancesCheckBox->setToolTip(
+        QStringLiteral("开启时，普通启动会激活已有窗口；管理员和 SYSTEM 权限切换不受影响"));
+    languageManager.bindToolTip(m_preventMultipleInstancesCheckBox, QStringLiteral("settings.startup.prevent_multiple_instances.tooltip"), QStringLiteral("开启时，普通启动会激活已有窗口；管理员和 SYSTEM 权限切换不受影响"));
+    startupLayout->addWidget(m_preventMultipleInstancesCheckBox);
 
     // m_unlockerShellContextMenuCheckBox 作用：控制是否启用系统右键“文件解锁器”菜单。
     m_unlockerShellContextMenuCheckBox = new QCheckBox(QStringLiteral("启用系统右键“文件解锁器”菜单"), startupGroupBox);
@@ -896,6 +954,34 @@ void SettingsDock::initializeAppearanceTab()
     notificationDurationLayout->addWidget(m_notificationLogDisplaySecondsSpin, 1);
     notificationLayout->addLayout(notificationDurationLayout);
 
+    QHBoxLayout* notificationMaximumCountLayout = new QHBoxLayout();
+    QLabel* notificationMaximumCountLabel = new QLabel(QStringLiteral("同时显示最多日志条数"), notificationGroupBox);
+    languageManager.bindText(notificationMaximumCountLabel, QStringLiteral("settings.notification.maximum_count"), QStringLiteral("同时显示最多日志条数"));
+    notificationMaximumCountLayout->addWidget(notificationMaximumCountLabel, 0);
+    m_notificationMaximumVisibleLogCardsSpin = new QSpinBox(notificationGroupBox);
+    m_notificationMaximumVisibleLogCardsSpin->setRange(0, 100);
+    m_notificationMaximumVisibleLogCardsSpin->setToolTip(QStringLiteral("0 表示不限制，仍会在可用空间不足时按现有逻辑替换最旧日志。"));
+    languageManager.bindToolTip(m_notificationMaximumVisibleLogCardsSpin, QStringLiteral("settings.notification.maximum_count.tooltip"), QStringLiteral("0 表示不限制，仍会在可用空间不足时按现有逻辑替换最旧日志。"));
+    notificationMaximumCountLayout->addWidget(m_notificationMaximumVisibleLogCardsSpin, 1);
+    notificationLayout->addLayout(notificationMaximumCountLayout);
+
+    m_notificationLogHeightLimitCheckBox = new QCheckBox(QStringLiteral("限制单条日志卡片高度"), notificationGroupBox);
+    languageManager.bindText(m_notificationLogHeightLimitCheckBox, QStringLiteral("settings.notification.height_limit.enabled"), QStringLiteral("限制单条日志卡片高度"));
+    notificationLayout->addWidget(m_notificationLogHeightLimitCheckBox);
+
+    QHBoxLayout* notificationMaximumLinesLayout = new QHBoxLayout();
+    QLabel* notificationMaximumLinesLabel = new QLabel(QStringLiteral("最高文字行数"), notificationGroupBox);
+    languageManager.bindText(notificationMaximumLinesLabel, QStringLiteral("settings.notification.height_limit.lines"), QStringLiteral("最高文字行数"));
+    notificationMaximumLinesLayout->addWidget(notificationMaximumLinesLabel, 0);
+    m_notificationLogMaximumLinesSpin = new QSpinBox(notificationGroupBox);
+    m_notificationLogMaximumLinesSpin->setRange(1, 50);
+    m_notificationLogMaximumLinesSpin->setSuffix(QStringLiteral(" 行"));
+    languageManager.bindSuffix(m_notificationLogMaximumLinesSpin, QStringLiteral("settings.notification.height_limit.lines.suffix"), QStringLiteral(" 行"));
+    m_notificationLogMaximumLinesSpin->setToolTip(QStringLiteral("超出时可通过卡片标题栏的小箭头展开完整日志。"));
+    languageManager.bindToolTip(m_notificationLogMaximumLinesSpin, QStringLiteral("settings.notification.height_limit.lines.tooltip"), QStringLiteral("超出时可通过卡片标题栏的小箭头展开完整日志。"));
+    notificationMaximumLinesLayout->addWidget(m_notificationLogMaximumLinesSpin, 1);
+    notificationLayout->addLayout(notificationMaximumLinesLayout);
+
     QHBoxLayout* notificationPlacementLayout = new QHBoxLayout();
     QLabel* notificationPlacementLabel = new QLabel(QStringLiteral("显示位置"), notificationGroupBox);
     languageManager.bindText(notificationPlacementLabel, QStringLiteral("settings.notification.placement"), QStringLiteral("显示位置"));
@@ -1023,6 +1109,7 @@ void SettingsDock::initializeFeaturesTab()
     dumpCheckLayout->addWidget(m_dumpAutoCheckCheckBox);
 
     featuresRootLayout->addWidget(dumpCheckGroupBox);
+    initializeBugcheckDiagnosticsControls(featuresRootLayout);
     featuresRootLayout->addStretch();
     m_tabWidget->addTab(m_featuresTab, QStringLiteral("功能"));
     languageManager.bindTab(
@@ -1151,6 +1238,10 @@ void SettingsDock::bindAppearanceSignals()
         markPendingChanges(QStringLiteral("启动时自动请求管理员权限开关切换"));
         });
 
+    connect(m_preventMultipleInstancesCheckBox, &QCheckBox::toggled, this, [this](const bool /*checkedState*/) {
+        markPendingChanges(QStringLiteral("防止多开开关切换"));
+        });
+
     connect(m_unlockerShellContextMenuCheckBox, &QCheckBox::toggled, this, [this](const bool /*checkedState*/) {
         markPendingChanges(QStringLiteral("系统右键文件解锁器开关切换"));
         });
@@ -1179,6 +1270,10 @@ void SettingsDock::bindAppearanceSignals()
         markPendingChanges(QStringLiteral("滑块滚轮调节开关切换"));
         });
 
+    connect(m_detailSchemeButtonGroup, &QButtonGroup::idClicked, this, [this](const int) {
+        markPendingChanges(QStringLiteral("详情页显示方案切换"));
+        });
+
     connect(m_notificationCardsEnabledCheckBox, &QCheckBox::toggled, this, [this](const bool /*checkedState*/) {
         markPendingChanges(QStringLiteral("通知卡片开关切换"));
         });
@@ -1187,6 +1282,19 @@ void SettingsDock::bindAppearanceSignals()
         });
     connect(m_notificationLogDisplaySecondsSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, [this](int) {
         markPendingChanges(QStringLiteral("通知日志展示秒数切换"));
+        });
+    connect(m_notificationMaximumVisibleLogCardsSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, [this](int) {
+        markPendingChanges(QStringLiteral("通知同时显示日志条数切换"));
+        });
+    connect(m_notificationLogHeightLimitCheckBox, &QCheckBox::toggled, this, [this](const bool checked) {
+        if (m_notificationLogMaximumLinesSpin != nullptr)
+        {
+            m_notificationLogMaximumLinesSpin->setEnabled(checked);
+        }
+        markPendingChanges(QStringLiteral("通知日志卡片高度限制切换"));
+        });
+    connect(m_notificationLogMaximumLinesSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, [this](int) {
+        markPendingChanges(QStringLiteral("通知日志卡片最高文字行数切换"));
         });
     connect(m_notificationDisplayPlacementCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int) {
         markPendingChanges(QStringLiteral("通知显示位置切换"));
@@ -1319,6 +1427,10 @@ void SettingsDock::applySettingsToUi(const ks::settings::AppearanceSettings& set
     {
         m_startupAutoAdminCheckBox->setChecked(settings.autoRequestAdminOnStartup);
     }
+    if (m_preventMultipleInstancesCheckBox != nullptr)
+    {
+        m_preventMultipleInstancesCheckBox->setChecked(settings.preventMultipleInstances);
+    }
     if (m_unlockerShellContextMenuCheckBox != nullptr)
     {
         m_unlockerShellContextMenuCheckBox->setChecked(settings.unlockerShellContextMenuEnabled);
@@ -1367,6 +1479,21 @@ void SettingsDock::applySettingsToUi(const ks::settings::AppearanceSettings& set
     {
         m_notificationLogDisplaySecondsSpin->setValue(settings.notificationLogDisplaySeconds);
     }
+    if (m_notificationMaximumVisibleLogCardsSpin != nullptr)
+    {
+        m_notificationMaximumVisibleLogCardsSpin->setValue(settings.notificationMaximumVisibleLogCards);
+    }
+    if (m_notificationLogHeightLimitCheckBox != nullptr)
+    {
+        m_notificationLogHeightLimitCheckBox->setChecked(settings.notificationLogHeightLimitEnabled);
+    }
+    if (m_notificationLogMaximumLinesSpin != nullptr)
+    {
+        m_notificationLogMaximumLinesSpin->setValue(settings.notificationLogMaximumLines);
+        m_notificationLogMaximumLinesSpin->setEnabled(
+            m_notificationLogHeightLimitCheckBox != nullptr
+            && m_notificationLogHeightLimitCheckBox->isChecked());
+    }
     if (m_notificationDisplayPlacementCombo != nullptr)
     {
         const int index = m_notificationDisplayPlacementCombo->findData(
@@ -1384,6 +1511,21 @@ void SettingsDock::applySettingsToUi(const ks::settings::AppearanceSettings& set
     {
         m_startupWindowScaleSpin->setValue(
             windowScalePercentFromFactor(settings.startupWindowScaleFactor));
+    }
+
+    if (m_detailSchemeButtonGroup != nullptr)
+    {
+        QAbstractButton* detailSchemeButton = m_detailSchemeButtonGroup->button(
+            static_cast<int>(settings.detailDisplayScheme));
+        if (detailSchemeButton == nullptr)
+        {
+            detailSchemeButton = m_detailSchemeButtonGroup->button(
+                static_cast<int>(ks::settings::DetailDisplayScheme::BottomCollapsed));
+        }
+        if (detailSchemeButton != nullptr)
+        {
+            detailSchemeButton->setChecked(true);
+        }
     }
 
     // 在线扫描 API Key 回填：
@@ -1480,6 +1622,8 @@ ks::settings::AppearanceSettings SettingsDock::collectSettingsFromUi() const
         (m_startupTopMostCheckBox != nullptr) && m_startupTopMostCheckBox->isChecked();
     collectedSettings.autoRequestAdminOnStartup =
         (m_startupAutoAdminCheckBox != nullptr) && m_startupAutoAdminCheckBox->isChecked();
+    collectedSettings.preventMultipleInstances =
+        (m_preventMultipleInstancesCheckBox == nullptr) || m_preventMultipleInstancesCheckBox->isChecked();
     collectedSettings.startupWindowScaleFactor = parseWindowScaleFactorFromUi();
     // 该开关来自启动前弹窗，不在设置页编辑；这里保留内存值，避免保存时被覆盖。
     collectedSettings.startupScaleRecommendPromptDisabled =
@@ -1504,6 +1648,15 @@ ks::settings::AppearanceSettings SettingsDock::collectSettingsFromUi() const
         (m_smoothScrollingCheckBox != nullptr) && m_smoothScrollingCheckBox->isChecked();
     collectedSettings.sliderWheelAdjustEnabled =
         (m_sliderWheelAdjustCheckBox != nullptr) && m_sliderWheelAdjustCheckBox->isChecked();
+    const int detailSchemeId = m_detailSchemeButtonGroup != nullptr
+        ? m_detailSchemeButtonGroup->checkedId()
+        : static_cast<int>(m_currentAppearanceSettings.detailDisplayScheme);
+    if (detailSchemeId >= static_cast<int>(ks::settings::DetailDisplayScheme::BottomCollapsed) &&
+        detailSchemeId <= static_cast<int>(ks::settings::DetailDisplayScheme::Floating))
+    {
+        collectedSettings.detailDisplayScheme =
+            static_cast<ks::settings::DetailDisplayScheme>(detailSchemeId);
+    }
     collectedSettings.fontFamily = m_fontCombo != nullptr
         ? m_fontCombo->currentData(Qt::UserRole).toString().trimmed()
         : m_currentAppearanceSettings.fontFamily;
@@ -1519,6 +1672,17 @@ ks::settings::AppearanceSettings SettingsDock::collectSettingsFromUi() const
         m_notificationLogDisplaySecondsSpin != nullptr
         ? m_notificationLogDisplaySecondsSpin->value()
         : m_currentAppearanceSettings.notificationLogDisplaySeconds;
+    collectedSettings.notificationMaximumVisibleLogCards =
+        m_notificationMaximumVisibleLogCardsSpin != nullptr
+        ? m_notificationMaximumVisibleLogCardsSpin->value()
+        : m_currentAppearanceSettings.notificationMaximumVisibleLogCards;
+    collectedSettings.notificationLogHeightLimitEnabled =
+        (m_notificationLogHeightLimitCheckBox != nullptr)
+        && m_notificationLogHeightLimitCheckBox->isChecked();
+    collectedSettings.notificationLogMaximumLines =
+        m_notificationLogMaximumLinesSpin != nullptr
+        ? m_notificationLogMaximumLinesSpin->value()
+        : m_currentAppearanceSettings.notificationLogMaximumLines;
     collectedSettings.notificationDisplayPlacement =
         m_notificationDisplayPlacementCombo != nullptr
         ? static_cast<ks::settings::NotificationDisplayPlacement>(m_notificationDisplayPlacementCombo->currentData().toInt())
@@ -1759,6 +1923,7 @@ void SettingsDock::saveAndEmitFromUi(const QString& triggerReason)
         && nextSettings.launchMaximizedOnStartup == m_currentAppearanceSettings.launchMaximizedOnStartup
         && nextSettings.startupTopMostEnabled == m_currentAppearanceSettings.startupTopMostEnabled
         && nextSettings.autoRequestAdminOnStartup == m_currentAppearanceSettings.autoRequestAdminOnStartup
+        && nextSettings.preventMultipleInstances == m_currentAppearanceSettings.preventMultipleInstances
         && sameScaleFactor
         && nextSettings.startupScaleRecommendPromptDisabled == m_currentAppearanceSettings.startupScaleRecommendPromptDisabled
         && nextSettings.unlockerShellContextMenuEnabled == m_currentAppearanceSettings.unlockerShellContextMenuEnabled
@@ -1767,11 +1932,15 @@ void SettingsDock::saveAndEmitFromUi(const QString& triggerReason)
         && nextSettings.scrollBarAutoHideEnabled == m_currentAppearanceSettings.scrollBarAutoHideEnabled
         && nextSettings.smoothScrollingEnabled == m_currentAppearanceSettings.smoothScrollingEnabled
         && nextSettings.sliderWheelAdjustEnabled == m_currentAppearanceSettings.sliderWheelAdjustEnabled
+        && nextSettings.detailDisplayScheme == m_currentAppearanceSettings.detailDisplayScheme
         && nextSettings.fontFamily.compare(m_currentAppearanceSettings.fontFamily, Qt::CaseInsensitive) == 0
         && nextSettings.textAntialiasingEnabled == m_currentAppearanceSettings.textAntialiasingEnabled
         && nextSettings.notificationCardsEnabled == m_currentAppearanceSettings.notificationCardsEnabled
         && nextSettings.notificationMinimumLevel == m_currentAppearanceSettings.notificationMinimumLevel
         && nextSettings.notificationLogDisplaySeconds == m_currentAppearanceSettings.notificationLogDisplaySeconds
+        && nextSettings.notificationMaximumVisibleLogCards == m_currentAppearanceSettings.notificationMaximumVisibleLogCards
+        && nextSettings.notificationLogHeightLimitEnabled == m_currentAppearanceSettings.notificationLogHeightLimitEnabled
+        && nextSettings.notificationLogMaximumLines == m_currentAppearanceSettings.notificationLogMaximumLines
         && nextSettings.notificationDisplayPlacement == m_currentAppearanceSettings.notificationDisplayPlacement
         && nextSettings.notificationStackDirection == m_currentAppearanceSettings.notificationStackDirection
         && nextSettings.virusTotalApiKey == m_currentAppearanceSettings.virusTotalApiKey
@@ -1884,6 +2053,8 @@ void SettingsDock::saveAndEmitFromUi(const QString& triggerReason)
         << (m_currentAppearanceSettings.startupTopMostEnabled ? "true" : "false")
         << "，启动时自动请求管理员权限="
         << (m_currentAppearanceSettings.autoRequestAdminOnStartup ? "true" : "false")
+        << "，防止多开="
+        << (m_currentAppearanceSettings.preventMultipleInstances ? "true" : "false")
         << "，启动窗口缩放因子="
         << m_currentAppearanceSettings.startupWindowScaleFactor
         << "，小屏缩放提示不再弹出="
@@ -1898,6 +2069,9 @@ void SettingsDock::saveAndEmitFromUi(const QString& triggerReason)
         << (m_currentAppearanceSettings.smoothScrollingEnabled ? "true" : "false")
         << "，滚轮调整滑块="
         << (m_currentAppearanceSettings.sliderWheelAdjustEnabled ? "true" : "false")
+        << "，详情页显示方案="
+        << ks::settings::detailDisplaySchemeToJsonText(
+            m_currentAppearanceSettings.detailDisplayScheme).toStdString()
         << "，VirusTotal API Key已配置="
         << (!m_currentAppearanceSettings.virusTotalApiKey.trimmed().isEmpty() ? "true" : "false")
         << "，ThreatBook API Key已配置="

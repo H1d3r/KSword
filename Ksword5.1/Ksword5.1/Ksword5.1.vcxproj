@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003" DefaultTargets="Build" ToolsVersion="17.0">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|x64">
@@ -85,7 +85,7 @@
     </ClCompile>
     <Link>
       <AdditionalLibraryDirectories>$(QTDIR)\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>qtadvanceddockingd.lib;Ole32.lib;Shell32.lib;Advapi32.lib;Setupapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>qtadvanceddockingd.lib;Ole32.lib;Shell32.lib;Advapi32.lib;Setupapi.lib;Crypt32.lib;ImageHlp.lib;Propsys.lib;Wintrust.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalOptions>"/MANIFESTDEPENDENCY:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' publicKeyToken='6595b64144ccf1df' language='*' processorArchitecture='*'" %(AdditionalOptions)</AdditionalOptions>
     </Link>
   </ItemDefinitionGroup>
@@ -106,7 +106,7 @@
     </ClCompile>
     <Link>
       <AdditionalLibraryDirectories>$(QTDIR)\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>qtadvanceddocking.lib;Ole32.lib;Shell32.lib;Advapi32.lib;Setupapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>qtadvanceddocking.lib;Ole32.lib;Shell32.lib;Advapi32.lib;Setupapi.lib;Crypt32.lib;ImageHlp.lib;Propsys.lib;Wintrust.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalOptions>"/MANIFESTDEPENDENCY:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' publicKeyToken='6595b64144ccf1df' language='*' processorArchitecture='*'" %(AdditionalOptions)</AdditionalOptions>
       <UACUIAccess>false</UACUIAccess>
     </Link>
@@ -195,6 +195,7 @@
     <ClCompile Include="Framework\CustomTitleBar.cpp" />
     <ClCompile Include="Framework\StartupSplash.cpp" />
     <ClCompile Include="ksword\file\file_handle_tools.cpp" />
+    <ClCompile Include="ksword\file\file_metadata_transaction.cpp" />
     <ClCompile Include="ksword\file\pe_analyzer.cpp" />
     <ClCompile Include="ksword\scanner\atomic_file_patch.cpp" />
     <ClCompile Include="ksword\scanner\attack_path_detector.cpp" />
@@ -204,6 +205,8 @@
     <ClCompile Include="ksword\scanner\macho_scanner.cpp" />
     <ClCompile Include="ksword\profile\ProfileJsonLoader.cpp" />
     <ClCompile Include="KernelDock\KernelDock.cpp" />
+    <ClCompile Include="KernelDock\KernelKnowledgeCatalog.cpp" />
+    <ClCompile Include="KernelDock\KernelKnowledgeTab.cpp" />
     <ClCompile Include="KernelDock\KernelDock.CallbackIntercept.cpp" />
     <ClCompile Include="KernelDock\KernelDock.CallbackPromptManager.cpp" />
     <ClCompile Include="KernelDock\KernelDock.CallbackRuleSerializer.cpp" />
@@ -277,7 +280,6 @@
     <ClCompile Include="MiscDock\DiskEditor\DiskStructureParser.cpp" />
     <ClCompile Include="MiscDock\DiskEditor\DiskEditorTab.cpp" />
     <ClCompile Include="MiscDock\DiskEditor\DiskMapWidget.cpp" />
-    <ClCompile Include="MiscDock\DiskEditor\StorageControllerResearchDialog.cpp" />
     <ClCompile Include="MiscDock\ContextMenuCleaner\ContextMenuCleanerTab.cpp" />
     <ClCompile Include="MiscDock\ContextMenuCleaner\ContextMenuCleanerTab.Associations.cpp" />
     <ClCompile Include="MiscDock\ContextMenuCleaner\ContextMenuCleanerTab.Backup.cpp" />
@@ -378,7 +380,6 @@
     <ClCompile Include="ProcessDock\ProcessDetailWindow.Privilege.cpp" />
     <ClCompile Include="ProcessDock\ProcessDetailWindow.ExtendedActions.cpp" />
     <ClCompile Include="ProcessDock\ProcessDetailWindow.AdvancedInfo.cpp" />
-    <ClCompile Include="ProcessDock\ProcessTokenPrivilegeDialog.cpp" />
     <ClCompile Include="PluginHost.cpp" />
     <ClCompile Include="ProcessDock\ProcessDock.cpp" />
     <ClCompile Include="ProcessDock\ProcessDock.Icon.cpp" />
@@ -391,6 +392,7 @@
     <ClCompile Include="Internationalization\LanguageManager.cpp" />
     <ClCompile Include="SettingsDock\AppearanceSettings.cpp" />
     <ClCompile Include="SettingsDock\SettingsDock.OnlineScan.cpp" />
+    <ClCompile Include="SettingsDock\SettingsDock.Bugcheck.cpp" />
     <ClCompile Include="SettingsDock\SettingsDock.cpp" />
     <ClCompile Include="ServerDock\ServiceDock.cpp" />
     <ClCompile Include="ServerDock\ServiceDock.Actions.cpp" />
@@ -415,6 +417,9 @@
     <ClCompile Include="StartupDock\StartupDock.Services.cpp" />
     <ClCompile Include="StartupDock\StartupDock.Tasks.cpp" />
     <ClCompile Include="UI\CodeEditorWidget.cpp" />
+    <ClCompile Include="UI\EmbeddedRowDelegate.cpp" />
+    <ClCompile Include="UI\DetailLayoutHost.cpp" />
+    <ClCompile Include="UI\DetailLayoutRegistry.cpp" />
     <ClCompile Include="UI\KernelDisassemblyDialog.cpp" />
     <ClCompile Include="..\..\third_party\zydis\Zydis.c">
       <CompileAs>CompileAsC</CompileAs>
@@ -514,7 +519,7 @@
     <ClCompile Include="ArkDriverClient\ArkDriverDebugOutput.cpp" />
     <ClCompile Include="ArkDriverClient\ArkDriverBugcheck.cpp" />
     <ClCompile Include="ArkDriverClient\ArkDriverSystemTime.cpp" />
-    <ClCompile Include="ArkDriverClient\ArkStorageControllerClient.cpp" />
+    <ClCompile Include="ArkDriverClient\ArkDriverResearch.cpp" />
     <ClCompile Include="..\..\third_party\zstd\zstd.c">
       <CompileAs>CompileAsC</CompileAs>
       <WarningLevel>TurnOffAllWarnings</WarningLevel>
@@ -544,6 +549,8 @@
     <ClInclude Include="Framework\ProgressDockWidget.h" />
     <ClInclude Include="Framework\StartupSplash.h" />
     <ClInclude Include="KernelDock\KernelDockAtomWorker.h" />
+    <ClInclude Include="KernelDock\KernelKnowledgeCatalog.h" />
+    <ClInclude Include="KernelDock\KernelKnowledgeTab.h" />
     <ClInclude Include="KernelDock\KernelDock.CallbackIntercept.h" />
     <ClInclude Include="KernelDock\KernelBaseNamedObjectsTab.h" />
     <ClInclude Include="KernelDock\KernelBaseNamedObjectsWorker.h" />
@@ -577,6 +584,7 @@
     <ClInclude Include="ksword\ksword.h" />
     <ClInclude Include="ksword\file\file.h" />
     <ClInclude Include="ksword\file\file_handle_tools.h" />
+    <ClInclude Include="ksword\file\file_metadata_transaction.h" />
     <ClInclude Include="ksword\file\pe_analyzer.h" />
     <ClInclude Include="ksword\scanner\atomic_file_patch.h" />
     <ClInclude Include="ksword\scanner\binary_scanner.h" />
@@ -601,6 +609,9 @@
     <ClInclude Include="ksword\string\string.h" />
     <ClInclude Include="theme.h" />
     <ClInclude Include="UI\FlatTableModel.h" />
+    <ClInclude Include="UI\EmbeddedRowDelegate.h" />
+    <ClInclude Include="UI\DetailLayoutHost.h" />
+    <ClInclude Include="UI\DetailLayoutRegistry.h" />
     <ClInclude Include="UI\SmoothScrollSupport.h" />
     <ClInclude Include="UI\TableColumnAutoFit.h" />
     <ClInclude Include="UI\TableFreezeSupport.h" />
@@ -654,7 +665,6 @@
     <ClInclude Include="MiscDock\DiskEditor\DiskRangeTools.h" />
     <ClInclude Include="MiscDock\DiskEditor\DiskStructureParser.h" />
     <ClInclude Include="MiscDock\DiskEditor\DiskEditorTab.h" />
-    <ClInclude Include="MiscDock\DiskEditor\StorageControllerResearchDialog.h" />
     <QtMoc Include="MiscDock\DiskEditor\DiskMapWidget.h" />
     <QtMoc Include="MiscDock\MiscDock.h" />
     <ClInclude Include="MinidumpDock\DumpAnalyzer.h" />
@@ -712,7 +722,6 @@
     <ClInclude Include="RegistryDock\RegistryOptimizationPage.h" />
     <QtMoc Include="ProcessDock\ProcessDetailWindow.h" />
     <ClInclude Include="ProcessDock\ProcessDetailWindow.InternalCommon.h" />
-    <ClInclude Include="ProcessDock\ProcessTokenPrivilegeDialog.h" />
     <ClInclude Include="ProcessDock\ProcessAffinityUtils.h" />
     <ClInclude Include="ProcessDock\ProcessAffinityPersistence.h" />
     <ClInclude Include="ProcessDock\ProcessAffinityModel.h" />
@@ -755,7 +764,6 @@
     <ClInclude Include="ArkDriverClient\ArkDriverError.h" />
     <ClInclude Include="..\..\shared\crash\WinCrashHandler.h" />
     <ClInclude Include="ArkDriverClient\ArkDriverCapabilities.h" />
-    <ClInclude Include="ArkDriverClient\ArkStorageControllerClient.h" />
     <ClInclude Include="..\..\third_party\zydis\Zydis.h" />
     <ClInclude Include="..\..\third_party\zstd\zstd.h" />
     <ClInclude Include="..\..\third_party\zstd\zstd_errors.h" />
@@ -773,7 +781,6 @@
     <None Include="..\..\third_party\zstd\NOTICE.md" />
     <None Include="..\..\third_party\SystemWideTransmission\LICENSE.txt" />
     <None Include="..\..\third_party\SystemWideTransmission\NOTICE.md" />
-    <None Include="profiles\ark_dyndata_pack_v3.json" />
     <None Include="profiles\ark_dyndata_pack_v4.json" />
     <None Include="ArkDriverClient\ArkRuntimeDynDataCatalog.inc" />
     <None Include="languages\en-US.json" />
@@ -851,21 +858,28 @@
     <Copy SourceFiles="$(KswordZydisNoticeSource)" DestinationFiles="$(KswordThirdPartyLicenseTargetDir)zydis-NOTICE.md" SkipUnchangedFiles="true" />
   </Target>
   <Target Name="CopyKswordArkDynDataProfilePack" AfterTargets="Build">
-    <!-- v3 carries typed compatibility items; v4 is the default multi-module profile pack. -->
+    <!-- Release carries one v4 pack. Core field/EX projections are derived in memory by R3. -->
     <PropertyGroup>
       <KswordProfileCompressor>$(MSBuildProjectDirectory)\..\..\tools\compress_qt_profile_json.py</KswordProfileCompressor>
       <KswordProfilePythonExe Condition="'$(KswordProfilePythonExe)'==''">python</KswordProfilePythonExe>
-      <KswordArkDynDataProfilePackV3Source>$(MSBuildProjectDirectory)\profiles\ark_dyndata_pack_v3.json</KswordArkDynDataProfilePackV3Source>
       <KswordArkDynDataProfilePackV4Source>$(MSBuildProjectDirectory)\profiles\ark_dyndata_pack_v4.json</KswordArkDynDataProfilePackV4Source>
       <KswordArkDynDataProfilePackTargetDir>$(TargetDir)profiles\</KswordArkDynDataProfilePackTargetDir>
+      <KswordStaleDynDataPackArchiveDir>$(TEMP)\Ksword5.1-old-offsets\$(MSBuildProjectName)-$(Configuration)-$(Platform)-$([System.DateTime]::Now.ToString('yyyyMMdd-HHmmss-fff'))\</KswordStaleDynDataPackArchiveDir>
     </PropertyGroup>
-    <MakeDir Directories="$(KswordArkDynDataProfilePackTargetDir)" Condition="Exists('$(KswordArkDynDataProfilePackV3Source)') Or Exists('$(KswordArkDynDataProfilePackV4Source)')" />
+    <ItemGroup>
+      <KswordStaleDynDataPack Include="$(KswordArkDynDataProfilePackTargetDir)ark_dyndata_pack_v1.json" Condition="Exists('$(KswordArkDynDataProfilePackTargetDir)ark_dyndata_pack_v1.json')" />
+      <KswordStaleDynDataPack Include="$(KswordArkDynDataProfilePackTargetDir)ark_dyndata_pack_v1.json.qz" Condition="Exists('$(KswordArkDynDataProfilePackTargetDir)ark_dyndata_pack_v1.json.qz')" />
+      <KswordStaleDynDataPack Include="$(KswordArkDynDataProfilePackTargetDir)ark_dyndata_pack_v2.json" Condition="Exists('$(KswordArkDynDataProfilePackTargetDir)ark_dyndata_pack_v2.json')" />
+      <KswordStaleDynDataPack Include="$(KswordArkDynDataProfilePackTargetDir)ark_dyndata_pack_v2.json.qz" Condition="Exists('$(KswordArkDynDataProfilePackTargetDir)ark_dyndata_pack_v2.json.qz')" />
+      <KswordStaleDynDataPack Include="$(KswordArkDynDataProfilePackTargetDir)ark_dyndata_pack_v3.json" Condition="Exists('$(KswordArkDynDataProfilePackTargetDir)ark_dyndata_pack_v3.json')" />
+      <KswordStaleDynDataPack Include="$(KswordArkDynDataProfilePackTargetDir)ark_dyndata_pack_v3.json.qz" Condition="Exists('$(KswordArkDynDataProfilePackTargetDir)ark_dyndata_pack_v3.json.qz')" />
+      <KswordStaleDynDataPack Include="$(KswordArkDynDataProfilePackTargetDir)ark_dyndata_pack_v4.json" Condition="Exists('$(KswordArkDynDataProfilePackTargetDir)ark_dyndata_pack_v4.json')" />
+    </ItemGroup>
+    <MakeDir Directories="$(KswordStaleDynDataPackArchiveDir)" Condition="'@(KswordStaleDynDataPack)'!=''" />
+    <Move SourceFiles="@(KswordStaleDynDataPack)" DestinationFolder="$(KswordStaleDynDataPackArchiveDir)" Condition="'@(KswordStaleDynDataPack)'!=''" />
+    <MakeDir Directories="$(KswordArkDynDataProfilePackTargetDir)" Condition="Exists('$(KswordArkDynDataProfilePackV4Source)')" />
     <Exec Command="&quot;$(KswordProfilePythonExe)&quot; &quot;$(KswordProfileCompressor)&quot; --file &quot;$(KswordArkDynDataProfilePackV4Source)&quot; --out &quot;$(KswordArkDynDataProfilePackTargetDir)ark_dyndata_pack_v4.json.qz&quot;" Condition="Exists('$(KswordProfileCompressor)') And Exists('$(KswordArkDynDataProfilePackV4Source)')" />
-    <Exec Command="&quot;$(KswordProfilePythonExe)&quot; &quot;$(KswordProfileCompressor)&quot; --file &quot;$(KswordArkDynDataProfilePackV3Source)&quot; --out &quot;$(KswordArkDynDataProfilePackTargetDir)ark_dyndata_pack_v3.json.qz&quot;" Condition="Exists('$(KswordProfileCompressor)') And Exists('$(KswordArkDynDataProfilePackV3Source)')" />
-    <Delete Files="$(KswordArkDynDataProfilePackTargetDir)ark_dyndata_pack_v1.json;$(KswordArkDynDataProfilePackTargetDir)ark_dyndata_pack_v1.json.qz;$(KswordArkDynDataProfilePackTargetDir)ark_dyndata_pack_v2.json;$(KswordArkDynDataProfilePackTargetDir)ark_dyndata_pack_v2.json.qz" />
-    <Delete Files="$(KswordArkDynDataProfilePackTargetDir)ark_dyndata_pack_v3.json;$(KswordArkDynDataProfilePackTargetDir)ark_dyndata_pack_v4.json" Condition="Exists('$(KswordProfileCompressor)')" />
     <Warning Condition="!Exists('$(KswordProfileCompressor)')" Text="Profile compressor was not found; compressed profile packs were not generated: $(KswordProfileCompressor)" />
-    <Warning Condition="!Exists('$(KswordArkDynDataProfilePackV3Source)')" Text="KswordARK DynData v3 profile pack was not found: $(KswordArkDynDataProfilePackV3Source)" />
     <Warning Condition="!Exists('$(KswordArkDynDataProfilePackV4Source)')" Text="KswordARK DynData v4 profile pack was not found: $(KswordArkDynDataProfilePackV4Source)" />
   </Target>
   <Target Name="CopyRegistryOptimizationProfile" AfterTargets="Build">
@@ -931,7 +945,7 @@
       <KswordQtDeployExe Condition="'$(KswordQtDeployExe)'=='' and '$(QTDIR)'!='' and Exists('$(QTDIR)\bin\windeployqt.exe')">$(QTDIR)\bin\windeployqt.exe</KswordQtDeployExe>
     </PropertyGroup>
     <Message Importance="High" Text="Deploying Qt runtime and plugins to $(TargetDir)" Condition="Exists('$(KswordQtDeployExe)')" />
-    <Exec Command="&quot;$(KswordQtDeployExe)&quot; --release --force --compiler-runtime --dir &quot;$(TargetDir).&quot; &quot;$(TargetPath)&quot;" Condition="Exists('$(KswordQtDeployExe)')" />
+    <Exec Command="&quot;$(KswordQtDeployExe)&quot; --release --force --compiler-runtime --no-opengl-sw --dir &quot;$(TargetDir).&quot; &quot;$(TargetPath)&quot;" Condition="Exists('$(KswordQtDeployExe)')" />
     <Warning Condition="!Exists('$(KswordQtDeployExe)')" Text="windeployqt.exe was not found; the Release output may be missing Qt runtime DLLs and plugins." />
   </Target>
   <!-- Qt 官方动态库由 MSVC /MD 构建，即使 Ksword5.1.exe 自身使用 /MT，也仍需把 VC 运行库 DLL 随 Release 输出部署。 -->

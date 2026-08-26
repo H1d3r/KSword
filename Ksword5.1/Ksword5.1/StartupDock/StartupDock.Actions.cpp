@@ -855,13 +855,6 @@ void StartupDock::exportCurrentView()
 void StartupDock::applyFilterAndRefresh()
 {
     rebuildAllTables();
-    if (m_statusLabel != nullptr)
-    {
-        m_statusLabel->setText(
-            startupText("startup.status.summary", QStringLiteral("状态：共 %1 条，当前分类 %2"))
-                .arg(m_entryList.size())
-                .arg(categoryToText(currentCategory())));
-    }
 }
 
 void StartupDock::setStartupEntryEnabled(StartupEntry entry, const bool enabled)

@@ -336,6 +336,31 @@ KswordARKWin32kMessageAlreadySeen(
 }
 
 static BOOLEAN
+KswordARKWin32kMessageMatchesSide(
+    _In_opt_ const KSWORD_ARK_WIN32K_QUERY_REQUEST* Request,
+    _In_ ULONG RequestedSessionId,
+    _In_ ULONG ProcessId,
+    _In_ ULONG ThreadId,
+    _In_ ULONG SessionId
+    )
+{
+    if (RequestedSessionId != 0UL && SessionId != RequestedSessionId) {
+        return FALSE;
+    }
+    if (Request != NULL &&
+        Request->processId != 0UL &&
+        ProcessId != Request->processId) {
+        return FALSE;
+    }
+    if (Request != NULL &&
+        Request->threadId != 0UL &&
+        ThreadId != Request->threadId) {
+        return FALSE;
+    }
+    return TRUE;
+}
+
+static BOOLEAN
 KswordARKWin32kMessageMatchesRequest(
     _In_opt_ const KSWORD_ARK_WIN32K_QUERY_REQUEST* Request,
     _In_ ULONG RequestedSessionId,
@@ -347,22 +372,39 @@ KswordARKWin32kMessageMatchesRequest(
     _In_ ULONG TargetSessionId
     )
 {
-    if (RequestedSessionId != 0UL &&
-        OwnerSessionId != RequestedSessionId &&
-        TargetSessionId != RequestedSessionId) {
-        return FALSE;
+    ULONG matchFlags = 0UL;
+    BOOLEAN matchOwner = TRUE;
+    BOOLEAN matchTarget = TRUE;
+
+    if (Request != NULL) {
+        matchFlags = Request->flags &
+            KSWORD_ARK_WIN32K_MESSAGE_HOOK_QUERY_FLAG_MATCH_MASK;
     }
-    if (Request != NULL && Request->processId != 0UL &&
-        OwnerProcessId != Request->processId &&
-        TargetProcessId != Request->processId) {
-        return FALSE;
+    if (matchFlags != 0UL) {
+        matchOwner = (matchFlags &
+            KSWORD_ARK_WIN32K_MESSAGE_HOOK_QUERY_FLAG_MATCH_OWNER) != 0UL;
+        matchTarget = (matchFlags &
+            KSWORD_ARK_WIN32K_MESSAGE_HOOK_QUERY_FLAG_MATCH_TARGET) != 0UL;
     }
-    if (Request != NULL && Request->threadId != 0UL &&
-        OwnerThreadId != Request->threadId &&
-        TargetThreadId != Request->threadId) {
-        return FALSE;
-    }
-    return TRUE;
+
+    // Treat Session/PID/TID as one predicate per side. Evaluating each field
+    // independently would allow a request to pass when, for example, Session
+    // matched the owner while PID matched the target even though neither side
+    // satisfied the complete filter.
+    return (matchOwner &&
+            KswordARKWin32kMessageMatchesSide(
+                Request,
+                RequestedSessionId,
+                OwnerProcessId,
+                OwnerThreadId,
+                OwnerSessionId)) ||
+        (matchTarget &&
+            KswordARKWin32kMessageMatchesSide(
+                Request,
+                RequestedSessionId,
+                TargetProcessId,
+                TargetThreadId,
+                TargetSessionId));
 }
 
 static VOID
@@ -657,7 +699,7 @@ KswordARKWin32kQueryHookSnapshot(
     ULONG moduleInfoBytes = 0UL;
     ULONG threadMapCount = 0UL;
     ULONG seenCount = 0UL;
-    ULONG maxEntries = KSWORD_ARK_WIN32K_DEFAULT_MAX_ENTRIES;
+    ULONG maxEntries = KSWORD_ARK_WIN32K_MESSAGE_HOOK_DEFAULT_MAX_ENTRIES;
     ULONG requestedSessionId = 0UL;
     ULONG processWalkCount = 0UL;
     size_t headerSize = 0U;
@@ -686,9 +728,9 @@ KswordARKWin32kQueryHookSnapshot(
 
     entryCapacity = (OutputBufferLength - headerSize) /
         sizeof(KSWORD_ARK_WIN32K_HOOK_ENTRY);
-    maxEntries = Request != NULL
+    maxEntries = Request != NULL && Request->maxEntries != 0UL
         ? KswordARKWin32kNormalizeMaxEntries(Request->maxEntries)
-        : KSWORD_ARK_WIN32K_DEFAULT_MAX_ENTRIES;
+        : KSWORD_ARK_WIN32K_MESSAGE_HOOK_DEFAULT_MAX_ENTRIES;
     if (entryCapacity < (size_t)maxEntries) {
         maxEntries = (ULONG)entryCapacity;
     }
