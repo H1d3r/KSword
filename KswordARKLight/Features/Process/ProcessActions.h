@@ -11,6 +11,7 @@ enum class ProcessActionId {
     CopyCell,
     CopyRow,
     CopyVisibleResults,
+    ExportVisibleResults,
     OpenDetails,
     OpenImageInFileModule,
     OpenNetworkForProcess,

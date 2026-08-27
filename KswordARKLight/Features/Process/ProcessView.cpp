@@ -4,6 +4,7 @@
 #include "ProcessColumns.h"
 #include "ProcessEnumerator.h"
 #include "ProcessModel.h"
+#include "../AuditCommon/AuditFormatting.h"
 #include "../ProcessDetail/ProcessDetailFeature.h"
 #include "../../Ui/Controls.h"
 #include "../../Ui/AsyncTask.h"
@@ -1330,6 +1331,63 @@ std::wstring VisibleRowsAsText(const ProcessViewState& state) {
     return text;
 }
 
+// VisibleRowsAsTsv exports the current filtered owner-data mapping together
+// with precisely the columns that are currently visible. It intentionally
+// reuses the immutable presentation snapshot, so saving evidence neither
+// re-enumerates target processes nor requires any additional access rights.
+std::wstring VisibleRowsAsTsv(const ProcessViewState& state) {
+    if (state.visibleRowIndexes.empty()) {
+        return {};
+    }
+
+    std::vector<std::wstring> headers;
+    headers.reserve(state.activeColumns.size());
+    for (const ProcessColumnId column : state.activeColumns) {
+        const ProcessColumnDescriptor* descriptor = FindProcessColumn(column);
+        headers.push_back(descriptor ? descriptor->title : L"");
+    }
+
+    std::vector<std::vector<std::wstring>> rows;
+    rows.reserve(state.visibleRowIndexes.size());
+    for (const std::size_t displayIndex : state.visibleRowIndexes) {
+        if (displayIndex < state.presentationRows.size()) {
+            rows.push_back(state.presentationRows[displayIndex].cells);
+        }
+    }
+    return Ksword::Features::AuditCommon::BuildTsv(headers, rows);
+}
+
+// ExportVisibleResults lets an analyst preserve the exact columns and filtered
+// rows currently shown in the process list. SaveUtf8TextFileWithDialog records
+// the completed user-selected export in the evidence session.
+void ExportVisibleResults(ProcessViewState& state) {
+    const std::wstring text = VisibleRowsAsTsv(state);
+    if (text.empty()) {
+        SetStatus(state, L"没有可导出的可见进程结果。");
+        return;
+    }
+
+    std::wstring error;
+    switch (Ksword::Ui::SaveUtf8TextFileWithDialog(
+        state.hwnd,
+        L"processes.tsv",
+        L"导出可见进程结果",
+        L"TSV (*.tsv)\0*.tsv\0All Files (*.*)\0*.*\0",
+        L"tsv",
+        text,
+        &error)) {
+    case Ksword::Ui::SaveTextFileResult::Saved:
+        SetStatus(state, L"可见进程结果已导出为 TSV，并已记录到证据会话。");
+        break;
+    case Ksword::Ui::SaveTextFileResult::Cancelled:
+        SetStatus(state, L"已取消导出可见进程结果。");
+        break;
+    case Ksword::Ui::SaveTextFileResult::Failed:
+        SetStatus(state, L"导出可见进程结果失败：" + error);
+        break;
+    }
+}
+
 // NarrowToWide converts ArkDriverClient diagnostic strings to the native UI
 // encoding. Input is UTF-8/ASCII text from the shared wrapper; output is a
 // best-effort wide string suitable for status bars and R0 evidence cells.
@@ -2262,7 +2320,12 @@ void BeginR0Injection(
 // action id. UI-local copy and page creation remain immediate; blocking Win32,
 // R0 and file operations are queued through BeginProcessAction.
 void ExecuteMenuItem(ProcessViewState& state, ProcessActionId actionId) {
-    if (actionId == ProcessActionId::CopyCell || actionId == ProcessActionId::CopyRow || actionId == ProcessActionId::CopyVisibleResults) {
+    if (actionId == ProcessActionId::CopyCell || actionId == ProcessActionId::CopyRow ||
+        actionId == ProcessActionId::CopyVisibleResults || actionId == ProcessActionId::ExportVisibleResults) {
+        if (actionId == ProcessActionId::ExportVisibleResults) {
+            ExportVisibleResults(state);
+            return;
+        }
         if (actionId == ProcessActionId::CopyVisibleResults) {
             const bool copied = WriteClipboardText(state.hwnd, VisibleRowsAsText(state));
             SetStatus(state, copied ? L"已复制全部可见进程结果。" : L"复制失败：当前没有可见结果或剪贴板不可用。");
@@ -2400,6 +2463,7 @@ void ShowContextMenu(ProcessViewState& state, POINT screenPoint) {
         const bool immediateAction = id == ProcessActionId::CopyCell ||
             id == ProcessActionId::CopyRow ||
             id == ProcessActionId::CopyVisibleResults ||
+            id == ProcessActionId::ExportVisibleResults ||
             id == ProcessActionId::OpenDetails ||
             id == ProcessActionId::OpenMemoryOperation ||
             id == ProcessActionId::OpenImageInFileModule ||
@@ -2418,6 +2482,10 @@ void ShowContextMenu(ProcessViewState& state, POINT screenPoint) {
     appendAction(copyMenu, ProcessActionId::CopyRow, L"复制行", hasVisibleSelection);
     appendAction(copyMenu, ProcessActionId::CopyVisibleResults, L"复制可见结果", !state.visibleRowIndexes.empty());
     appendPopup(menu, copyMenu, L"复制");
+
+    HMENU exportMenu = ::CreatePopupMenu();
+    appendAction(exportMenu, ProcessActionId::ExportVisibleResults, L"导出可见结果为 TSV...", !state.visibleRowIndexes.empty());
+    appendPopup(menu, exportMenu, L"导出");
 
     HMENU processMenu = ::CreatePopupMenu();
     appendAction(processMenu, ProcessActionId::OpenDetails, L"进程详细信息", singleProcess);
