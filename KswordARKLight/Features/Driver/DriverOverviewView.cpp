@@ -404,7 +404,12 @@ void ShowOverviewDetail(DriverOverviewViewState& state) {
 }
 
 std::wstring DriverDirectoryForOverviewRow(const DriverOverviewRow& row) {
-    return Ksword::Features::File::PathNavigator::parentDirectoryForKnownFilePath(row.pathText);
+    const std::wstring directory =
+        Ksword::Features::File::PathNavigator::parentDirectoryForKnownFilePath(row.pathText);
+    // The File browser's ordinary text box expands environment expressions;
+    // preserve the snapshot-only boundary by refusing directory names that
+    // could be interpreted as an environment-style expression downstream.
+    return directory.find(L'%') == std::wstring::npos ? directory : std::wstring{};
 }
 
 // OpenOverviewDriverDirectory routes only a strict DOS/UNC parent directory.
