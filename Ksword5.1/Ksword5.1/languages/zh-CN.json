@@ -12798,6 +12798,7 @@
     "RangeState: %1\n": "RangeState: %1\n",
     "Raw Hex Preview: %1\n": "Raw Hex Preview: %1\n",
     "Raw Socket 打开失败，通常需要管理员权限。": "Raw Socket 打开失败，通常需要管理员权限。",
+    "Raw 兜底配置": "Raw 兜底配置",
     "Raw 兜底 Hook（强类型优先）": "Raw 兜底 Hook（强类型优先）",
     "Raw 模块目录（; 分隔）": "Raw 模块目录（; 分隔）",
     "Raw 额外黑名单（exact / prefix*）": "Raw 额外黑名单（exact / prefix*）",
