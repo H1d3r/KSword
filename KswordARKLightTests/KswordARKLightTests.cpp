@@ -1,6 +1,7 @@
 #include "../KswordARKLight/Core/DriverLeasePolicy.h"
 #include "../KswordARKLight/Core/EntityRef.h"
 #include "../KswordARKLight/Features/Memory/MemorySnapshot.h"
+#include "../KswordARKLight/Features/Memory/MemoryInspection.h"
 #include "../KswordARKLight/Ui/EvidenceSession.h"
 
 #include <iostream>
@@ -26,6 +27,7 @@ int wmain() {
     using Ksword::Core::NavigationTarget;
     using Ksword::Core::ParseCommandInput;
     using Ksword::Features::Memory::MemorySnapshotHistory;
+    using Ksword::Features::Memory::MemoryReadSnapshot;
 
     Expect(DriverLeasePolicy::OwnsStartTransition(false, true), L"new driver start is owned");
     Expect(!DriverLeasePolicy::OwnsStartTransition(true, true), L"pre-existing driver is not owned");
@@ -65,6 +67,22 @@ int wmain() {
     Expect(snapshots.record(42U, 0x3000U, 1U, { 7U }, L"branch"), L"snapshot branch recorded");
     Expect(snapshots.size() == 2U && !snapshots.canMoveNext() && snapshots.current() && snapshots.current()->address == 0x3000U,
         L"snapshot branch truncates forward history");
+
+    MemoryReadSnapshot inspect{};
+    inspect.sequence = 7U;
+    inspect.processId = 42U;
+    inspect.address = 0x1000U;
+    inspect.requestedBytes = 13U;
+    inspect.bytes = { 'T', 'e', 's', 't', 0U, 'W', 0U, 'i', 0U, 'd', 0U, 'e', 0U };
+    inspect.statusText = L"partial read";
+    const std::wstring hexAscii = Ksword::Features::Memory::RenderMemorySnapshotHexAscii(inspect);
+    const std::wstring textRuns = Ksword::Features::Memory::ExtractMemorySnapshotText(inspect);
+    Expect(hexAscii.find(L"0x0000000000001000") != std::wstring::npos && hexAscii.find(L"Test") != std::wstring::npos,
+        L"memory hex ascii view includes address and printable bytes");
+    Expect(textRuns.find(L"ASCII") != std::wstring::npos && textRuns.find(L"UTF-16LE") != std::wstring::npos,
+        L"memory inspection extracts ascii and utf16 text runs");
+    Expect(Ksword::Features::Memory::BuildMemorySnapshotTextReport(inspect).find(L"ReturnedBytes") != std::wstring::npos,
+        L"memory inspection report includes snapshot metadata");
 
     const std::wstring redacted = Ksword::Ui::RedactEvidenceText(
         L"C:\\Users\\Felix\\Desktop\\sample.txt", Ksword::Ui::EvidenceRedaction::Privacy);

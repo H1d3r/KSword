@@ -2,9 +2,11 @@
 
 #include "DriverMemoryClient.h"
 #include "DriverMemoryModel.h"
+#include "MemoryInspection.h"
 #include "MemorySnapshot.h"
 #include "../../Ui/AsyncTask.h"
 #include "../../Ui/Controls.h"
+#include "../../Ui/ExportUtil.h"
 #include "../../Ui/FilterBar.h"
 #include "../../Ui/ListViewUtil.h"
 #include "../../Ui/TextFindSupport.h"
@@ -12,7 +14,6 @@
 #include "../../Ui/VirtualListView.h"
 
 #include <algorithm>
-#include <cstring>
 #include <cwchar>
 #include <iomanip>
 #include <memory>
@@ -48,8 +49,19 @@ constexpr UINT kMemoryMenuCopyStatus = 51508;
 constexpr UINT kMemoryMenuCopyHistoryCell = 51509;
 constexpr UINT kMemoryMenuCopyHistoryRow = 51510;
 constexpr UINT kMemoryMenuCopyHistoryVisible = 51511;
+constexpr UINT kMemoryMenuShowEditableHex = 51512;
+constexpr UINT kMemoryMenuShowHexAscii = 51513;
+constexpr UINT kMemoryMenuShowTextRuns = 51514;
+constexpr UINT kMemoryMenuExportSnapshotText = 51515;
+constexpr UINT kMemoryMenuExportSnapshotBinary = 51516;
 constexpr UINT kMsgMemoryOperationCompleted = WM_APP + 598;
 constexpr UINT kMsgMemoryHistoryFilterCompleted = WM_APP + 599;
+
+enum class SnapshotPresentation {
+    EditableHex,
+    HexAscii,
+    TextRuns,
+};
 
 struct MemoryOperationSnapshot {
     bool readOperation = false;
@@ -98,6 +110,9 @@ struct DriverMemoryViewState {
     std::vector<MemoryHistoryEntry> history;
     std::uint64_t nextHistorySequence = 1;
     MemorySnapshotHistory snapshots;
+    SnapshotPresentation snapshotPresentation = SnapshotPresentation::EditableHex;
+    std::wstring editableHexText;
+    bool hasEditableHexText = false;
     std::uint64_t historyGeneration = 0;
     std::wstring historyFilterQuery;
     bool historyFilterUseRegex = false;
@@ -147,6 +162,9 @@ void UpdateSnapshotButtons(DriverMemoryViewState& state) {
     if (state.snapshotNextButton) {
         ::EnableWindow(state.snapshotNextButton, enabled && state.snapshots.canMoveNext());
     }
+    if (state.writeButton) {
+        ::EnableWindow(state.writeButton, enabled && state.snapshotPresentation == SnapshotPresentation::EditableHex);
+    }
     ::InvalidateRect(state.hwnd, nullptr, FALSE);
 }
 
@@ -167,8 +185,12 @@ bool ApplyCurrentSnapshot(DriverMemoryViewState& state) {
     if (state.lengthEdit) {
         ::SetWindowTextW(state.lengthEdit, std::to_wstring(snapshot->bytes.size()).c_str());
     }
+    state.snapshotPresentation = SnapshotPresentation::EditableHex;
+    state.editableHexText = FormatHexBytesForDisplay(snapshot->bytes);
+    state.hasEditableHexText = true;
     if (state.hexEdit) {
-        ::SetWindowTextW(state.hexEdit, FormatHexBytesForDisplay(snapshot->bytes).c_str());
+        ::SendMessageW(state.hexEdit, EM_SETREADONLY, FALSE, 0);
+        ::SetWindowTextW(state.hexEdit, state.editableHexText.c_str());
     }
     std::wstring status = snapshot->statusText;
     if (!status.empty()) {
@@ -283,35 +305,10 @@ void AppendMemoryHistory(DriverMemoryViewState& state, const MemoryOperationSnap
     RebuildMemoryHistory(state);
 }
 
-// CopyTextToClipboard writes Unicode text from the memory page to the clipboard.
-// Inputs are owner HWND and text; processing allocates CF_UNICODETEXT and hands
-// it to Windows; output reports whether clipboard ownership succeeded.
+// CopyTextToClipboard delegates to the shared export utility so memory-page
+// copies are captured by the evidence session like every other Lite export.
 bool CopyTextToClipboard(HWND owner, const std::wstring& text) {
-    if (!::OpenClipboard(owner)) {
-        return false;
-    }
-    ::EmptyClipboard();
-    const SIZE_T bytes = (text.size() + 1) * sizeof(wchar_t);
-    HGLOBAL memory = ::GlobalAlloc(GMEM_MOVEABLE, bytes);
-    if (!memory) {
-        ::CloseClipboard();
-        return false;
-    }
-    void* target = ::GlobalLock(memory);
-    if (!target) {
-        ::GlobalFree(memory);
-        ::CloseClipboard();
-        return false;
-    }
-    std::memcpy(target, text.c_str(), bytes);
-    ::GlobalUnlock(memory);
-    if (!::SetClipboardData(CF_UNICODETEXT, memory)) {
-        ::GlobalFree(memory);
-        ::CloseClipboard();
-        return false;
-    }
-    ::CloseClipboard();
-    return true;
+    return Ksword::Ui::CopyTextToClipboard(owner, text, L"内存快照");
 }
 
 // TextFromClipboard reads CF_UNICODETEXT for paste into the hex buffer. Input is
@@ -436,7 +433,7 @@ void PaintLabels(HWND hwnd, HDC dc) {
     Ksword::Ui::DrawTextLine(dc, L"操作历史筛选（匹配全部列和状态）", filter, muted, Ksword::Ui::SystemUIFont(), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     const DriverMemoryViewState* state = StateFromWindow(hwnd);
     const std::wstring snapshotText = state && state->snapshots.current()
-        ? L"读取快照 " + std::to_wstring(state->snapshots.currentPosition()) + L"/" + std::to_wstring(state->snapshots.size())
+        ? L"读取快照 " + std::to_wstring(state->snapshots.currentPosition()) + L"/" + std::to_wstring(state->snapshots.size()) + L"（右键检视/导出）"
         : L"读取快照 0/0";
     RECT snapshot{ 372, 70, rc.right - 12, 94 };
     Ksword::Ui::DrawTextLine(dc, snapshotText, snapshot, muted, Ksword::Ui::SystemUIFont(), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
@@ -493,15 +490,15 @@ void HandleRead(DriverMemoryViewState& state) {
                 UpdateSnapshotButtons(state);
                 return;
             }
-            if (snapshot->readResult.success) {
-                ::SetWindowTextW(state.hexEdit, FormatHexBytesForDisplay(snapshot->readResult.bytes).c_str());
-                state.snapshots.record(snapshot->processId,
+            if (snapshot->readResult.success && state.snapshots.record(snapshot->processId,
                     snapshot->address,
                     snapshot->requestedBytes,
                     snapshot->readResult.bytes,
-                    snapshot->readResult.statusText);
+                    snapshot->readResult.statusText)) {
+                ApplyCurrentSnapshot(state);
+            } else {
+                SetStatus(state, snapshot->readResult.statusText);
             }
-            SetStatus(state, snapshot->readResult.statusText);
             AppendMemoryHistory(state, *snapshot);
             UpdateSnapshotButtons(state);
         });
@@ -511,6 +508,10 @@ void HandleRead(DriverMemoryViewState& state) {
 // page state; processing parses PID/address/hex bytes and calls
 // DriverMemoryClient; output is reflected in the status edit control.
 void HandleWrite(DriverMemoryViewState& state) {
+    if (state.snapshotPresentation != SnapshotPresentation::EditableHex) {
+        SetStatus(state, L"当前显示的是只读快照检视；请先切回可编辑 Hex。");
+        return;
+    }
     DriverMemoryWriteRequest request;
     std::wstring error;
     if (!ParseWriteRequest(GetWindowTextString(state.pidEdit),
@@ -572,6 +573,10 @@ void MoveToNextSnapshot(DriverMemoryViewState& state) {
 // byte text. Input is page state; processing never performs driver I/O; output
 // is reflected in the edit control and status line.
 void NormalizeHexBuffer(DriverMemoryViewState& state) {
+    if (state.snapshotPresentation != SnapshotPresentation::EditableHex) {
+        SetStatus(state, L"当前显示的是只读快照检视；请先切回可编辑 Hex。");
+        return;
+    }
     std::vector<std::uint8_t> bytes;
     std::wstring error;
     if (!ParseHexBytes(GetWindowTextString(state.hexEdit), bytes, error)) {
@@ -580,6 +585,124 @@ void NormalizeHexBuffer(DriverMemoryViewState& state) {
     }
     ::SetWindowTextW(state.hexEdit, FormatHexBytesForDisplay(bytes).c_str());
     SetStatus(state, L"Hex buffer normalized.");
+}
+
+// RestoreEditableSnapshot returns the byte editor to its local editable buffer.
+// The buffer is kept separately from rendered views so merely inspecting ASCII
+// or decoded text never mutates the bytes that a later write would parse.
+void RestoreEditableSnapshot(DriverMemoryViewState& state) {
+    const MemoryReadSnapshot* snapshot = state.snapshots.current();
+    if (!snapshot) {
+        SetStatus(state, L"请先成功读取内存，再切换快照检视。");
+        return;
+    }
+    if (!state.hasEditableHexText) {
+        state.editableHexText = FormatHexBytesForDisplay(snapshot->bytes);
+        state.hasEditableHexText = true;
+    }
+    state.snapshotPresentation = SnapshotPresentation::EditableHex;
+    if (state.hexEdit) {
+        ::SendMessageW(state.hexEdit, EM_SETREADONLY, FALSE, 0);
+        ::SetWindowTextW(state.hexEdit, state.editableHexText.c_str());
+    }
+    SetStatus(state, L"已切回可编辑 Hex 缓冲；尚未写入目标进程。");
+    UpdateSnapshotButtons(state);
+}
+
+// ShowSnapshotInspection renders an already-read snapshot without re-querying
+// the target process. The inspection edit is read-only to prevent its labels or
+// decoded text from ever being mistaken for a write payload.
+void ShowSnapshotInspection(DriverMemoryViewState& state, const SnapshotPresentation presentation) {
+    const MemoryReadSnapshot* snapshot = state.snapshots.current();
+    if (!snapshot) {
+        SetStatus(state, L"请先成功读取内存，再查看 Hex/ASCII 或文本检视。");
+        return;
+    }
+    if (presentation == SnapshotPresentation::EditableHex) {
+        if (state.snapshotPresentation == SnapshotPresentation::EditableHex) {
+            state.editableHexText = GetWindowTextString(state.hexEdit);
+            state.hasEditableHexText = true;
+            SetStatus(state, L"当前已是可编辑 Hex 缓冲；尚未写入目标进程。");
+            UpdateSnapshotButtons(state);
+        } else {
+            RestoreEditableSnapshot(state);
+        }
+        return;
+    }
+    if (state.snapshotPresentation == SnapshotPresentation::EditableHex) {
+        state.editableHexText = GetWindowTextString(state.hexEdit);
+        state.hasEditableHexText = true;
+    }
+    const std::wstring rendered = presentation == SnapshotPresentation::HexAscii
+        ? RenderMemorySnapshotHexAscii(*snapshot)
+        : ExtractMemorySnapshotText(*snapshot);
+    state.snapshotPresentation = presentation;
+    if (state.hexEdit) {
+        ::SendMessageW(state.hexEdit, EM_SETREADONLY, TRUE, 0);
+        ::SetWindowTextW(state.hexEdit, rendered.c_str());
+    }
+    SetStatus(state, presentation == SnapshotPresentation::HexAscii
+        ? L"正在查看已读快照的 Hex + ASCII；切回“可编辑 Hex”后才可写入。"
+        : L"正在查看已读快照中的 ASCII/UTF-16LE 文本；切回“可编辑 Hex”后才可写入。");
+    UpdateSnapshotButtons(state);
+}
+
+std::wstring BuildSnapshotMetadataText(const MemoryReadSnapshot& snapshot) {
+    return L"Snapshot=" + std::to_wstring(snapshot.sequence) + L"; PID=" + std::to_wstring(snapshot.processId) +
+        L"; Address=" + FormatHex64(snapshot.address) + L"; ReturnedBytes=" + std::to_wstring(snapshot.bytes.size()) +
+        L"; Status=" + snapshot.statusText;
+}
+
+// ExportCurrentSnapshotText persists the local inspection report as UTF-8. It
+// has no driver dependency, so a later R0 state change cannot alter this
+// evidence artifact.
+void ExportCurrentSnapshotText(DriverMemoryViewState& state) {
+    const MemoryReadSnapshot* snapshot = state.snapshots.current();
+    if (!snapshot) {
+        SetStatus(state, L"没有可导出的内存快照。");
+        return;
+    }
+    const std::wstring name = L"memory_snapshot_" + std::to_wstring(snapshot->sequence) + L".txt";
+    std::wstring error;
+    switch (Ksword::Ui::SaveUtf8TextFileWithDialog(state.hwnd,
+        name.c_str(), L"导出内存快照报告", L"Text (*.txt)\0*.txt\0All Files (*.*)\0*.*\0", L"txt",
+        BuildMemorySnapshotTextReport(*snapshot), &error)) {
+    case Ksword::Ui::SaveTextFileResult::Saved:
+        SetStatus(state, L"内存快照报告已导出。");
+        break;
+    case Ksword::Ui::SaveTextFileResult::Cancelled:
+        SetStatus(state, L"已取消导出内存快照报告。");
+        break;
+    case Ksword::Ui::SaveTextFileResult::Failed:
+        SetStatus(state, L"导出内存快照报告失败：" + error);
+        break;
+    }
+}
+
+// ExportCurrentSnapshotBinary writes exactly the bytes returned by the prior
+// successful read. Evidence metadata is recorded without copying the arbitrary
+// byte payload into the text-only evidence session.
+void ExportCurrentSnapshotBinary(DriverMemoryViewState& state) {
+    const MemoryReadSnapshot* snapshot = state.snapshots.current();
+    if (!snapshot) {
+        SetStatus(state, L"没有可导出的内存快照。");
+        return;
+    }
+    const std::wstring name = L"memory_snapshot_" + std::to_wstring(snapshot->sequence) + L".bin";
+    std::wstring error;
+    switch (Ksword::Ui::SaveBinaryFileWithDialog(state.hwnd,
+        name.c_str(), L"导出内存快照二进制", L"Binary (*.bin)\0*.bin\0All Files (*.*)\0*.*\0", L"bin",
+        snapshot->bytes, L"内存快照二进制导出", BuildSnapshotMetadataText(*snapshot), &error)) {
+    case Ksword::Ui::SaveTextFileResult::Saved:
+        SetStatus(state, L"内存快照二进制已导出。");
+        break;
+    case Ksword::Ui::SaveTextFileResult::Cancelled:
+        SetStatus(state, L"已取消导出内存快照二进制。");
+        break;
+    case Ksword::Ui::SaveTextFileResult::Failed:
+        SetStatus(state, L"导出内存快照二进制失败：" + error);
+        break;
+    }
 }
 
 // ShowMemoryContextMenu displays compact driver-memory actions. Inputs are page
@@ -593,20 +716,45 @@ void ShowMemoryContextMenu(DriverMemoryViewState& state, HWND target, POINT scre
     }
     const bool textTarget = target == state.hexEdit || target == state.statusEdit;
     const bool hexTarget = target == state.hexEdit || target == state.hwnd;
+    const bool canStartOperation = !state.operationInProgress && state.operationTask != nullptr;
+    const bool canWritePayload = !state.operationInProgress &&
+        state.snapshotPresentation == SnapshotPresentation::EditableHex;
+    const bool canEditHex = hexTarget && !state.operationInProgress &&
+        state.snapshotPresentation == SnapshotPresentation::EditableHex;
+    const bool hasSnapshot = !state.operationInProgress && state.snapshots.current() != nullptr;
+    const UINT snapshotState = hasSnapshot ? 0U : MF_GRAYED;
     HMENU driverMenu = ::CreatePopupMenu();
     if (driverMenu) {
-        ::AppendMenuW(driverMenu, MF_STRING, kMemoryMenuRead, L"读取");
-        ::AppendMenuW(driverMenu, MF_STRING, kMemoryMenuWrite, L"写入");
+        ::AppendMenuW(driverMenu, MF_STRING | (canStartOperation ? 0U : MF_GRAYED), kMemoryMenuRead, L"读取");
+        ::AppendMenuW(driverMenu, MF_STRING | (canStartOperation && canWritePayload ? 0U : MF_GRAYED), kMemoryMenuWrite, L"写入");
         ::AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(driverMenu), L"驱动内存");
     }
     HMENU hexMenu = ::CreatePopupMenu();
     if (hexMenu) {
         ::AppendMenuW(hexMenu, MF_STRING | (textTarget ? 0U : MF_GRAYED), kMemoryMenuSelectAll, L"全选");
-        ::AppendMenuW(hexMenu, MF_STRING | (hexTarget ? 0U : MF_GRAYED), kMemoryMenuCopyHex, L"复制 Hex");
-        ::AppendMenuW(hexMenu, MF_STRING | (hexTarget ? 0U : MF_GRAYED), kMemoryMenuPasteHex, L"粘贴 Hex");
-        ::AppendMenuW(hexMenu, MF_STRING | (hexTarget ? 0U : MF_GRAYED), kMemoryMenuClearHex, L"清空 Hex");
-        ::AppendMenuW(hexMenu, MF_STRING | (hexTarget ? 0U : MF_GRAYED), kMemoryMenuNormalizeHex, L"格式化 Hex");
+        const wchar_t* copyLabel = state.snapshotPresentation == SnapshotPresentation::EditableHex
+            ? L"复制 Hex" : L"复制当前检视";
+        ::AppendMenuW(hexMenu, MF_STRING | (hexTarget ? 0U : MF_GRAYED), kMemoryMenuCopyHex, copyLabel);
+        ::AppendMenuW(hexMenu, MF_STRING | (canEditHex ? 0U : MF_GRAYED), kMemoryMenuPasteHex, L"粘贴 Hex");
+        ::AppendMenuW(hexMenu, MF_STRING | (canEditHex ? 0U : MF_GRAYED), kMemoryMenuClearHex, L"清空 Hex");
+        ::AppendMenuW(hexMenu, MF_STRING | (canEditHex ? 0U : MF_GRAYED), kMemoryMenuNormalizeHex, L"格式化 Hex");
         ::AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(hexMenu), L"Hex");
+    }
+    HMENU snapshotMenu = ::CreatePopupMenu();
+    if (snapshotMenu) {
+        ::AppendMenuW(snapshotMenu,
+            MF_STRING | snapshotState | (state.snapshotPresentation == SnapshotPresentation::EditableHex ? MF_CHECKED : 0U),
+            kMemoryMenuShowEditableHex, L"可编辑 Hex");
+        ::AppendMenuW(snapshotMenu,
+            MF_STRING | snapshotState | (state.snapshotPresentation == SnapshotPresentation::HexAscii ? MF_CHECKED : 0U),
+            kMemoryMenuShowHexAscii, L"Hex + ASCII");
+        ::AppendMenuW(snapshotMenu,
+            MF_STRING | snapshotState | (state.snapshotPresentation == SnapshotPresentation::TextRuns ? MF_CHECKED : 0U),
+            kMemoryMenuShowTextRuns, L"ASCII / UTF-16LE 文本");
+        ::AppendMenuW(snapshotMenu, MF_SEPARATOR, 0, nullptr);
+        ::AppendMenuW(snapshotMenu, MF_STRING | snapshotState, kMemoryMenuExportSnapshotText, L"导出快照报告 (.txt)");
+        ::AppendMenuW(snapshotMenu, MF_STRING | snapshotState, kMemoryMenuExportSnapshotBinary, L"导出原始字节 (.bin)");
+        ::AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(snapshotMenu), L"读取快照");
     }
     HMENU statusMenu = ::CreatePopupMenu();
     if (statusMenu) {
@@ -634,7 +782,7 @@ void ShowMemoryContextMenu(DriverMemoryViewState& state, HWND target, POINT scre
         SelectAllEditText(textTarget ? target : state.hexEdit);
         break;
     case kMemoryMenuCopyHex:
-        SetStatus(state, CopyTextToClipboard(state.hwnd, GetWindowTextString(state.hexEdit)) ? L"Hex copied." : L"Copy Hex failed.");
+        SetStatus(state, CopyTextToClipboard(state.hwnd, GetWindowTextString(state.hexEdit)) ? L"已复制内存检视。" : L"复制内存检视失败。");
         break;
     case kMemoryMenuPasteHex:
         ReplaceEditSelection(state.hexEdit, TextFromClipboard(state.hwnd));
@@ -646,6 +794,21 @@ void ShowMemoryContextMenu(DriverMemoryViewState& state, HWND target, POINT scre
         break;
     case kMemoryMenuNormalizeHex:
         NormalizeHexBuffer(state);
+        break;
+    case kMemoryMenuShowEditableHex:
+        ShowSnapshotInspection(state, SnapshotPresentation::EditableHex);
+        break;
+    case kMemoryMenuShowHexAscii:
+        ShowSnapshotInspection(state, SnapshotPresentation::HexAscii);
+        break;
+    case kMemoryMenuShowTextRuns:
+        ShowSnapshotInspection(state, SnapshotPresentation::TextRuns);
+        break;
+    case kMemoryMenuExportSnapshotText:
+        ExportCurrentSnapshotText(state);
+        break;
+    case kMemoryMenuExportSnapshotBinary:
+        ExportCurrentSnapshotBinary(state);
         break;
     case kMemoryMenuCopyStatus:
         SetStatus(state, CopyTextToClipboard(state.hwnd, GetWindowTextString(state.statusEdit)) ? L"Status copied." : L"Copy status failed.");

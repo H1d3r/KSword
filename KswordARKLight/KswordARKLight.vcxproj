@@ -157,6 +157,7 @@
     <ClCompile Include="Features\Memory\DriverMemoryModel.cpp" />
     <ClCompile Include="Features\Memory\DriverMemoryView.cpp" />
     <ClCompile Include="Features\Memory\MemoryFeature.cpp" />
+    <ClCompile Include="Features\Memory\MemoryInspection.cpp" />
     <ClCompile Include="Features\Memory\MemorySnapshot.cpp" />
     <ClCompile Include="Features\Misc\MiscFeature.cpp" />
     <ClCompile Include="Features\Monitor\EtwEventModel.cpp" />
@@ -363,6 +364,7 @@
     <ClInclude Include="Features\Memory\DriverMemoryModel.h" />
     <ClInclude Include="Features\Memory\DriverMemoryView.h" />
     <ClInclude Include="Features\Memory\MemoryFeature.h" />
+    <ClInclude Include="Features\Memory\MemoryInspection.h" />
     <ClInclude Include="Features\Memory\MemorySnapshot.h" />
     <ClInclude Include="Features\Misc\MiscFeature.h" />
     <ClInclude Include="Features\Monitor\EtwEventModel.h" />

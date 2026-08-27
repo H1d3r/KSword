@@ -54,12 +54,14 @@
     <ClCompile Include="KswordARKLightTests.cpp" />
     <ClCompile Include="..\KswordARKLight\Core\EntityRef.cpp" />
     <ClCompile Include="..\KswordARKLight\Features\Memory\MemorySnapshot.cpp" />
+    <ClCompile Include="..\KswordARKLight\Features\Memory\MemoryInspection.cpp" />
     <ClCompile Include="..\KswordARKLight\Ui\EvidenceSession.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\KswordARKLight\Core\DriverLeasePolicy.h" />
     <ClInclude Include="..\KswordARKLight\Core\EntityRef.h" />
     <ClInclude Include="..\KswordARKLight\Features\Memory\MemorySnapshot.h" />
+    <ClInclude Include="..\KswordARKLight\Features\Memory\MemoryInspection.h" />
     <ClInclude Include="..\KswordARKLight\Ui\EvidenceSession.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

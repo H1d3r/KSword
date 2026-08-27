@@ -3,6 +3,7 @@
 #include "../Core/Win32Lean.h"
 #include "VirtualListView.h"
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -40,6 +41,21 @@ SaveTextFileResult SaveUtf8TextFileWithDialog(
     const wchar_t* fileFilter,
     const wchar_t* defaultExtension,
     const std::wstring& text,
+    std::wstring* errorOut = nullptr);
+
+// SaveBinaryFileWithDialog writes opaque bytes without changing their encoding.
+// evidenceText is deliberately separate from the byte payload: the evidence
+// session records an auditable description without duplicating arbitrary binary
+// contents into a text-only investigation log.
+SaveTextFileResult SaveBinaryFileWithDialog(
+    HWND owner,
+    const wchar_t* suggestedFileName,
+    const wchar_t* dialogTitle,
+    const wchar_t* fileFilter,
+    const wchar_t* defaultExtension,
+    const std::vector<std::uint8_t>& bytes,
+    const std::wstring& evidenceSource,
+    const std::wstring& evidenceText,
     std::wstring* errorOut = nullptr);
 
 } // namespace Ksword::Ui
