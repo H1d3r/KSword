@@ -180,6 +180,7 @@
     <ClCompile Include="Features\Registry\RegistryFeature.cpp" />
     <ClCompile Include="Features\Registry\RegistryModel.cpp" />
     <ClCompile Include="Features\Registry\RegistrySearchModel.cpp" />
+    <ClCompile Include="Features\Registry\RegistrySearchView.cpp" />
     <ClCompile Include="Features\Registry\RegistryView.cpp" />
     <ClCompile Include="Features\ProcessDetail\ProcessDetailCollector.cpp" />
     <ClCompile Include="Features\ProcessDetail\ProcessDetailFeature.cpp" />
@@ -393,6 +394,7 @@
     <ClInclude Include="Features\Registry\RegistryFeature.h" />
     <ClInclude Include="Features\Registry\RegistryModel.h" />
     <ClInclude Include="Features\Registry\RegistrySearchModel.h" />
+    <ClInclude Include="Features\Registry\RegistrySearchView.h" />
     <ClInclude Include="Features\Registry\RegistryView.h" />
     <ClInclude Include="Features\ProcessDetail\ProcessDetailCollector.h" />
     <ClInclude Include="Features\ProcessDetail\ProcessDetailFeature.h" />
