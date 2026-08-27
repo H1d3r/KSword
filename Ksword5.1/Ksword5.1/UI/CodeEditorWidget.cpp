@@ -1162,10 +1162,16 @@ void CodeEditorWidget::initializeUi()
     m_replaceButton = buildButton(QStringLiteral(":/Icon/codeeditor_replace.svg"), QStringLiteral("替换 Ctrl+H"));
     m_gotoButton = buildButton(QStringLiteral(":/Icon/codeeditor_goto.svg"), QStringLiteral("跳转行 Ctrl+G"));
     m_wrapButton = buildButton(QStringLiteral(":/Icon/codeeditor_wrap.svg"), QStringLiteral("切换自动换行"));
-    m_structuredButton = buildButton(
-        QStringLiteral(":/Icon/codeeditor_structured.svg"),
-        QStringLiteral("结构视图：按字段/表格解析当前报告；再点一次回到原始文本"));
+    // 视图切换按钮带文字而不是纯图标：一个图标看不出“还能切回原始文本”，
+    // 而报告原文是取证时要整段复制、要 Ctrl+F 全文检索的东西，入口必须一眼可见。
+    m_structuredButton = new QToolButton(m_toolbarWidget);
+    m_structuredButton->setIcon(buildToolbarSvgIcon(QStringLiteral(":/Icon/codeeditor_structured.svg")));
+    m_structuredButton->setIconSize(QSize(18, 18));
+    m_structuredButton->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    m_structuredButton->setAutoRaise(true);
     m_structuredButton->setCheckable(true);
+    m_structuredButton->setToolTip(
+        QStringLiteral("在结构视图与原始文本之间切换：结构视图按字段和表格解析当前报告，原始文本保留完整报告便于全文检索和整段复制"));
     // 入口默认隐藏：只有内容确实是可解析的只读报告时才由 updateStructuredReportView 放出来。
     m_structuredButton->setVisible(false);
 
@@ -1382,6 +1388,7 @@ void CodeEditorWidget::initializeConnections()
             g_preferStructuredReportView = structuredChecked;
             m_viewStack->setCurrentWidget(
                 structuredChecked ? static_cast<QWidget*>(m_structuredView) : static_cast<QWidget*>(m_editor));
+            refreshStructuredButtonLabel(structuredChecked);
         });
 
     new QShortcut(QKeySequence::Find, this, [this]()
@@ -1480,6 +1487,24 @@ void CodeEditorWidget::refreshReadOnlyUiState()
     updateStructuredReportView();
 }
 
+void CodeEditorWidget::refreshStructuredButtonLabel(const bool structuredActive)
+{
+    if (m_structuredButton == nullptr)
+    {
+        return;
+    }
+
+    // 文字写的是“点下去会切到哪一边”，不是“当前在哪一边”：
+    // 正看着结构视图时按钮就该写“原始文本”，用户不用猜也不用读 ToolTip。
+    // 这里不用三元表达式：i18n 抽取器会把单行里两个相邻字面量之间的分隔符当成待翻译串。
+    if (structuredActive)
+    {
+        m_structuredButton->setText(QStringLiteral("原始文本"));
+        return;
+    }
+    m_structuredButton->setText(QStringLiteral("结构视图"));
+}
+
 void CodeEditorWidget::updateStructuredReportView()
 {
     if (m_destroying ||
@@ -1509,6 +1534,7 @@ void CodeEditorWidget::updateStructuredReportView()
     m_viewStack->setCurrentWidget(g_preferStructuredReportView
         ? static_cast<QWidget*>(m_structuredView)
         : static_cast<QWidget*>(m_editor));
+    refreshStructuredButtonLabel(g_preferStructuredReportView);
 }
 
 void CodeEditorWidget::openFindReplacePanel(const bool replaceEnabled)

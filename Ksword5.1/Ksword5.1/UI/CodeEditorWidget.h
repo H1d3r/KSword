@@ -209,6 +209,11 @@ private:
     // - 返回格式化后的文本，无法识别或解析失败时原样返回。
     QString applyStructuredAutoFormatIfNeeded(const QString& inputText, QString* detectedKindOut = nullptr) const;
 
+    // refreshStructuredButtonLabel：
+    // - 按当前所处视图刷新切换按钮文字，文字始终写“点下去会切到哪一边”；
+    // - 入参 structuredActive：true 表示当前正显示结构视图。
+    void refreshStructuredButtonLabel(bool structuredActive);
+
     // updateStructuredReportView：
     // - 当前内容为只读报告且能解析出结构时，显示结构视图切换按钮并按用户上次选择切页；
     // - 内容没有结构（日志、原始数据、用户文件）时隐藏入口并强制回到纯文本；
