@@ -335,6 +335,9 @@
     <ClCompile Include="Features\Process\ProcessActions.cpp">
       <Filter>Features\Process</Filter>
     </ClCompile>
+    <ClCompile Include="Features\Process\ProcessColumns.cpp">
+      <Filter>Features\Process</Filter>
+    </ClCompile>
     <ClCompile Include="Features\Process\ProcessEnumerator.cpp">
       <Filter>Features\Process</Filter>
     </ClCompile>
@@ -918,6 +921,9 @@
       <Filter>Features\Process</Filter>
     </ClInclude>
     <ClInclude Include="Features\Process\ProcessView.h">
+      <Filter>Features\Process</Filter>
+    </ClInclude>
+    <ClInclude Include="Features\Process\ProcessColumns.h">
       <Filter>Features\Process</Filter>
     </ClInclude>
     <ClInclude Include="Features\Registry\RegistryActions.h">
