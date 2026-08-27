@@ -477,7 +477,11 @@ public:
         Gpu          // GPU 百分比。
     };
 
-    // ProcessActivityProcessPoint：单个采样点中的单进程轻量快照。
+    // ProcessActivityProcessPoint：单个采样点中的单进程历史快照。
+    //
+    // 只保留会随采样变化、且在回看资源占用时有诊断价值的字段；路径、签名、
+    // 缓解策略等静态详情仍不重复写入每一个采样点。所有按需字段同时保存其
+    // known 标记，防止历史表格把当时未采集到的值误显示为 0。
     struct ProcessActivityProcessPoint
     {
         std::string identityKey;       // identityKey：PID + 创建时间，和表格选择保持一致。
@@ -494,6 +498,51 @@ public:
         double netRxKBps = 0.0;        // netRxKBps：该进程采样时网络下行吞吐。
         double netTxKBps = 0.0;        // netTxKBps：该进程采样时网络上行吞吐。
         double gpuPercent = 0.0;       // gpuPercent：该进程采样时 GPU 百分比。
+
+        // 调度、运行状态与对象占用。
+        std::uint32_t threadCount = 0;          // threadCount：采样时线程数量。
+        std::uint32_t handleCount = 0;          // handleCount：采样时句柄数量。
+        std::uint32_t suspendedThreadCount = 0; // suspendedThreadCount：采样时已挂起线程数。
+        std::int32_t basePriority = 0;          // basePriority：采样时基础优先级。
+        bool processStateKnown = false;         // processStateKnown：运行/挂起状态是否成功判定。
+        bool processSuspended = false;          // processSuspended：采样时是否全部挂起。
+        bool efficiencyModeSupported = false;   // efficiencyModeSupported：效率模式状态是否可用。
+        bool efficiencyModeEnabled = false;     // efficiencyModeEnabled：采样时是否启用效率模式。
+
+        // CPU 与内存占用细项。
+        std::uint64_t rawCpuTime100ns = 0;               // rawCpuTime100ns：累计 CPU 时间。
+        std::uint64_t cycleTime = 0;                     // cycleTime：累计 CPU 周期数。
+        std::uint64_t rawWorkingSetBytes = 0;            // rawWorkingSetBytes：精确工作集字节数。
+        std::uint64_t peakWorkingSetBytes = 0;           // peakWorkingSetBytes：峰值工作集。
+        std::uint64_t privateWorkingSetBytes = 0;        // privateWorkingSetBytes：专用工作集。
+        std::uint64_t sharedWorkingSetBytes = 0;         // sharedWorkingSetBytes：共享工作集。
+        std::uint64_t commitSizeBytes = 0;               // commitSizeBytes：提交大小。
+        std::uint64_t pagedPoolBytes = 0;                // pagedPoolBytes：分页池用量。
+        std::uint64_t nonPagedPoolBytes = 0;             // nonPagedPoolBytes：非分页池用量。
+        std::uint64_t pageFaultCount = 0;                // pageFaultCount：累计页面错误。
+        std::int64_t workingSetDeltaBytes = 0;           // workingSetDeltaBytes：相邻轮次工作集变化。
+        std::int64_t pageFaultDeltaCount = 0;            // pageFaultDeltaCount：相邻轮次页面错误变化。
+        bool cycleTimeKnown = false;                     // cycleTimeKnown：CPU 周期数是否可用。
+        bool memoryDetailKnown = false;                  // memoryDetailKnown：内存细项是否可用。
+        bool privateWorkingSetKnown = false;             // privateWorkingSetKnown：专用/共享工作集是否可用。
+
+        // I/O 与 GUI 资源计数。
+        std::uint64_t ioReadOperationCount = 0;          // ioReadOperationCount：累计 I/O 读取次数。
+        std::uint64_t ioWriteOperationCount = 0;         // ioWriteOperationCount：累计 I/O 写入次数。
+        std::uint64_t ioOtherOperationCount = 0;         // ioOtherOperationCount：累计其他 I/O 次数。
+        std::uint64_t ioReadTransferBytes = 0;           // ioReadTransferBytes：累计读取字节数。
+        std::uint64_t ioWriteTransferBytes = 0;          // ioWriteTransferBytes：累计写入字节数。
+        std::uint64_t ioOtherTransferBytes = 0;          // ioOtherTransferBytes：累计其他 I/O 字节数。
+        std::uint32_t gdiObjectCount = 0;                // gdiObjectCount：采样时 GDI 对象数。
+        std::uint32_t userObjectCount = 0;               // userObjectCount：采样时 USER 对象数。
+        bool ioDetailKnown = false;                      // ioDetailKnown：I/O 细项是否可用。
+        bool guiResourceKnown = false;                   // guiResourceKnown：GUI 资源是否已采集。
+
+        // GPU 显存与当前占用引擎。
+        std::uint64_t gpuDedicatedMemoryBytes = 0;       // gpuDedicatedMemoryBytes：专用显存占用。
+        std::uint64_t gpuSharedMemoryBytes = 0;          // gpuSharedMemoryBytes：共享显存占用。
+        std::string gpuEngineText;                       // gpuEngineText：采样时占用最高的 GPU 引擎。
+        bool gpuMemoryKnown = false;                     // gpuMemoryKnown：GPU 显存计数是否可用。
     };
 
     // ProcessActivitySample：一次进程列表活动采样。

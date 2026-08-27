@@ -8538,6 +8538,43 @@ void ProcessDock::appendProcessActivitySample()
         processPoint.netRxKBps = processRecord.netRxKBps;
         processPoint.netTxKBps = processRecord.netTxKBps;
         processPoint.gpuPercent = processRecord.gpuPercent;
+        processPoint.threadCount = processRecord.threadCount;
+        processPoint.handleCount = processRecord.handleCount;
+        processPoint.suspendedThreadCount = processRecord.suspendedThreadCount;
+        processPoint.basePriority = processRecord.basePriority;
+        processPoint.processStateKnown = processRecord.processStateKnown;
+        processPoint.processSuspended = processRecord.processSuspended;
+        processPoint.efficiencyModeSupported = processRecord.efficiencyModeSupported;
+        processPoint.efficiencyModeEnabled = processRecord.efficiencyModeEnabled;
+        processPoint.rawCpuTime100ns = processRecord.rawCpuTime100ns;
+        processPoint.cycleTime = processRecord.cycleTime;
+        processPoint.rawWorkingSetBytes = processRecord.rawWorkingSetBytes;
+        processPoint.peakWorkingSetBytes = processRecord.peakWorkingSetBytes;
+        processPoint.privateWorkingSetBytes = processRecord.privateWorkingSetBytes;
+        processPoint.sharedWorkingSetBytes = processRecord.sharedWorkingSetBytes;
+        processPoint.commitSizeBytes = processRecord.commitSizeBytes;
+        processPoint.pagedPoolBytes = processRecord.pagedPoolBytes;
+        processPoint.nonPagedPoolBytes = processRecord.nonPagedPoolBytes;
+        processPoint.pageFaultCount = processRecord.pageFaultCount;
+        processPoint.workingSetDeltaBytes = processRecord.workingSetDeltaBytes;
+        processPoint.pageFaultDeltaCount = processRecord.pageFaultDeltaCount;
+        processPoint.cycleTimeKnown = processRecord.cycleTimeKnown;
+        processPoint.memoryDetailKnown = processRecord.memoryDetailKnown;
+        processPoint.privateWorkingSetKnown = processRecord.privateWorkingSetKnown;
+        processPoint.ioReadOperationCount = processRecord.ioReadOperationCount;
+        processPoint.ioWriteOperationCount = processRecord.ioWriteOperationCount;
+        processPoint.ioOtherOperationCount = processRecord.ioOtherOperationCount;
+        processPoint.ioReadTransferBytes = processRecord.ioReadTransferBytes;
+        processPoint.ioWriteTransferBytes = processRecord.ioWriteTransferBytes;
+        processPoint.ioOtherTransferBytes = processRecord.ioOtherTransferBytes;
+        processPoint.gdiObjectCount = processRecord.gdiObjectCount;
+        processPoint.userObjectCount = processRecord.userObjectCount;
+        processPoint.ioDetailKnown = processRecord.ioDetailKnown;
+        processPoint.guiResourceKnown = processRecord.guiResourceKnown;
+        processPoint.gpuDedicatedMemoryBytes = processRecord.gpuDedicatedMemoryBytes;
+        processPoint.gpuSharedMemoryBytes = processRecord.gpuSharedMemoryBytes;
+        processPoint.gpuEngineText = processRecord.gpuEngineText;
+        processPoint.gpuMemoryKnown = processRecord.gpuMemoryKnown;
 
         const bool isSystemIdleProcess =
             (processRecord.pid == 0) ||
@@ -8849,8 +8886,8 @@ void ProcessDock::rebuildProcessActivityTableSnapshotRecords()
         ks::process::ProcessRecord record{};
         record.pid = processPoint.pid;
         record.parentPid = 0;
-        record.threadCount = 0;
-        record.handleCount = 0;
+        record.threadCount = processPoint.threadCount;
+        record.handleCount = processPoint.handleCount;
         record.creationTime100ns = processPoint.creationTime100ns;
         if (record.creationTime100ns == 0)
         {
@@ -8873,6 +8910,44 @@ void ProcessDock::rebuildProcessActivityTableSnapshotRecords()
         record.netRxKBps = processPoint.netRxKBps;
         record.netTxKBps = processPoint.netTxKBps;
         record.gpuPercent = processPoint.gpuPercent;
+        record.suspendedThreadCount = processPoint.suspendedThreadCount;
+        record.basePriority = processPoint.basePriority;
+        record.processStateKnown = processPoint.processStateKnown;
+        record.processSuspended = processPoint.processSuspended;
+        record.efficiencyModeSupported = processPoint.efficiencyModeSupported;
+        record.efficiencyModeEnabled = processPoint.efficiencyModeEnabled;
+        record.rawCpuTime100ns = processPoint.rawCpuTime100ns;
+        record.cycleTime = processPoint.cycleTime;
+        record.rawWorkingSetBytes = processPoint.rawWorkingSetBytes;
+        record.peakWorkingSetBytes = processPoint.peakWorkingSetBytes;
+        record.privateWorkingSetBytes = processPoint.privateWorkingSetBytes;
+        record.sharedWorkingSetBytes = processPoint.sharedWorkingSetBytes;
+        record.activePrivateWorkingSetBytes = processPoint.processSuspended
+            ? 0U
+            : processPoint.privateWorkingSetBytes;
+        record.commitSizeBytes = processPoint.commitSizeBytes;
+        record.pagedPoolBytes = processPoint.pagedPoolBytes;
+        record.nonPagedPoolBytes = processPoint.nonPagedPoolBytes;
+        record.pageFaultCount = processPoint.pageFaultCount;
+        record.workingSetDeltaBytes = processPoint.workingSetDeltaBytes;
+        record.pageFaultDeltaCount = processPoint.pageFaultDeltaCount;
+        record.cycleTimeKnown = processPoint.cycleTimeKnown;
+        record.memoryDetailKnown = processPoint.memoryDetailKnown;
+        record.privateWorkingSetKnown = processPoint.privateWorkingSetKnown;
+        record.ioReadOperationCount = processPoint.ioReadOperationCount;
+        record.ioWriteOperationCount = processPoint.ioWriteOperationCount;
+        record.ioOtherOperationCount = processPoint.ioOtherOperationCount;
+        record.ioReadTransferBytes = processPoint.ioReadTransferBytes;
+        record.ioWriteTransferBytes = processPoint.ioWriteTransferBytes;
+        record.ioOtherTransferBytes = processPoint.ioOtherTransferBytes;
+        record.gdiObjectCount = processPoint.gdiObjectCount;
+        record.userObjectCount = processPoint.userObjectCount;
+        record.ioDetailKnown = processPoint.ioDetailKnown;
+        record.guiResourceKnown = processPoint.guiResourceKnown;
+        record.gpuDedicatedMemoryBytes = processPoint.gpuDedicatedMemoryBytes;
+        record.gpuSharedMemoryBytes = processPoint.gpuSharedMemoryBytes;
+        record.gpuEngineText = processPoint.gpuEngineText;
+        record.gpuMemoryKnown = processPoint.gpuMemoryKnown;
         record.staticDetailsReady = true;
         record.dynamicCountersReady = true;
         m_activityTableSnapshotRecords.push_back(std::move(record));
