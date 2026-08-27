@@ -64,7 +64,7 @@ namespace
         tableWidget->setColumnCount(StartupDock::toStartupColumn(StartupDock::StartupColumn::Count));
         tableWidget->setHorizontalHeaderLabels(startupTableHeaders());
         tableWidget->setSelectionBehavior(QAbstractItemView::SelectRows);
-        tableWidget->setSelectionMode(QAbstractItemView::SingleSelection);
+        tableWidget->setSelectionMode(QAbstractItemView::ExtendedSelection);
         tableWidget->setEditTriggers(QAbstractItemView::NoEditTriggers);
         tableWidget->setContextMenuPolicy(Qt::CustomContextMenu);
         tableWidget->setWordWrap(false);

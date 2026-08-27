@@ -190,7 +190,9 @@ private:
     void openSelectedRegistryLocation(StartupCategory category, QTableWidget* tableWidget);
     void copySelectedRow(StartupCategory category, QTableWidget* tableWidget);
     void setStartupEntryEnabled(StartupEntry entry, bool enabled);
+    void setStartupEntriesEnabled(std::vector<StartupEntry> entryList, bool enabled);
     void deleteStartupEntry(StartupEntry entry);
+    void deleteStartupEntries(std::vector<StartupEntry> entryList);
     void exportCurrentView();
     void applyFilterAndRefresh();
 
