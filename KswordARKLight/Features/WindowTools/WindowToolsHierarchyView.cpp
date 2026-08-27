@@ -566,8 +566,9 @@ std::wstring ReportText(const HierarchyViewState& state) {
     if (length <= 0) {
         return {};
     }
-    std::wstring text(static_cast<std::size_t>(length), L'\0');
-    ::GetWindowTextW(state.reportEdit, text.data(), length + 1);
+    std::wstring text(static_cast<std::size_t>(length) + 1U, L'\0');
+    const int copied = ::GetWindowTextW(state.reportEdit, text.data(), length + 1);
+    text.resize(copied > 0 ? static_cast<std::size_t>(copied) : 0U);
     return text;
 }
 

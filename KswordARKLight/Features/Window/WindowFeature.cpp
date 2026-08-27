@@ -3,6 +3,7 @@
 #include "WindowView.h"
 #include "../WindowTools/WindowToolsClipboardView.h"
 #include "../WindowTools/WindowToolsHotkeyView.h"
+#include "../WindowTools/WindowToolsHierarchyView.h"
 #include "../../Ui/WorkspaceHost.h"
 
 #include <utility>
@@ -14,6 +15,7 @@ namespace {
 constexpr int kWindowManagerTab = 62410;
 constexpr int kClipboardTab = 62411;
 constexpr int kHotkeyTab = 62412;
+constexpr int kHierarchyTab = 62413;
 
 } // namespace
 
@@ -27,6 +29,8 @@ HWND CreateWindowFeaturePage(HWND parent, const RECT& bounds) {
         } });
     tabs.push_back({ kHotkeyTab, L"热键占用探测", L"按需扫描全局热键占用。",
         [](HWND host, const RECT& pageBounds) { return WindowTools::CreateHotkeyProbeView(host, pageBounds); } });
+    tabs.push_back({ kHierarchyTab, L"层级诊断", L"按需枚举窗口层级并导出可见报告。",
+        [](HWND host, const RECT& pageBounds) { return WindowTools::CreateWindowHierarchyView(host, pageBounds); } });
 
     Ksword::Ui::WorkspaceOptions options{};
     options.tabControlId = 62401;
