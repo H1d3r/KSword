@@ -1,5 +1,6 @@
 #include "../KswordARKLight/Core/DriverLeasePolicy.h"
 #include "../KswordARKLight/Core/EntityRef.h"
+#include "../KswordARKLight/Core/WorkspaceConfig.h"
 #include "../KswordARKLight/Features/File/PathNavigator.h"
 #include "../KswordARKLight/Features/Monitor/EtwEventModel.h"
 #include "../KswordARKLight/Features/Registry/RegistrySearchModel.h"
@@ -11,9 +12,11 @@
 #include "../KswordARKLight/Ui/EvidenceSession.h"
 #include "../Ksword5.1/Ksword5.1/ArkDriverClient/ArkDriverTypes.h"
 
+#include <array>
 #include <iostream>
 #include <cwchar>
 #include <limits>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -36,6 +39,9 @@ int wmain() {
     using Ksword::Core::EntityKind;
     using Ksword::Core::NavigationTarget;
     using Ksword::Core::ParseCommandInput;
+    using Ksword::Core::WorkspaceCommandId;
+    using Ksword::Core::WorkspaceConfig;
+    using Ksword::Core::WorkspaceConfigDecodeStatus;
     using Ksword::Features::Memory::MemorySnapshotHistory;
     using Ksword::Features::Memory::MemoryReadSnapshot;
 
@@ -44,6 +50,75 @@ int wmain() {
     Expect(DriverLeasePolicy::ShouldStopOnLastRelease(true, 0), L"owned driver stops on last lease");
     Expect(!DriverLeasePolicy::ShouldStopOnLastRelease(true, 1), L"owned driver stays for peer lease");
     Expect(!DriverLeasePolicy::ShouldStopOnLastRelease(false, 0), L"pre-existing driver stays running");
+
+    WorkspaceConfig workspaceConfig{};
+    workspaceConfig.hasNormalRect = true;
+    workspaceConfig.normalRect = { -1920, 40, 1200, 1080 };
+    workspaceConfig.maximized = true;
+    workspaceConfig.activeCommandId = 40010;
+    const auto workspaceBinary = Ksword::Core::SerializeWorkspaceConfig(workspaceConfig);
+    const auto workspaceRoundTrip = Ksword::Core::DeserializeWorkspaceConfig(workspaceBinary);
+    Expect(workspaceBinary.size() == Ksword::Core::kWorkspaceConfigBinarySize &&
+            workspaceBinary[0U] == static_cast<std::uint8_t>('K') &&
+            workspaceBinary[1U] == static_cast<std::uint8_t>('S') &&
+            workspaceBinary[2U] == static_cast<std::uint8_t>('L') &&
+            workspaceBinary[3U] == static_cast<std::uint8_t>('W') &&
+            workspaceBinary[4U] == 1U && workspaceBinary[5U] == 0U &&
+            workspaceBinary[6U] == 36U && workspaceBinary[7U] == 0U &&
+            workspaceBinary[8U] == 3U && workspaceBinary[9U] == 0U &&
+            workspaceBinary[12U] == 0x80U && workspaceBinary[13U] == 0xF8U &&
+            workspaceBinary[14U] == 0xFFU && workspaceBinary[15U] == 0xFFU,
+        L"workspace config emits a fixed explicit little-endian binary layout");
+    Expect(workspaceRoundTrip.valid() && !workspaceRoundTrip.discardedNormalRect &&
+            workspaceRoundTrip.config.hasNormalRect &&
+            workspaceRoundTrip.config.normalRect.left == -1920 &&
+            workspaceRoundTrip.config.normalRect.top == 40 &&
+            workspaceRoundTrip.config.normalRect.right == 1200 &&
+            workspaceRoundTrip.config.normalRect.bottom == 1080 &&
+            workspaceRoundTrip.config.maximized && workspaceRoundTrip.config.activeCommandId == 40010,
+        L"workspace config round-trips rectangle maximized and command state");
+
+    auto badMagicWorkspace = workspaceBinary;
+    badMagicWorkspace[0U] = static_cast<std::uint8_t>('X');
+    auto badVersionWorkspace = workspaceBinary;
+    badVersionWorkspace[4U] = 2U;
+    auto badDeclaredSizeWorkspace = workspaceBinary;
+    badDeclaredSizeWorkspace[6U] = 35U;
+    auto badFlagsWorkspace = workspaceBinary;
+    badFlagsWorkspace[8U] |= 0x04U;
+    auto badReservedWorkspace = workspaceBinary;
+    badReservedWorkspace[32U] = 1U;
+    const auto shortWorkspace = Ksword::Core::DeserializeWorkspaceConfig(
+        std::span<const std::uint8_t>(workspaceBinary.data(), workspaceBinary.size() - 1U));
+    Expect(!shortWorkspace.valid() && shortWorkspace.status == WorkspaceConfigDecodeStatus::InvalidLength &&
+            Ksword::Core::DeserializeWorkspaceConfig(badMagicWorkspace).status == WorkspaceConfigDecodeStatus::InvalidMagic &&
+            Ksword::Core::DeserializeWorkspaceConfig(badVersionWorkspace).status == WorkspaceConfigDecodeStatus::UnsupportedVersion &&
+            Ksword::Core::DeserializeWorkspaceConfig(badDeclaredSizeWorkspace).status == WorkspaceConfigDecodeStatus::InvalidDeclaredSize &&
+            Ksword::Core::DeserializeWorkspaceConfig(badFlagsWorkspace).status == WorkspaceConfigDecodeStatus::InvalidFlags &&
+            Ksword::Core::DeserializeWorkspaceConfig(badReservedWorkspace).status == WorkspaceConfigDecodeStatus::InvalidReserved,
+        L"workspace config rejects corrupt header flags and reserved bytes");
+
+    auto invalidRectWorkspace = workspaceBinary;
+    invalidRectWorkspace[20U] = invalidRectWorkspace[12U];
+    invalidRectWorkspace[21U] = invalidRectWorkspace[13U];
+    invalidRectWorkspace[22U] = invalidRectWorkspace[14U];
+    invalidRectWorkspace[23U] = invalidRectWorkspace[15U];
+    const auto invalidRectRestore = Ksword::Core::DeserializeWorkspaceConfig(invalidRectWorkspace);
+    const std::array<WorkspaceCommandId, 2U> fallbackModules = { 40001, 40002 };
+    Expect(invalidRectRestore.valid() && invalidRectRestore.discardedNormalRect &&
+            !invalidRectRestore.config.hasNormalRect && invalidRectRestore.config.maximized &&
+            invalidRectRestore.config.activeCommandId == 40010 &&
+            Ksword::Core::ResolveWorkspaceCommandId(
+                invalidRectRestore.config.activeCommandId, fallbackModules, 40002) == 40002,
+        L"workspace restore drops only an invalid rectangle and independently falls back the command");
+
+    const std::array<WorkspaceCommandId, 4U> originalModuleOrder = { 40001, 40010, 40011, 40018 };
+    const std::array<WorkspaceCommandId, 4U> reorderedModules = { 40018, 40011, 40001, 40010 };
+    Expect(Ksword::Core::ResolveWorkspaceCommandId(40011, originalModuleOrder, 40001) == 40011 &&
+            Ksword::Core::ResolveWorkspaceCommandId(40011, reorderedModules, 40001) == 40011 &&
+            Ksword::Core::ResolveWorkspaceCommandId(49999, originalModuleOrder) == 40001 &&
+            Ksword::Core::ResolveWorkspaceCommandId(49999, reorderedModules) == 40001,
+        L"workspace command restore uses stable ids rather than module indexes or order");
 
     const auto process = ParseCommandInput(L" pid 1234 ");
     Expect(process.kind == CommandInputKind::Navigation, L"pid command navigates");

@@ -53,6 +53,7 @@
   <ItemGroup>
     <ClCompile Include="KswordARKLightTests.cpp" />
     <ClCompile Include="..\KswordARKLight\Core\EntityRef.cpp" />
+    <ClCompile Include="..\KswordARKLight\Core\WorkspaceConfig.cpp" />
     <ClCompile Include="..\KswordARKLight\Features\File\PathNavigator.cpp" />
     <ClCompile Include="..\KswordARKLight\Features\Monitor\EtwEventModel.cpp" />
     <ClCompile Include="..\KswordARKLight\Features\Registry\RegistrySearchModel.cpp" />
@@ -66,6 +67,7 @@
   <ItemGroup>
     <ClInclude Include="..\KswordARKLight\Core\DriverLeasePolicy.h" />
     <ClInclude Include="..\KswordARKLight\Core\EntityRef.h" />
+    <ClInclude Include="..\KswordARKLight\Core\WorkspaceConfig.h" />
     <ClInclude Include="..\KswordARKLight\Features\File\PathNavigator.h" />
     <ClInclude Include="..\KswordARKLight\Features\Monitor\EtwEventModel.h" />
     <ClInclude Include="..\KswordARKLight\Features\Registry\RegistrySearchModel.h" />

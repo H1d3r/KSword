@@ -7,6 +7,7 @@
   <ItemGroup>
     <ClCompile Include="KswordARKLightTests.cpp"><Filter>Tests</Filter></ClCompile>
     <ClCompile Include="..\KswordARKLight\Core\EntityRef.cpp"><Filter>Production</Filter></ClCompile>
+    <ClCompile Include="..\KswordARKLight\Core\WorkspaceConfig.cpp"><Filter>Production</Filter></ClCompile>
     <ClCompile Include="..\KswordARKLight\Features\File\PathNavigator.cpp"><Filter>Production</Filter></ClCompile>
     <ClCompile Include="..\KswordARKLight\Features\Monitor\EtwEventModel.cpp"><Filter>Production</Filter></ClCompile>
     <ClCompile Include="..\KswordARKLight\Features\Registry\RegistrySearchModel.cpp"><Filter>Production</Filter></ClCompile>
@@ -20,6 +21,7 @@
   <ItemGroup>
     <ClInclude Include="..\KswordARKLight\Core\DriverLeasePolicy.h"><Filter>Production</Filter></ClInclude>
     <ClInclude Include="..\KswordARKLight\Core\EntityRef.h"><Filter>Production</Filter></ClInclude>
+    <ClInclude Include="..\KswordARKLight\Core\WorkspaceConfig.h"><Filter>Production</Filter></ClInclude>
     <ClInclude Include="..\KswordARKLight\Features\File\PathNavigator.h"><Filter>Production</Filter></ClInclude>
     <ClInclude Include="..\KswordARKLight\Features\Monitor\EtwEventModel.h"><Filter>Production</Filter></ClInclude>
     <ClInclude Include="..\KswordARKLight\Features\Registry\RegistrySearchModel.h"><Filter>Production</Filter></ClInclude>

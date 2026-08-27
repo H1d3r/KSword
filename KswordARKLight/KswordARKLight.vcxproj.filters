@@ -134,6 +134,9 @@
     <ClCompile Include="Core\Privilege.cpp">
       <Filter>Core</Filter>
     </ClCompile>
+    <ClCompile Include="Core\WorkspaceConfig.cpp">
+      <Filter>Core</Filter>
+    </ClCompile>
     <ClCompile Include="Docking\DockManager.cpp">
       <Filter>Docking</Filter>
     </ClCompile>
@@ -750,6 +753,9 @@
       <Filter>Core</Filter>
     </ClInclude>
     <ClInclude Include="Core\Win32Lean.h">
+      <Filter>Core</Filter>
+    </ClInclude>
+    <ClInclude Include="Core\WorkspaceConfig.h">
       <Filter>Core</Filter>
     </ClInclude>
     <ClInclude Include="Docking\DockManager.h">

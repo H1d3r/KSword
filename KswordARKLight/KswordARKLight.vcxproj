@@ -99,6 +99,7 @@
     <ClCompile Include="Core\NtApi.cpp" />
     <ClCompile Include="Core\PathUtils.cpp" />
     <ClCompile Include="Core\Privilege.cpp" />
+    <ClCompile Include="Core\WorkspaceConfig.cpp" />
     <ClCompile Include="Docking\DockManager.cpp" />
     <ClCompile Include="Features\AuditCommon\AuditFormatting.cpp" />
     <ClCompile Include="Features\AuditCommon\AuditStatus.cpp" />
@@ -312,6 +313,7 @@
     <ClInclude Include="Core\PathUtils.h" />
     <ClInclude Include="Core\Privilege.h" />
     <ClInclude Include="Core\Win32Lean.h" />
+    <ClInclude Include="Core\WorkspaceConfig.h" />
     <ClInclude Include="Docking\DockManager.h" />
     <ClInclude Include="Features\AuditCommon\AuditCommon.h" />
     <ClInclude Include="Features\AuditCommon\AuditFormatting.h" />
