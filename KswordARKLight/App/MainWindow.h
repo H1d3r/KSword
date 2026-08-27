@@ -105,6 +105,10 @@ private:
     void queryDriverStatusDeferred();
     void handleUiAccessButtonClicked();
     void installDriverFromButton();
+    // stopDriverOnExit requests SCM to unload KswordARK as the Light shell is
+    // closing. There is no input; processing uses the normal service-stop
+    // path without a modal error dialog so window teardown can continue.
+    void stopDriverOnExit();
     // requestProcessDockRefreshIfLoaded 用途：R0 驱动可用后通知已物化进程页重新枚举。
     // 处理过程：只投递刷新消息，不直接访问进程页内部控件或 R0 IOCTL。
     void requestProcessDockRefreshIfLoaded();

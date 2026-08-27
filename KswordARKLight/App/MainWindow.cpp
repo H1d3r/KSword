@@ -254,6 +254,7 @@ LRESULT MainWindow::handleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
     case WM_ERASEBKGND:
         return 1;
     case WM_DESTROY:
+        stopDriverOnExit();
         if (commandEdit_) {
             ::DestroyWindow(commandEdit_);
             commandEdit_ = nullptr;
@@ -784,6 +785,17 @@ void MainWindow::installDriverFromButton() {
     if (!driverStatus_.serviceRunning && !driverStatus_.controlDeviceOpen) {
         ::MessageBoxW(hwnd_, driverStatus_.message.c_str(), L"KswordARKLight R0 Driver", MB_ICONWARNING | MB_OK);
     }
+}
+
+void MainWindow::stopDriverOnExit() {
+    const Ksword::Core::DriverRuntimeStatus current = Ksword::Core::QueryDriverStatus();
+    if (!current.serviceRunning && !current.controlDeviceOpen) {
+        return;
+    }
+
+    driverStatus_ = Ksword::Core::StopDriverService();
+    driverStatusKnown_ = true;
+    ::OutputDebugStringW((L"[KswordARKLight] Exit driver stop: " + driverStatus_.message + L"\r\n").c_str());
 }
 
 void MainWindow::paint(HDC dc) {
