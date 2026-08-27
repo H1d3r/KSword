@@ -3,6 +3,7 @@
 #include "WindowActions.h"
 #include "WindowEnumerator.h"
 #include "WindowModel.h"
+#include "Win32kTimerEvidenceModel.h"
 #include "../File/PathNavigator.h"
 #include "../WindowTools/WindowToolsHierarchyView.h"
 #include "../../../Ksword5.1/Ksword5.1/ArkDriverClient/ArkDriverClient.h"
@@ -82,6 +83,7 @@ enum class WindowViewMode {
     WindowList,
     Win32kGuiAudit,
     Win32kMessageHookAudit,
+    Win32kTimerAudit,
     GpuDisplayAudit
 };
 
@@ -94,6 +96,7 @@ struct AuditEntry {
     std::wstring item;
     std::wstring status;
     std::wstring detail;
+    DWORD relatedProcessId = 0;
 };
 
 struct WindowFilterResult {
@@ -664,6 +667,27 @@ std::vector<AuditEntry> BuildWin32kMessageHookAuditRows() {
     return rows;
 }
 
+// BuildWin32kTimerAuditRows exposes the existing typed tagTIMER snapshot as
+// immutable display rows. The DriverClient wrapper owns all protocol handling;
+// this page only projects the returned snapshot and never alters a timer.
+std::vector<AuditEntry> BuildWin32kTimerAuditRows() {
+    const ksword::ark::Win32kTimersResult result = ksword::ark::DriverClient().queryWin32kTimers();
+    const std::vector<Win32kTimerEvidenceRow> evidenceRows = BuildWin32kTimerEvidenceRows(result);
+    std::vector<AuditEntry> rows;
+    rows.reserve(evidenceRows.size());
+    for (const Win32kTimerEvidenceRow& evidence : evidenceRows) {
+        rows.push_back({
+            evidence.category,
+            evidence.source,
+            evidence.item,
+            evidence.status,
+            evidence.detail,
+            static_cast<DWORD>(evidence.relatedProcessId)
+        });
+    }
+    return rows;
+}
+
 // BuildGpuDisplayAuditRows creates the GPU/display/watchdog audit entry matrix.
 // Inputs are none; processing calls the ArkDriverClient GPU/display watchdog
 // audit wrapper and supplements it with R3 configuration context rows;
@@ -987,6 +1011,9 @@ void RefreshWindows(WindowViewState* state) {
             } else if (mode == WindowViewMode::Win32kMessageHookAudit) {
                 snapshot.auditRows = BuildWin32kMessageHookAuditRows();
                 snapshot.displayRows = BuildAuditDisplayRows(snapshot.auditRows);
+            } else if (mode == WindowViewMode::Win32kTimerAudit) {
+                snapshot.auditRows = BuildWin32kTimerAuditRows();
+                snapshot.displayRows = BuildAuditDisplayRows(snapshot.auditRows);
             } else if (mode == WindowViewMode::GpuDisplayAudit) {
                 snapshot.auditRows = BuildGpuDisplayAuditRows();
                 snapshot.displayRows = BuildAuditDisplayRows(snapshot.auditRows);
@@ -1018,6 +1045,9 @@ void RefreshWindows(WindowViewState* state) {
                 state->statusText = L"Win32K GUI 审计快照已刷新。";
             } else if (snapshot->mode == WindowViewMode::Win32kMessageHookAudit) {
                 state->statusText = L"Win32K 消息 Hook 审计快照已刷新：" + std::to_wstring(state->auditRows.size()) + L" 行。";
+            } else if (snapshot->mode == WindowViewMode::Win32kTimerAudit) {
+                state->statusText = L"Win32K 定时器只读证据快照已刷新：" + std::to_wstring(state->auditRows.size()) +
+                    L" 行；首行保留返回计数、完整性和布局来源。";
             } else {
                 state->statusText = L"GPU / Display / Watchdog 审计快照已刷新。";
             }
@@ -1054,6 +1084,14 @@ void UpdateViewModeFromCombo(WindowViewState* state) {
         ::EnableWindow(state->maximizeButton, FALSE);
         ::EnableWindow(state->closeButton, FALSE);
     } else if (selected == 3) {
+        state->viewMode = WindowViewMode::Win32kTimerAudit;
+        ::EnableWindow(state->sortCombo, FALSE);
+        ::EnableWindow(state->frontButton, FALSE);
+        ::EnableWindow(state->restoreButton, FALSE);
+        ::EnableWindow(state->minimizeButton, FALSE);
+        ::EnableWindow(state->maximizeButton, FALSE);
+        ::EnableWindow(state->closeButton, FALSE);
+    } else if (selected == 4) {
         state->viewMode = WindowViewMode::GpuDisplayAudit;
         ::EnableWindow(state->sortCombo, FALSE);
         ::EnableWindow(state->frontButton, FALSE);
@@ -1247,6 +1285,19 @@ const WindowSnapshotRow* SelectedWindowSnapshot(WindowViewState* state) {
     return state->model.rowAt(SelectedModelIndex(state));
 }
 
+// SelectedAuditEntry returns the immutable selected audit snapshot. It never
+// treats a kernel object pointer as a live HWND or process handle.
+const AuditEntry* SelectedAuditEntry(WindowViewState* state) {
+    if (!state || state->viewMode == WindowViewMode::WindowList) {
+        return nullptr;
+    }
+    const int rowIndex = SelectedModelIndex(state);
+    if (rowIndex < 0 || rowIndex >= static_cast<int>(state->auditRows.size())) {
+        return nullptr;
+    }
+    return &state->auditRows[static_cast<std::size_t>(rowIndex)];
+}
+
 void OpenSelectedWindowProcess(WindowViewState* state) {
     const WindowSnapshotRow* row = SelectedWindowSnapshot(state);
     if (!state || !row || row->processId == 0U) {
@@ -1265,6 +1316,30 @@ void OpenSelectedWindowProcess(WindowViewState* state) {
     state->statusText = routed
         ? L"已请求打开当前 PID " + std::to_wstring(processId) + L" 的进程详细信息；窗口快照归属会重新校验。"
         : L"无法导航到该窗口快照的当前进程实例。";
+    ::InvalidateRect(state->hwnd, nullptr, TRUE);
+}
+
+// OpenSelectedAuditProcess routes only the captured numeric PID from a
+// read-only audit record. The destination revalidates the current process, so
+// a historical tagTIMER owner is never assumed to still be the same instance.
+void OpenSelectedAuditProcess(WindowViewState* state) {
+    const AuditEntry* entry = SelectedAuditEntry(state);
+    if (!state || !entry || entry->relatedProcessId == 0U) {
+        if (state) {
+            state->statusText = L"审计快照没有可导航的 PID。";
+            ::InvalidateRect(state->hwnd, nullptr, TRUE);
+        }
+        return;
+    }
+    const DWORD processId = entry->relatedProcessId;
+    Ksword::Core::NavigationRequest request{};
+    request.target = Ksword::Core::NavigationTarget::ProcessDetails;
+    request.entity.kind = Ksword::Core::EntityKind::Process;
+    request.entity.id = processId;
+    const bool routed = Ksword::Ui::RequestEntityNavigation(state->hwnd, request);
+    state->statusText = routed
+        ? L"已请求打开快照 PID " + std::to_wstring(processId) + L" 的进程详情；历史定时器归属会重新校验。"
+        : L"无法导航到该审计快照的当前进程实例。";
     ::InvalidateRect(state->hwnd, nullptr, TRUE);
 }
 
@@ -1317,7 +1392,9 @@ void ShowWindowContextMenu(WindowViewState* state, POINT screenPoint) {
     const bool hasWindow = state->viewMode == WindowViewMode::WindowList && SelectedWindow(state) != nullptr;
     const bool hasRow = ListView_GetNextItem(state->windowList, -1, LVNI_SELECTED) >= 0;
     const WindowSnapshotRow* investigationRow = SelectedWindowSnapshot(state);
-    const bool canOpenProcess = investigationRow != nullptr && investigationRow->processId != 0U;
+    const AuditEntry* auditInvestigationRow = SelectedAuditEntry(state);
+    const bool canOpenProcess = (investigationRow != nullptr && investigationRow->processId != 0U) ||
+        (auditInvestigationRow != nullptr && auditInvestigationRow->relatedProcessId != 0U);
     const bool canOpenImageDirectory = investigationRow != nullptr &&
         !Ksword::Features::File::PathNavigator::parentDirectoryForKnownFilePath(investigationRow->processImagePath).empty();
     HMENU menu = ::CreatePopupMenu();
@@ -1418,7 +1495,11 @@ void ShowWindowContextMenu(WindowViewState* state, POINT screenPoint) {
         SetCaptureProtection(state, WDA_EXCLUDEFROMCAPTURE);
         break;
     case kWindowMenuOpenProcess:
-        OpenSelectedWindowProcess(state);
+        if (state && state->viewMode == WindowViewMode::WindowList) {
+            OpenSelectedWindowProcess(state);
+        } else {
+            OpenSelectedAuditProcess(state);
+        }
         break;
     case kWindowMenuOpenImageDirectory:
         OpenSelectedWindowImageDirectory(state);
@@ -1520,6 +1601,7 @@ bool CreateChildControls(WindowViewState* state, HWND hwnd) {
     ::SendMessageW(state->auditModeCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"窗口列表"));
     ::SendMessageW(state->auditModeCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Win32K GUI 审计"));
     ::SendMessageW(state->auditModeCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Win32K 消息 Hook 审计"));
+    ::SendMessageW(state->auditModeCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Win32K 定时器审计"));
     ::SendMessageW(state->auditModeCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"GPU/Display 审计"));
     ::SendMessageW(state->auditModeCombo, CB_SETCURSEL, 0, 0);
     ::SendMessageW(state->sortCombo, WM_SETFONT, reinterpret_cast<WPARAM>(Ksword::Ui::SystemUIFont()), TRUE);
