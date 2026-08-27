@@ -2,8 +2,10 @@
 
 #include "WindowToolsCommon.h"
 #include "../../Core/Common.h"
+#include "../../Core/EntityRef.h"
 #include "../../Ui/AsyncTask.h"
 #include "../../Ui/Controls.h"
+#include "../../Ui/EntityNavigation.h"
 #include "../../Ui/ExportUtil.h"
 #include "../../Ui/FilterBar.h"
 #include "../../Ui/ListViewUtil.h"
@@ -37,6 +39,7 @@ constexpr UINT kMenuApply = 67621;
 constexpr UINT kMenuCopyRow = 67622;
 constexpr UINT kMenuCopyVisible = 67623;
 constexpr UINT kMenuRefresh = 67624;
+constexpr UINT kMenuOpenCurrentProcess = 67625;
 
 constexpr UINT kMsgRefreshCompleted = WM_APP + 672;
 constexpr UINT kMsgFilterCompleted = WM_APP + 673;
@@ -362,13 +365,51 @@ void ApplyAffinity(CaptureViewState& state) {
     ::InvalidateRect(state.hwnd, nullptr, TRUE);
 }
 
+// CurrentProcessIdForWindow uses the selected snapshot only to recover the
+// HWND. The current process owner is read at command time because both the HWND
+// and the snapshot PID can be stale while this page stays open.
+DWORD CurrentProcessIdForWindow(const HWND hwnd) {
+    if (!hwnd || !::IsWindow(hwnd)) {
+        return 0;
+    }
+    DWORD processId = 0;
+    return ::GetWindowThreadProcessId(hwnd, &processId) != 0U ? processId : 0U;
+}
+
+// OpenSelectedWindowProcess is intentionally read-only and keeps the existing
+// capture-protection action untouched. The process page resolves this live PID
+// again before opening details, without a source-side process handle.
+void OpenSelectedWindowProcess(CaptureViewState& state) {
+    const TopLevelWindowInfo* selected = SelectedWindow(state);
+    const DWORD processId = selected ? CurrentProcessIdForWindow(selected->hwnd) : 0U;
+    if (processId == 0U) {
+        state.statusText = L"当前选中窗口已关闭或无法读取所属 PID。";
+        ::InvalidateRect(state.hwnd, nullptr, TRUE);
+        return;
+    }
+
+    Ksword::Core::NavigationRequest request{};
+    request.target = Ksword::Core::NavigationTarget::ProcessDetails;
+    request.entity.kind = Ksword::Core::EntityKind::Process;
+    request.entity.id = processId;
+    state.statusText = Ksword::Ui::RequestEntityNavigation(state.hwnd, request)
+        ? L"已请求打开刚读取到的当前选中窗口所属 PID " + std::to_wstring(processId) +
+            L" 的进程详细信息；目标页会重新确认当前进程实例。"
+        : L"无法导航到当前选中窗口所属的进程实例。";
+    ::InvalidateRect(state.hwnd, nullptr, TRUE);
+}
+
 void ShowContextMenu(CaptureViewState& state, const POINT screenPoint) {
     HMENU menu = ::CreatePopupMenu();
     if (!menu) {
         return;
     }
-    const bool hasSelection = SelectedWindow(state) != nullptr;
+    const TopLevelWindowInfo* selectedWindow = SelectedWindow(state);
+    const bool hasSelection = selectedWindow != nullptr;
+    const bool hasCurrentProcess = selectedWindow && CurrentProcessIdForWindow(selectedWindow->hwnd) != 0U;
     ::AppendMenuW(menu, MF_STRING | (hasSelection ? MF_ENABLED : MF_GRAYED), kMenuApply, L"应用所选捕获保护");
+    ::AppendMenuW(menu, MF_STRING | (hasCurrentProcess ? MF_ENABLED : MF_GRAYED),
+        kMenuOpenCurrentProcess, L"查看当前选中窗口所属进程的详细信息");
     ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     ::AppendMenuW(menu, MF_STRING | (hasSelection ? MF_ENABLED : MF_GRAYED), kMenuCopyRow, L"复制选中行");
     ::AppendMenuW(menu, MF_STRING, kMenuCopyVisible, L"复制可见行");
@@ -382,6 +423,9 @@ void ShowContextMenu(CaptureViewState& state, const POINT screenPoint) {
     switch (static_cast<UINT>(command)) {
     case kMenuApply:
         ApplyAffinity(state);
+        return;
+    case kMenuOpenCurrentProcess:
+        OpenSelectedWindowProcess(state);
         return;
     case kMenuCopyRow:
         state.statusText = CopyTextToClipboard(state.hwnd, RowsAsTsv(state.windowList, false, kColumnCount))
