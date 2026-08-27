@@ -20,6 +20,7 @@
 #include "../Ui/Theme.h"
 #include "../resource.h"
 
+#include <algorithm>
 #include <commctrl.h>
 #include <tlhelp32.h>
 #include <cwctype>
@@ -36,6 +37,7 @@ constexpr int kPrivilegeMenuId = 1001;
 constexpr int kDriverMenuId = 1002;
 constexpr int kCommandEditId = 1003;
 constexpr int kStatusTextId = 1004;
+constexpr int kNavigationPaletteMenuId = 1005;
 constexpr int kEvidenceInspectorMenuId = 1099;
 constexpr int kEvidenceJsonPrivacyMenuId = 1100;
 constexpr int kEvidenceJsonRawMenuId = 1101;
@@ -45,6 +47,8 @@ constexpr int kEvidenceClearMenuId = 1104;
 constexpr int kCommandEditWidth = 320;
 constexpr int kCommandEditHeight = 22;
 constexpr int kCommandEditMenuGap = 8;
+constexpr int kNavigationPaletteWidth = 560;
+constexpr int kNavigationPaletteHeight = 440;
 constexpr int kStatusHeight = 18;
 constexpr int kWindowMenuDockBaseId = 42000;
 constexpr int kProcessModuleCommandId = 40001;
@@ -108,6 +112,23 @@ std::wstring LowerText(std::wstring value) {
     return value;
 }
 
+bool IsEditableTextControl(const HWND hwnd) {
+    if (!hwnd) {
+        return false;
+    }
+    wchar_t className[32]{};
+    if (::GetClassNameW(hwnd, className, static_cast<int>(sizeof(className) / sizeof(className[0]))) <= 0) {
+        return false;
+    }
+    return ::lstrcmpiW(className, L"EDIT") == 0 ||
+        ::lstrcmpiW(className, L"RICHEDIT20W") == 0 ||
+        ::lstrcmpiW(className, L"RICHEDIT50W") == 0;
+}
+
+bool IsMainWindowDescendant(const HWND root, const HWND hwnd) {
+    return root && hwnd && (root == hwnd || ::IsChild(root, hwnd));
+}
+
 DWORD ProcessIdForThread(const DWORD threadId) {
     HANDLE snapshot = ::CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
     if (snapshot == INVALID_HANDLE_VALUE) {
@@ -136,9 +157,9 @@ std::wstring HexIdentifier(const std::uint64_t value) {
 } // namespace
 
 MainWindow::MainWindow()
-    : instance_(nullptr), hwnd_(nullptr), commandEdit_(nullptr), statusText_(nullptr), mainMenu_(nullptr), windowMenu_(nullptr),
-      evidenceMenu_(nullptr),
-      commandEditProc_(nullptr),
+    : instance_(nullptr), hwnd_(nullptr), commandEdit_(nullptr), navigationPalette_(nullptr), statusText_(nullptr),
+      mainMenu_(nullptr), windowMenu_(nullptr), evidenceMenu_(nullptr),
+      commandEditProc_(nullptr), navigationPaletteProc_(nullptr),
       dockManager_(std::make_unique<Ksword::Docking::DockManager>()) {}
 
 MainWindow::~MainWindow() = default;
@@ -168,6 +189,14 @@ bool MainWindow::create(HINSTANCE instance, int showCommand) {
 int MainWindow::run() {
     MSG msg{};
     while (::GetMessageW(&msg, nullptr, 0, 0) > 0) {
+        if (msg.message == WM_KEYDOWN && msg.wParam == static_cast<WPARAM>(L'K') &&
+            (::GetKeyState(VK_CONTROL) & 0x8000) != 0) {
+            const HWND focus = ::GetFocus();
+            if (IsMainWindowDescendant(hwnd_, focus) && !IsEditableTextControl(focus)) {
+                showNavigationPalette();
+                continue;
+            }
+        }
         ::TranslateMessage(&msg);
         ::DispatchMessageW(&msg);
     }
@@ -228,6 +257,55 @@ LRESULT CALLBACK MainWindow::CommandEditProc(HWND hwnd, UINT msg, WPARAM wParam,
     return originalProc ? ::CallWindowProcW(originalProc, hwnd, msg, wParam, lParam) : ::DefWindowProcW(hwnd, msg, wParam, lParam);
 }
 
+LRESULT CALLBACK MainWindow::NavigationPaletteProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    MainWindow* window = reinterpret_cast<MainWindow*>(::GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+    WNDPROC originalProc = window ? window->navigationPaletteProc_ : nullptr;
+    switch (msg) {
+    case WM_GETDLGCODE:
+        return DLGC_WANTALLKEYS;
+    case WM_KEYDOWN:
+        if (wParam == VK_RETURN) {
+            if (window) {
+                window->activateNavigationPaletteSelection();
+            }
+            return 0;
+        }
+        if (wParam == VK_ESCAPE) {
+            if (window) {
+                window->hideNavigationPalette(true);
+            }
+            return 0;
+        }
+        break;
+    case WM_LBUTTONDBLCLK: {
+        const LRESULT result = originalProc
+            ? ::CallWindowProcW(originalProc, hwnd, msg, wParam, lParam)
+            : ::DefWindowProcW(hwnd, msg, wParam, lParam);
+        if (window) {
+            window->activateNavigationPaletteSelection();
+        }
+        return result;
+    }
+    case WM_KILLFOCUS:
+        if (window) {
+            window->hideNavigationPalette(false);
+        }
+        break;
+    case WM_NCDESTROY:
+        if (window && window->navigationPalette_ == hwnd && window->navigationPaletteProc_) {
+            ::SetWindowLongPtrW(hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(window->navigationPaletteProc_));
+            ::SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+            originalProc = window->navigationPaletteProc_;
+            window->navigationPaletteProc_ = nullptr;
+            window->navigationPalette_ = nullptr;
+        }
+        break;
+    default:
+        break;
+    }
+    return originalProc ? ::CallWindowProcW(originalProc, hwnd, msg, wParam, lParam) : ::DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
 LRESULT MainWindow::handleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
     case WM_CREATE:
@@ -269,6 +347,10 @@ LRESULT MainWindow::handleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
     case WM_SETTINGCHANGE:
         Ksword::Ui::RefreshSystemUIFont();
         Ksword::Ui::SetWindowFontRecursive(hwnd_);
+        if (navigationPalette_) {
+            ::SendMessageW(navigationPalette_, WM_SETFONT, reinterpret_cast<WPARAM>(Ksword::Ui::SystemUIFont()), TRUE);
+            ::InvalidateRect(navigationPalette_, nullptr, TRUE);
+        }
         refreshTopmostMenuText();
         positionCommandInput();
         layout();
@@ -290,6 +372,10 @@ LRESULT MainWindow::handleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
         }
         if (id == kDriverMenuId) {
             installDriverFromButton();
+            return 0;
+        }
+        if (id == kNavigationPaletteMenuId) {
+            showNavigationPalette();
             return 0;
         }
         if (id == kEvidenceInspectorMenuId) {
@@ -323,6 +409,15 @@ LRESULT MainWindow::handleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
         ::SetTextColor(dc, Ksword::Ui::AppTheme().textColor);
         return reinterpret_cast<LRESULT>(Ksword::Ui::AppTheme().windowBrush());
     }
+    case WM_CTLCOLORLISTBOX:
+        if (reinterpret_cast<HWND>(lParam) == navigationPalette_) {
+            HDC dc = reinterpret_cast<HDC>(wParam);
+            ::SetBkMode(dc, OPAQUE);
+            ::SetBkColor(dc, Ksword::Ui::AppTheme().panelColor);
+            ::SetTextColor(dc, Ksword::Ui::AppTheme().textColor);
+            return reinterpret_cast<LRESULT>(Ksword::Ui::AppTheme().panelBrush());
+        }
+        break;
     case WM_PAINT: {
         PAINTSTRUCT ps{};
         HDC dc = ::BeginPaint(hwnd, &ps);
@@ -334,6 +429,10 @@ LRESULT MainWindow::handleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
         return 1;
     case WM_DESTROY:
         stopDriverOnExit();
+        if (navigationPalette_) {
+            ::DestroyWindow(navigationPalette_);
+            navigationPalette_ = nullptr;
+        }
         if (commandEdit_) {
             ::DestroyWindow(commandEdit_);
             commandEdit_ = nullptr;
@@ -359,6 +458,7 @@ void MainWindow::createMenuBar() {
         ::AppendMenuW(windowMenu_, MF_STRING | MF_CHECKED, kWindowMenuDockBaseId + index, modules_[index].title.c_str());
     }
     ::AppendMenuW(mainMenu_, MF_POPUP, reinterpret_cast<UINT_PTR>(windowMenu_), L"窗口");
+    ::AppendMenuW(mainMenu_, MF_STRING, kNavigationPaletteMenuId, L"导航");
     ::AppendMenuW(evidenceMenu_, MF_STRING, kEvidenceInspectorMenuId, L"查看证据会话...");
     ::AppendMenuW(evidenceMenu_, MF_SEPARATOR, 0, nullptr);
     ::AppendMenuW(evidenceMenu_, MF_STRING, kEvidenceJsonPrivacyMenuId, L"导出 JSON（隐私脱敏）...");
@@ -401,6 +501,175 @@ void MainWindow::createCommandInput() {
     commandEditProc_ = reinterpret_cast<WNDPROC>(
         ::SetWindowLongPtrW(commandEdit_, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(&MainWindow::CommandEditProc)));
     positionCommandInput();
+}
+
+void MainWindow::rebuildNavigationPalette() {
+    navigationPaletteEntries_.clear();
+    navigationPaletteEntries_.reserve(modules_.size() + 9U);
+    for (int moduleIndex = 0; moduleIndex < static_cast<int>(modules_.size()); ++moduleIndex) {
+        const Ksword::Ui::ModuleDescriptor& module = modules_[moduleIndex];
+        NavigationPaletteEntry entry;
+        entry.action = NavigationPaletteAction::Module;
+        entry.moduleIndex = moduleIndex;
+        entry.displayText = L"模块： " + module.title + L"  —  " + module.summary;
+        navigationPaletteEntries_.push_back(std::move(entry));
+    }
+
+    const struct TemplateDescriptor {
+        const wchar_t* command;
+        const wchar_t* description;
+    } templates[] = {
+        { L"pid <PID>", L"打开当前进程详细信息" },
+        { L"tid <TID>", L"按线程 ID 打开所属进程详细信息" },
+        { L"mem <PID>", L"定位到该进程的内存操作" },
+        { L"hwnd <HWND>", L"在窗口模块查询窗口句柄" },
+        { L"net <PID>", L"筛选该进程的网络连接" },
+        { L"handle <PID>", L"筛选该进程的句柄表" },
+        { L"etw <PID>", L"定位到该进程的 ETW 监控" },
+        { L"file <路径>", L"在文件模块导航到路径" },
+        { L"reg <注册表路径>", L"在注册表模块导航到键" },
+    };
+    for (const TemplateDescriptor& descriptor : templates) {
+        NavigationPaletteEntry entry;
+        entry.action = NavigationPaletteAction::Template;
+        entry.commandTemplate = descriptor.command;
+        entry.displayText = L"命令模板： " + entry.commandTemplate + L"  —  " + descriptor.description;
+        navigationPaletteEntries_.push_back(std::move(entry));
+    }
+
+    if (!navigationPalette_ || !::IsWindow(navigationPalette_)) {
+        return;
+    }
+    ::SendMessageW(navigationPalette_, LB_RESETCONTENT, 0, 0);
+    for (std::size_t index = 0; index < navigationPaletteEntries_.size(); ++index) {
+        const LRESULT listIndex = ::SendMessageW(navigationPalette_, LB_ADDSTRING, 0,
+            reinterpret_cast<LPARAM>(navigationPaletteEntries_[index].displayText.c_str()));
+        if (listIndex != LB_ERR && listIndex != LB_ERRSPACE) {
+            ::SendMessageW(navigationPalette_, LB_SETITEMDATA, static_cast<WPARAM>(listIndex),
+                static_cast<LPARAM>(index));
+        }
+    }
+}
+
+void MainWindow::showNavigationPalette() {
+    if (!hwnd_) {
+        return;
+    }
+    if (!navigationPalette_ || !::IsWindow(navigationPalette_)) {
+        HWND palette = ::CreateWindowExW(WS_EX_TOOLWINDOW, WC_LISTBOXW, L"",
+            WS_POPUP | WS_BORDER | WS_VSCROLL | LBS_NOTIFY | LBS_NOINTEGRALHEIGHT,
+            0, 0, kNavigationPaletteWidth, kNavigationPaletteHeight,
+            hwnd_, nullptr, instance_, nullptr);
+        if (!palette) {
+            if (statusText_) {
+                ::SetWindowTextW(statusText_, L"导航面板无法创建。");
+            }
+            return;
+        }
+        navigationPalette_ = palette;
+        ::SendMessageW(navigationPalette_, WM_SETFONT, reinterpret_cast<WPARAM>(Ksword::Ui::SystemUIFont()), TRUE);
+        ::SetWindowLongPtrW(navigationPalette_, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
+        navigationPaletteProc_ = reinterpret_cast<WNDPROC>(
+            ::SetWindowLongPtrW(navigationPalette_, GWLP_WNDPROC,
+                reinterpret_cast<LONG_PTR>(&MainWindow::NavigationPaletteProc)));
+    }
+
+    rebuildNavigationPalette();
+    if (navigationPaletteEntries_.empty()) {
+        return;
+    }
+    ::SendMessageW(navigationPalette_, LB_SETCURSEL, 0, 0);
+
+    RECT anchor{};
+    if (!commandEdit_ || !::GetWindowRect(commandEdit_, &anchor)) {
+        ::GetWindowRect(hwnd_, &anchor);
+    }
+    HMONITOR monitor = ::MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST);
+    MONITORINFO monitorInfo{};
+    monitorInfo.cbSize = sizeof(monitorInfo);
+    if (!::GetMonitorInfoW(monitor, &monitorInfo)) {
+        ::SystemParametersInfoW(SPI_GETWORKAREA, 0, &monitorInfo.rcWork, 0);
+    }
+    const RECT work = monitorInfo.rcWork;
+    const int workLeft = static_cast<int>(work.left);
+    const int workTop = static_cast<int>(work.top);
+    const int workRight = static_cast<int>(work.right);
+    const int workBottom = static_cast<int>(work.bottom);
+    const int width = (std::min)(kNavigationPaletteWidth, (std::max)(1, workRight - workLeft - 16));
+    const int height = (std::min)(kNavigationPaletteHeight, (std::max)(1, workBottom - workTop - 16));
+    int x = static_cast<int>(anchor.left);
+    int y = static_cast<int>(anchor.bottom) + 3;
+    if (x + width > workRight) {
+        x = workRight - width;
+    }
+    if (x < workLeft) {
+        x = workLeft;
+    }
+    if (y + height > workBottom) {
+        y = (std::max)(workTop, static_cast<int>(anchor.top) - height - 3);
+    }
+    ::SetWindowPos(navigationPalette_, HWND_TOP, x, y, width, height, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    ::SetFocus(navigationPalette_);
+}
+
+void MainWindow::hideNavigationPalette(const bool focusCommandInput) {
+    if (navigationPalette_ && ::IsWindow(navigationPalette_)) {
+        ::ShowWindow(navigationPalette_, SW_HIDE);
+    }
+    if (focusCommandInput && commandEdit_ && ::IsWindow(commandEdit_)) {
+        positionCommandInput();
+        ::SetFocus(commandEdit_);
+    }
+}
+
+void MainWindow::activateNavigationPaletteSelection() {
+    if (!navigationPalette_ || !::IsWindow(navigationPalette_)) {
+        return;
+    }
+    const LRESULT selected = ::SendMessageW(navigationPalette_, LB_GETCURSEL, 0, 0);
+    if (selected == LB_ERR) {
+        return;
+    }
+    const LRESULT entryIndex = ::SendMessageW(navigationPalette_, LB_GETITEMDATA,
+        static_cast<WPARAM>(selected), 0);
+    if (entryIndex == LB_ERR || entryIndex < 0 ||
+        static_cast<std::size_t>(entryIndex) >= navigationPaletteEntries_.size()) {
+        return;
+    }
+    const NavigationPaletteEntry entry = navigationPaletteEntries_[static_cast<std::size_t>(entryIndex)];
+    hideNavigationPalette(false);
+
+    if (entry.action == NavigationPaletteAction::Module) {
+        if (entry.moduleIndex < 0 || entry.moduleIndex >= static_cast<int>(modules_.size())) {
+            return;
+        }
+        Ksword::Core::NavigationRequest request{};
+        request.target = Ksword::Core::NavigationTarget::Default;
+        request.entity.kind = Ksword::Core::EntityKind::Module;
+        request.entity.text = modules_[entry.moduleIndex].title;
+        if (!routeNavigation(request) && statusText_) {
+            ::SetWindowTextW(statusText_, L"导航面板无法打开所选模块。");
+        }
+        return;
+    }
+
+    if (!commandEdit_ || !::IsWindow(commandEdit_)) {
+        return;
+    }
+    ::SetWindowTextW(commandEdit_, entry.commandTemplate.c_str());
+    positionCommandInput();
+    ::SetFocus(commandEdit_);
+    const std::size_t placeholderBegin = entry.commandTemplate.find(L'<');
+    const std::size_t placeholderEnd = entry.commandTemplate.find(L'>', placeholderBegin);
+    if (placeholderBegin != std::wstring::npos && placeholderEnd != std::wstring::npos &&
+        placeholderEnd >= placeholderBegin) {
+        ::SendMessageW(commandEdit_, EM_SETSEL, static_cast<WPARAM>(placeholderBegin),
+            static_cast<LPARAM>(placeholderEnd + 1U));
+        ::SendMessageW(commandEdit_, EM_SCROLLCARET, 0, 0);
+    }
+    if (statusText_) {
+        ::SetWindowTextW(statusText_, L"已填入导航模板；替换尖括号中的参数后按 Enter。");
+    }
 }
 
 void MainWindow::createChildControls() {

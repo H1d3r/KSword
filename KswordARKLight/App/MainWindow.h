@@ -11,6 +11,7 @@
 
 #include <memory>
 #include <optional>
+#include <string>
 #include <vector>
 
 namespace Ksword::App {
@@ -41,17 +42,37 @@ private:
         bool materializing = false;
     };
 
+    enum class NavigationPaletteAction {
+        Module,
+        Template
+    };
+
+    struct NavigationPaletteEntry {
+        NavigationPaletteAction action = NavigationPaletteAction::Module;
+        int moduleIndex = -1;
+        std::wstring displayText;
+        std::wstring commandTemplate;
+    };
+
     LRESULT handleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
     // CommandEditProc subclasses the compact command input. Inputs are normal
     // edit-control window-procedure values; processing intercepts Enter and
     // forwards to executeCommandInput; output is a Win32 LRESULT.
     static LRESULT CALLBACK CommandEditProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+    // NavigationPaletteProc subclasses the native list-box popup. Inputs are
+    // list-box messages; processing accepts Enter/Escape and activation without
+    // materializing or probing any feature module.
+    static LRESULT CALLBACK NavigationPaletteProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
     void createMenuBar();
     void createChildControls();
     // createCommandInput creates the compact owned edit window used for typed
     // navigation and explicit ! shell commands.
     void createCommandInput();
+    void showNavigationPalette();
+    void hideNavigationPalette(bool focusCommandInput);
+    void rebuildNavigationPalette();
+    void activateNavigationPaletteSelection();
     void createModuleDocks();
     // createModulePlaceholderPage creates a lightweight tab body used during
     // startup. Inputs are a module descriptor and initial bounds; processing
@@ -124,15 +145,18 @@ private:
     HINSTANCE instance_;
     HWND hwnd_;
     HWND commandEdit_;
+    HWND navigationPalette_;
     HWND statusText_;
     HMENU mainMenu_;
     HMENU windowMenu_;
     HMENU evidenceMenu_;
     WNDPROC commandEditProc_;
+    WNDPROC navigationPaletteProc_;
     std::unique_ptr<Ksword::Docking::DockManager> dockManager_;
     std::vector<Ksword::Ui::ModuleDescriptor> modules_;
     std::vector<DockSlot> dockSlots_;
     std::vector<std::optional<Ksword::Core::NavigationRequest>> pendingNavigation_;
+    std::vector<NavigationPaletteEntry> navigationPaletteEntries_;
     std::vector<Ksword::Core::PrivilegeEnableResult> startupPrivilegeResults_;
     std::wstring startupPrivilegeSummary_;
     Ksword::Core::DriverLease driverLease_;
