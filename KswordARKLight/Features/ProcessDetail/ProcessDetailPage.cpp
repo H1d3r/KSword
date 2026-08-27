@@ -3,6 +3,7 @@
 #include "ProcessDetailCollector.h"
 
 #include "../../Ui/Controls.h"
+#include "../../Ui/ExportUtil.h"
 #include "../../Ui/LoadingOverlay.h"
 #include "../../Ui/TextFindSupport.h"
 #include "../../Ui/Theme.h"
@@ -1056,31 +1057,9 @@ std::wstring ProcessDetailPage::ListCell(HWND list, int row, int column) {
 }
 
 bool ProcessDetailPage::CopyText(HWND owner, const std::wstring& text) {
-    if (text.empty() || !::OpenClipboard(owner)) {
-        return false;
-    }
-    const SIZE_T bytes = (text.size() + 1) * sizeof(wchar_t);
-    HGLOBAL memory = ::GlobalAlloc(GMEM_MOVEABLE, bytes);
-    if (!memory) {
-        ::CloseClipboard();
-        return false;
-    }
-    void* destination = ::GlobalLock(memory);
-    if (!destination) {
-        ::GlobalFree(memory);
-        ::CloseClipboard();
-        return false;
-    }
-    std::memcpy(destination, text.c_str(), bytes);
-    ::GlobalUnlock(memory);
-    ::EmptyClipboard();
-    if (!::SetClipboardData(CF_UNICODETEXT, memory)) {
-        ::GlobalFree(memory);
-        ::CloseClipboard();
-        return false;
-    }
-    ::CloseClipboard();
-    return true;
+    // Keep all explicit detail-table copies in the common evidence path while
+    // preserving the existing Unicode clipboard representation.
+    return Ksword::Ui::CopyTextToClipboard(owner, text, L"进程详细信息");
 }
 
 std::wstring ProcessDetailPage::ReadWindowText(HWND hwnd) {
