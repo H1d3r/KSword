@@ -55,6 +55,7 @@
     <ClCompile Include="..\KswordARKLight\Core\EntityRef.cpp" />
     <ClCompile Include="..\KswordARKLight\Features\File\PathNavigator.cpp" />
     <ClCompile Include="..\KswordARKLight\Features\Monitor\EtwEventModel.cpp" />
+    <ClCompile Include="..\KswordARKLight\Features\Registry\RegistrySearchModel.cpp" />
     <ClCompile Include="..\KswordARKLight\Features\SysTools\IoctlDecoder.cpp" />
     <ClCompile Include="..\KswordARKLight\Features\Window\Win32kTimerEvidenceModel.cpp" />
     <ClCompile Include="..\KswordARKLight\Features\Memory\MemorySnapshot.cpp" />
@@ -67,6 +68,7 @@
     <ClInclude Include="..\KswordARKLight\Core\EntityRef.h" />
     <ClInclude Include="..\KswordARKLight\Features\File\PathNavigator.h" />
     <ClInclude Include="..\KswordARKLight\Features\Monitor\EtwEventModel.h" />
+    <ClInclude Include="..\KswordARKLight\Features\Registry\RegistrySearchModel.h" />
     <ClInclude Include="..\KswordARKLight\Features\SysTools\IoctlDecoder.h" />
     <ClInclude Include="..\KswordARKLight\Features\Window\Win32kTimerEvidenceModel.h" />
     <ClInclude Include="..\KswordARKLight\Features\Memory\MemorySnapshot.h" />

@@ -2,6 +2,7 @@
 #include "../KswordARKLight/Core/EntityRef.h"
 #include "../KswordARKLight/Features/File/PathNavigator.h"
 #include "../KswordARKLight/Features/Monitor/EtwEventModel.h"
+#include "../KswordARKLight/Features/Registry/RegistrySearchModel.h"
 #include "../KswordARKLight/Features/SysTools/IoctlDecoder.h"
 #include "../KswordARKLight/Features/Window/Win32kTimerEvidenceModel.h"
 #include "../KswordARKLight/Features/Memory/MemorySnapshot.h"
@@ -135,6 +136,57 @@ int wmain() {
     Expect(Ksword::Features::Monitor::BuildVisibleEtwEventsTsv({ firstEtwEvent }, {}).empty() &&
             Ksword::Features::Monitor::BuildVisibleEtwEventsTsv({ firstEtwEvent }, { 3U }).empty(),
         L"ETW TSV rejects empty and invalid visible snapshots");
+
+    Ksword::Features::Registry::RegistrySearchRequest registrySearchRequest{};
+    registrySearchRequest.startPath = L"  HKLM\\Software\\KSword  ";
+    registrySearchRequest.query = L"  Needle  ";
+    registrySearchRequest.maxKeys = 999999U;
+    registrySearchRequest.maxResults = 999999U;
+    registrySearchRequest.maxDepth = 999999U;
+    registrySearchRequest.maxValuePreviewBytes = 999999U;
+    const auto registrySearchValidation = Ksword::Features::Registry::ValidateRegistrySearchRequest(registrySearchRequest);
+    Expect(registrySearchValidation.valid && registrySearchValidation.request.startPath == L"HKLM\\Software\\KSword" &&
+            registrySearchValidation.normalizedQuery == L"Needle" &&
+            registrySearchValidation.request.maxKeys == Ksword::Features::Registry::kRegistrySearchMaxKeys &&
+            registrySearchValidation.request.maxResults == Ksword::Features::Registry::kRegistrySearchMaxResults &&
+            registrySearchValidation.request.maxDepth == Ksword::Features::Registry::kRegistrySearchMaxDepth &&
+            registrySearchValidation.request.maxValuePreviewBytes == Ksword::Features::Registry::kRegistrySearchMaxValuePreviewBytes,
+        L"registry search request trims text and clamps hard budgets");
+    Expect(!Ksword::Features::Registry::ValidateRegistrySearchRequest({ L"HKLM", L"" }).valid &&
+            !Ksword::Features::Registry::ValidateRegistrySearchRequest({ L"", L"needle" }).valid,
+        L"registry search rejects empty path and keyword");
+
+    Ksword::Features::Registry::RegistrySearchCandidate registryCandidate{};
+    registryCandidate.kind = Ksword::Features::Registry::RegistrySearchEntryKind::Value;
+    registryCandidate.keyPath = L" HKLM\\Software\\Needle\\Branch ";
+    registryCandidate.valueName = L"Name\tNeedle";
+    registryCandidate.valueTypeText = L"REG_SZ";
+    registryCandidate.dataPreview = L"line1\r\nneedle payload";
+    registryCandidate.dataByteCount = 80U;
+    registryCandidate.depth = 3U;
+    const auto registryHit = Ksword::Features::Registry::ProjectRegistrySearchHit(registryCandidate, 24U);
+    Expect(registryHit.valid && registryHit.keyPath == L"HKLM\\Software\\Needle\\Branch" &&
+            registryHit.valueName == L"Name Needle" && registryHit.dataPreviewTruncated &&
+            Ksword::Features::Registry::RegistrySearchHitMatches(registryHit, L"NEEDLE") &&
+            Ksword::Features::Registry::RegistrySearchHitMatches(registryHit, L"reg_sz") &&
+            !Ksword::Features::Registry::RegistrySearchHitMatches(registryHit, L"missing"),
+        L"registry search projects safe candidates and matches fields case insensitively");
+    Ksword::Features::Registry::RegistrySearchSnapshot registrySearchSnapshot{};
+    registrySearchSnapshot.request = registrySearchValidation.request;
+    registrySearchSnapshot.stopReason = Ksword::Features::Registry::RegistrySearchStopReason::DepthLimitReached;
+    registrySearchSnapshot.counters.visitedKeyCount = 12U;
+    registrySearchSnapshot.counters.visitedValueCount = 4U;
+    registrySearchSnapshot.counters.skippedDepthCount = 2U;
+    registrySearchSnapshot.hits = { registryHit };
+    Expect(Ksword::Features::Registry::BuildRegistrySearchStatusText(registrySearchSnapshot).find(L"深度") != std::wstring::npos,
+        L"registry search status names explicit traversal stop reasons");
+    const std::wstring registrySearchTsv = Ksword::Features::Registry::BuildVisibleRegistrySearchTsv(
+        { registryHit, {} }, { 0U, 1U, 9U });
+    Expect(registrySearchTsv.find(L"类型\t键路径\t值名称") == 0U &&
+            registrySearchTsv.find(L"Name Needle") != std::wstring::npos &&
+            registrySearchTsv.find(L'\t') != std::wstring::npos &&
+            registrySearchTsv.find(L"\r\nneedle") == std::wstring::npos,
+        L"registry search TSV preserves valid visible order and sanitizes fields");
 
     const auto ioctl = Ksword::Features::SysTools::DecodeIoctlCode(L" 0x222004 ");
     Expect(ioctl.state == Ksword::Features::SysTools::IoctlDecodeState::Valid &&

@@ -374,6 +374,9 @@
     <ClCompile Include="Features\Registry\RegistryModel.cpp">
       <Filter>Features\Registry</Filter>
     </ClCompile>
+    <ClCompile Include="Features\Registry\RegistrySearchModel.cpp">
+      <Filter>Features\Registry</Filter>
+    </ClCompile>
     <ClCompile Include="Features\Registry\RegistryView.cpp">
       <Filter>Features\Registry</Filter>
     </ClCompile>
@@ -987,6 +990,9 @@
       <Filter>Features\Registry</Filter>
     </ClInclude>
     <ClInclude Include="Features\Registry\RegistryModel.h">
+      <Filter>Features\Registry</Filter>
+    </ClInclude>
+    <ClInclude Include="Features\Registry\RegistrySearchModel.h">
       <Filter>Features\Registry</Filter>
     </ClInclude>
     <ClInclude Include="Features\Registry\RegistryView.h">
