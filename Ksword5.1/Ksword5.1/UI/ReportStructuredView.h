@@ -17,6 +17,7 @@
 // - 其它需要“同一份报告换个结构化视图”的场景可直接复用。
 // ============================================================
 
+#include <QFont>
 #include <QString>
 #include <QWidget>
 
@@ -25,6 +26,15 @@ class QScrollArea;
 
 namespace ks::ui
 {
+    // ScaledReportFont 作用：
+    // - 输入 baseFont：界面默认字体；
+    // - 处理：按结构化报告统一的放大倍数放大，优先用 pointSizeF，磅值不可用时退回像素值；
+    // - 返回：报告结构化呈现应当使用的字体。
+    // 用途：详情报告要逐条读地址、哈希和路径，界面默认那一档字号看着吃力。
+    //       页面自建的属性树（例如文件常规页那棵从 R0 结构体搭出来的树）也必须调用它，
+    //       否则同一个窗口里两种结构化视图会出现两种字号。
+    QFont ScaledReportFont(const QFont& baseFont);
+
     // ReportStructuredView：报告结构化视图控件。
     // 生命周期由 Qt 父子机制管理；控件不持有任何业务数据副本以外的资源。
     class ReportStructuredView final : public QWidget

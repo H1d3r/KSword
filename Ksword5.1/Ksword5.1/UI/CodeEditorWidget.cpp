@@ -13,6 +13,7 @@
 #include "../Internationalization/LanguageManager.h"
 
 #include <QBuffer>
+#include <QComboBox>
 #include <QSignalBlocker>
 #include <QStackedWidget>
 #include <QEvent>
@@ -192,28 +193,30 @@ namespace
             .arg(KswordTheme::OnAccentDynamicHex());
     }
 
-    // buildFloatingToggleStyle：
-    // - 内容区右上角悬浮切换按钮的样式；
-    // - 与工具栏按钮不同，它压在正文之上，必须自带不透明底色和边框，
-    //   否则叠在属性表行或报告文字上会看不清；
+    // buildFloatingSwitchStyle：
+    // - 内容区右上角悬浮切换下拉框的样式；
+    // - 它压在正文之上，必须自带不透明底色和边框，否则叠在属性表行或报告文字上会看不清；
+    // - 下拉列表同样要显式给底色：弹出面板是独立窗口，不会继承这里的背景；
     // - 颜色全部走 palette(...) 形式的 token，主题切换时跟着变，不做快照。
-    QString buildFloatingToggleStyle()
+    QString buildFloatingSwitchStyle()
     {
         return QStringLiteral(
-            "QToolButton{"
+            "QComboBox{"
             "  border:1px solid %1;"
             "  border-radius:6px;"
-            "  padding:5px 12px;"
+            "  padding:4px 8px;"
             "  background:%2;"
             "  color:%3;"
             "}"
-            "QToolButton:hover{"
-            "  background:%4;"
-            "  color:%5;"
+            "QComboBox:hover{"
             "  border:1px solid %4;"
             "}"
-            "QToolButton:checked{"
-            "  border:1px solid %4;"
+            "QComboBox QAbstractItemView{"
+            "  border:1px solid %1;"
+            "  background:%2;"
+            "  color:%3;"
+            "  selection-background-color:%4;"
+            "  selection-color:%5;"
             "}")
             .arg(KswordTheme::BorderHex())
             .arg(KswordTheme::SurfaceHex())
@@ -1288,22 +1291,20 @@ void CodeEditorWidget::initializeUi()
     m_viewStack->setCurrentWidget(m_editor);
     m_rootLayout->addWidget(m_viewStack, 1);
 
-    // 切换按钮浮在内容区右上角，而不是混在顶部那排编辑动作里：
+    // 切换控件浮在内容区右上角，而不是混在顶部那排编辑动作里：
     // 它切的是“这块内容怎么看”，和新建/保存/剪贴板不是一类操作，放在内容自己的角上更好找。
-    // 因此按钮不进任何布局，由 positionStructuredButton 跟着 m_viewStack 的几何走。
-    m_structuredButton = new QToolButton(m_viewStack);
-    m_structuredButton->setIcon(
-        buildToolbarSvgIcon(QStringLiteral(":/Icon/codeeditor_structured.svg"), QSize(20, 20)));
-    m_structuredButton->setIconSize(QSize(20, 20));
-    m_structuredButton->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-    m_structuredButton->setCheckable(true);
-    m_structuredButton->setCursor(Qt::PointingHandCursor);
-    m_structuredButton->setToolTip(
+    // 用下拉框而不是按钮：两个选项都摆在明面上，当前在哪一边、还能切到哪一边一眼看全，
+    // 也和文件常规页那套切换框保持同一种形态。控件不进布局，由 positionStructuredSwitch 贴角。
+    m_structuredCombo = new QComboBox(m_viewStack);
+    m_structuredCombo->addItem(QStringLiteral("结构视图"));
+    m_structuredCombo->addItem(QStringLiteral("原始文本"));
+    m_structuredCombo->setCursor(Qt::PointingHandCursor);
+    m_structuredCombo->setToolTip(
         QStringLiteral("在结构视图与原始文本之间切换：结构视图按字段和表格解析当前报告，原始文本保留完整报告便于全文检索和整段复制"));
-    // 悬浮按钮压在正文之上，必须自带不透明底色和边框，否则叠在属性表行上会看不清。
-    m_structuredButton->setStyleSheet(buildFloatingToggleStyle());
+    // 悬浮控件压在正文之上，必须自带不透明底色和边框，否则叠在属性表行上会看不清。
+    m_structuredCombo->setStyleSheet(buildFloatingSwitchStyle());
     // 入口默认隐藏：只有内容确实是可解析的只读报告时才由 updateStructuredReportView 放出来。
-    m_structuredButton->setVisible(false);
+    m_structuredCombo->setVisible(false);
     // m_viewStack 换页或改尺寸时都要重新贴角，事件过滤器比逐页 connect 省事也更不易漏。
     m_viewStack->installEventFilter(this);
 
@@ -1425,17 +1426,22 @@ void CodeEditorWidget::initializeConnections()
             emit contentChanged(text());
         });
 
-    connect(m_structuredButton, &QToolButton::toggled, this, [this](const bool structuredChecked)
+    connect(m_structuredCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+        [this](const int selectedIndex)
         {
             if (m_destroying || m_viewStack == nullptr || m_structuredView == nullptr)
             {
                 return;
             }
+            // 索引与文件常规页那套切换框保持一致：0 = 结构视图，1 = 原始文本。
+            const bool structuredSelected = selectedIndex == 0;
             // 选择记在进程内：这是“这次排查我想怎么看”，不是需要长期保存的偏好。
-            g_preferStructuredReportView = structuredChecked;
-            m_viewStack->setCurrentWidget(
-                structuredChecked ? static_cast<QWidget*>(m_structuredView) : static_cast<QWidget*>(m_editor));
-            refreshStructuredButtonLabel(structuredChecked);
+            g_preferStructuredReportView = structuredSelected;
+            m_viewStack->setCurrentWidget(structuredSelected
+                ? static_cast<QWidget*>(m_structuredView)
+                : static_cast<QWidget*>(m_editor));
+            // 换页后滚动条可能出现或消失，右边距要重算。
+            positionStructuredSwitch();
         });
 
     new QShortcut(QKeySequence::Find, this, [this]()
@@ -1497,10 +1503,10 @@ void CodeEditorWidget::applyThemeStyle()
         }
     }
 
-    // 悬浮切换按钮不在上面那批里：它压在正文之上，用的是自带底色和边框的另一套样式。
-    if (m_structuredButton != nullptr)
+    // 悬浮切换框不在上面那批里：它压在正文之上，用的是自带底色和边框的另一套样式。
+    if (m_structuredCombo != nullptr)
     {
-        m_structuredButton->setStyleSheet(buildFloatingToggleStyle());
+        m_structuredCombo->setStyleSheet(buildFloatingSwitchStyle());
     }
 
     m_findEdit->setStyleSheet(inputStyle);
@@ -1547,14 +1553,14 @@ bool CodeEditorWidget::eventFilter(QObject* watchedObject, QEvent* eventObject)
         eventObject != nullptr &&
         (eventObject->type() == QEvent::Resize || eventObject->type() == QEvent::Show))
     {
-        positionStructuredButton();
+        positionStructuredSwitch();
     }
     return QWidget::eventFilter(watchedObject, eventObject);
 }
 
-void CodeEditorWidget::positionStructuredButton()
+void CodeEditorWidget::positionStructuredSwitch()
 {
-    if (m_destroying || m_structuredButton == nullptr || m_viewStack == nullptr)
+    if (m_destroying || m_structuredCombo == nullptr || m_viewStack == nullptr)
     {
         return;
     }
@@ -1573,36 +1579,13 @@ void CodeEditorWidget::positionStructuredButton()
         rightMargin += m_structuredView->verticalScrollBarWidth();
     }
 
-    const QSize buttonSize = m_structuredButton->sizeHint();
-    m_structuredButton->setGeometry(
-        m_viewStack->width() - buttonSize.width() - rightMargin,
+    const QSize switchSize = m_structuredCombo->sizeHint();
+    m_structuredCombo->setGeometry(
+        m_viewStack->width() - switchSize.width() - rightMargin,
         10,
-        buttonSize.width(),
-        buttonSize.height());
-    m_structuredButton->raise();
-}
-
-void CodeEditorWidget::refreshStructuredButtonLabel(const bool structuredActive)
-{
-    if (m_structuredButton == nullptr)
-    {
-        return;
-    }
-
-    // 文字写的是“点下去会切到哪一边”，不是“当前在哪一边”：
-    // 正看着结构视图时按钮就该写“原始文本”，用户不用猜也不用读 ToolTip。
-    // 这里不用三元表达式：i18n 抽取器会把单行里两个相邻字面量之间的分隔符当成待翻译串。
-    if (structuredActive)
-    {
-        m_structuredButton->setText(QStringLiteral("原始文本"));
-    }
-    else
-    {
-        m_structuredButton->setText(QStringLiteral("结构视图"));
-    }
-
-    // 文字换了按钮宽度就变，悬浮按钮不在布局里，必须自己重新贴回右上角。
-    positionStructuredButton();
+        switchSize.width(),
+        switchSize.height());
+    m_structuredCombo->raise();
 }
 
 void CodeEditorWidget::updateStructuredReportView()
@@ -1611,7 +1594,7 @@ void CodeEditorWidget::updateStructuredReportView()
         m_editor == nullptr ||
         m_viewStack == nullptr ||
         m_structuredView == nullptr ||
-        m_structuredButton == nullptr)
+        m_structuredCombo == nullptr)
     {
         return;
     }
@@ -1622,20 +1605,20 @@ void CodeEditorWidget::updateStructuredReportView()
         m_structuredViewEnabled && m_readOnlyMode && !currentText.trimmed().isEmpty();
     const bool structured = eligible && m_structuredView->setReportText(currentText);
 
-    m_structuredButton->setVisible(structured);
+    m_structuredCombo->setVisible(structured);
     if (!structured)
     {
         m_viewStack->setCurrentWidget(m_editor);
         return;
     }
 
-    // 这里是程序按记忆恢复视图，不是用户点击；阻断信号避免把状态又写回全局偏好。
-    const QSignalBlocker buttonSignalBlocker(m_structuredButton);
-    m_structuredButton->setChecked(g_preferStructuredReportView);
+    // 这里是程序按记忆恢复视图，不是用户选择；阻断信号避免把状态又写回全局偏好。
+    const QSignalBlocker switchSignalBlocker(m_structuredCombo);
+    m_structuredCombo->setCurrentIndex(g_preferStructuredReportView ? 0 : 1);
     m_viewStack->setCurrentWidget(g_preferStructuredReportView
         ? static_cast<QWidget*>(m_structuredView)
         : static_cast<QWidget*>(m_editor));
-    refreshStructuredButtonLabel(g_preferStructuredReportView);
+    positionStructuredSwitch();
 }
 
 void CodeEditorWidget::openFindReplacePanel(const bool replaceEnabled)

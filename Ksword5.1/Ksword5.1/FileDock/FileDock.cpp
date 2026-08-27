@@ -20,6 +20,7 @@
 #include "../theme.h"
 #include "../UI/CodeEditorWidget.h"
 #include "../UI/HexEditorWidget.h"
+#include "../UI/ReportStructuredView.h"
 #include "../UI/TableColumnAutoFit.h"
 #include "../UI/TableInteractionSupport.h"
 #include "../ArkDriverClient/ArkDriverClient.h"
@@ -4061,6 +4062,8 @@ namespace
         }
 
         treeWidget->setColumnCount(2);
+        // 字号与统一报告控件里的结构视图同一档：同一个窗口里两种结构化视图不能有两种字号。
+        treeWidget->setFont(ks::ui::ScaledReportFont(treeWidget->font()));
         treeWidget->setRootIsDecorated(true);
         treeWidget->setAlternatingRowColors(true);
         treeWidget->setSelectionBehavior(QAbstractItemView::SelectRows);

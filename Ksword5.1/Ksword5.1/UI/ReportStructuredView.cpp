@@ -54,26 +54,10 @@ namespace
     // kMaxCodeBlockHeight：等宽代码块的最大像素高度，超出部分块内自行滚动。
     constexpr int kMaxCodeBlockHeight = 320;
 
-    // kBlockFontScale：结构视图相对界面默认字号的放大倍数。
-    // 详情报告是要逐条读地址、哈希和路径的，沿用工具栏那一档小字号看着太吃力。
-    constexpr double kBlockFontScale = 1.2;
-
-    // scaledBlockFont 作用：
-    // - 输入 baseFont：界面默认字体；
-    // - 处理：按 kBlockFontScale 放大，优先用 pointSizeF，磅值不可用时退回像素值；
-    // - 返回：结构视图各块统一使用的字体。
-    QFont scaledBlockFont(QFont baseFont)
+    // scaledBlockFont 作用：转调对外公开的统一放大规则，保证本文件内外只有一处倍数定义。
+    QFont scaledBlockFont(const QFont& baseFont)
     {
-        if (baseFont.pointSizeF() > 0.0)
-        {
-            baseFont.setPointSizeF(baseFont.pointSizeF() * kBlockFontScale);
-            return baseFont;
-        }
-        if (baseFont.pixelSize() > 0)
-        {
-            baseFont.setPixelSize(static_cast<int>(baseFont.pixelSize() * kBlockFontScale));
-        }
-        return baseFont;
+        return ks::ui::ScaledReportFont(baseFont);
     }
 
     // ParsedField：一条属性行，或一条跨列说明行。
@@ -792,6 +776,26 @@ namespace
 
 namespace ks::ui
 {
+    QFont ScaledReportFont(const QFont& baseFont)
+    {
+        // kReportFontScale：结构化报告相对界面默认字号的放大倍数。
+        // 报告是要逐条读地址、哈希和路径的，沿用工具栏那一档小字号看着太吃力。
+        // 全项目只有这一处定义：页面自建的属性树也走这里，字号才不会两套。
+        constexpr double kReportFontScale = 1.35;
+
+        QFont scaledFont = baseFont;
+        if (scaledFont.pointSizeF() > 0.0)
+        {
+            scaledFont.setPointSizeF(scaledFont.pointSizeF() * kReportFontScale);
+            return scaledFont;
+        }
+        if (scaledFont.pixelSize() > 0)
+        {
+            scaledFont.setPixelSize(static_cast<int>(scaledFont.pixelSize() * kReportFontScale));
+        }
+        return scaledFont;
+    }
+
     ReportStructuredView::ReportStructuredView(QWidget* parent)
         : QWidget(parent)
     {

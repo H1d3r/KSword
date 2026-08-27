@@ -12,6 +12,7 @@
 #include <QStringConverter>
 #include <QWidget>
 
+class QComboBox;
 class QLabel;
 class QLineEdit;
 class QEvent;
@@ -219,15 +220,10 @@ private:
     // - 返回格式化后的文本，无法识别或解析失败时原样返回。
     QString applyStructuredAutoFormatIfNeeded(const QString& inputText, QString* detectedKindOut = nullptr) const;
 
-    // positionStructuredButton：
-    // - 把悬浮切换按钮贴到内容区右上角；
-    // - 按钮不进任何布局，尺寸取自身 sizeHint，右边距额外避开当前页可见的垂直滚动条。
-    void positionStructuredButton();
-
-    // refreshStructuredButtonLabel：
-    // - 按当前所处视图刷新切换按钮文字，文字始终写“点下去会切到哪一边”；
-    // - 入参 structuredActive：true 表示当前正显示结构视图。
-    void refreshStructuredButtonLabel(bool structuredActive);
+    // positionStructuredSwitch：
+    // - 把悬浮切换下拉框贴到内容区右上角；
+    // - 控件不进任何布局，尺寸取自身 sizeHint，右边距额外避开当前页可见的垂直滚动条。
+    void positionStructuredSwitch();
 
     // updateStructuredReportView：
     // - 当前内容为只读报告且能解析出结构时，显示结构视图切换按钮并按用户上次选择切页；
@@ -326,8 +322,8 @@ private:
     // m_gotoCloseButton：关闭跳转面板按钮。
     QToolButton* m_gotoCloseButton = nullptr;
 
-    // m_structuredButton：结构视图 / 原始文本切换按钮（仅只读报告可解析时可见）。
-    QToolButton* m_structuredButton = nullptr;
+    // m_structuredCombo：结构视图 / 原始文本切换下拉框（仅只读报告可解析时可见）。
+    QComboBox* m_structuredCombo = nullptr;
 
     // m_viewStack：纯文本编辑器与结构视图的切换容器。
     QStackedWidget* m_viewStack = nullptr;
