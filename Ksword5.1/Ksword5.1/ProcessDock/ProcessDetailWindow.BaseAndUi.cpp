@@ -1,6 +1,7 @@
 #include "ProcessDetailWindow.InternalCommon.h"
 #include "ProcessAffinityUtils.h"
 #include "ProcessAffinityPersistence.h"
+#include "ThreadAffinityMenu.h"
 #include "../句柄/HandleDock.h"
 #include "../MemoryDock/MemoryDock.h"
 #include "../NetworkDock/NetworkDock.h"
@@ -4319,6 +4320,53 @@ void ProcessDetailWindow::initializeThreadTab()
             QIcon(QStringLiteral(":/Icon/process_copy_row.svg")),
             QStringLiteral("复制当前行"));
         copyRowAction->setEnabled(m_threadInspectTable->currentRow() >= 0);
+        const int selectedThreadRow = m_threadInspectTable->currentRow();
+        const QTableWidgetItem* const selectedThreadIdItem =
+            selectedThreadRow >= 0
+                ? m_threadInspectTable->item(
+                    selectedThreadRow,
+                    toThreadColumnIndex(ThreadRowColumn::ThreadId))
+                : nullptr;
+        const std::size_t selectedThreadCacheIndex = selectedThreadIdItem != nullptr
+            ? static_cast<std::size_t>(selectedThreadIdItem->data(Qt::UserRole).toULongLong())
+            : static_cast<std::size_t>(m_threadInspectRows.size());
+        const ThreadInspectItem* const selectedThreadAffinityTarget =
+            selectedThreadCacheIndex < m_threadInspectRows.size()
+                ? &m_threadInspectRows[selectedThreadCacheIndex]
+                : nullptr;
+        QMenu* const affinityMenu = ks::process::addThreadAffinitySubMenu(
+            &menu,
+            QIcon(QStringLiteral(":/Icon/process_priority.svg")),
+            selectedThreadAffinityTarget != nullptr
+                ? selectedThreadAffinityTarget->processId
+                : 0U,
+            selectedThreadAffinityTarget != nullptr
+                ? selectedThreadAffinityTarget->threadId
+                : 0U,
+            selectedThreadAffinityTarget != nullptr
+                ? selectedThreadAffinityTarget->createTime100ns
+                : 0U,
+            buildProcessDetailMenuStyle(),
+            [this](const bool actionOk, const QString& resultText)
+            {
+                if (m_threadInspectStatusLabel != nullptr)
+                {
+                    m_threadInspectStatusLabel->setText(resultText);
+                    m_threadInspectStatusLabel->setStyleSheet(buildStateLabelStyle(
+                        actionOk ? statusIdleColor() : statusWarningColor(),
+                        actionOk ? 600 : 700));
+                }
+                kLogEvent actionEvent;
+                (actionOk ? info : err) << actionEvent
+                    << "[ProcessDetailWindow] thread affinity update: pid="
+                    << m_baseRecord.pid
+                    << ", actionOk="
+                    << (actionOk ? "true" : "false")
+                    << ", detail="
+                    << resultText.toStdString()
+                    << eol;
+                requestAsyncThreadInspectRefresh();
+            });
         QAction* r0SuspendThreadAction = menu.addAction(
             QIcon(QStringLiteral(":/Icon/process_suspend.svg")),
             ks::i18n::contextText(
@@ -4372,6 +4420,17 @@ void ProcessDetailWindow::initializeThreadTab()
                 QStringLiteral("R0结束线程")));
         const bool hasR0ThreadControlTarget =
             m_threadInspectTable->currentRow() >= 0 && m_baseRecord.pid > 4U;
+        if (affinityMenu != nullptr &&
+            (selectedThreadAffinityTarget == nullptr ||
+                selectedThreadAffinityTarget->processId != m_baseRecord.pid ||
+                selectedThreadAffinityTarget->threadId == 0U ||
+                selectedThreadAffinityTarget->createTime100ns == 0U))
+        {
+            affinityMenu->setEnabled(false);
+            affinityMenu->setToolTip(ks::i18n::contextText(
+                QStringLiteral("process.thread.menu.affinity.unavailable"),
+                QStringLiteral("无法读取此线程的 CPU Set 亲和性。")));
+        }
         r0SuspendThreadAction->setEnabled(hasR0ThreadControlTarget);
         r0ResumeThreadAction->setEnabled(hasR0ThreadControlTarget);
         r0TerminateThreadAction->setEnabled(hasR0ThreadControlTarget);

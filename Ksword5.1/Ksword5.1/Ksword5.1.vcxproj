@@ -388,6 +388,7 @@
     <ClCompile Include="ProcessDock\ProcessDock.ColumnChooser.cpp" />
     <ClCompile Include="ProcessDock\ProcessDock.CrossView.cpp" />
     <ClCompile Include="ProcessDock\ProcessDock.ThreadTab.cpp" />
+    <ClCompile Include="ProcessDock\ThreadAffinityMenu.cpp" />
     <ClCompile Include="ProcessDock\ProcessMessageHookWindow.cpp" />
     <ClCompile Include="ProcessDock\ThreadStackWindow.cpp" />
     <ClCompile Include="ProcessDock\Process_Tool.cpp" />
@@ -734,6 +735,7 @@
     <ClInclude Include="ProcessDock\ProcessAffinityUtils.h" />
     <ClInclude Include="ProcessDock\ProcessAffinityPersistence.h" />
     <ClInclude Include="ProcessDock\ProcessAffinityModel.h" />
+    <ClInclude Include="ProcessDock\ThreadAffinityMenu.h" />
     <ClInclude Include="ProcessDock\ProcessCpuCapacityCell.h" />
     <ClInclude Include="ProcessDock\ProcessMessageHookWindow.h" />
     <ClInclude Include="ProcessDock\ThreadStackWindow.h" />

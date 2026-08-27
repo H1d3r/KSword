@@ -1,4 +1,5 @@
 #include "ProcessDock.h"
+#include "ThreadAffinityMenu.h"
 #include "ThreadStackWindow.h"
 
 #include "../Internationalization/LanguageManager.h"
@@ -1557,6 +1558,36 @@ void ProcessDock::showThreadTableContextMenu(const QPoint& localPosition)
     QAction* stackAction = contextMenu.addAction(
         blueTintedIcon(":/Icon/process_threads.svg"),
         "查看调用栈");
+    const ks::process::SystemThreadRecord* clickedThreadRecord = selectedThreadRecord();
+    const bool clickedThreadIsR0Only =
+        clickedThreadRecord != nullptr &&
+        (clickedThreadRecord->isR0OnlyThread ||
+            ((clickedThreadRecord->r0ThreadFlags & KSWORD_ARK_THREAD_FLAG_HIDDEN_FROM_ACTIVE_THREAD_LIST) != 0U));
+    QMenu* const affinityMenu = ks::process::addThreadAffinitySubMenu(
+        &contextMenu,
+        blueTintedIcon(":/Icon/process_priority.svg"),
+        clickedThreadRecord != nullptr ? clickedThreadRecord->ownerPid : 0U,
+        clickedThreadRecord != nullptr ? clickedThreadRecord->threadId : 0U,
+        clickedThreadRecord != nullptr ? clickedThreadRecord->createTime100ns : 0U,
+        buildThreadContextMenuStyle(),
+        [this](const bool actionOk, const QString& resultText)
+        {
+            kLogEvent actionEvent;
+            (actionOk ? info : err) << actionEvent
+                << "[ProcessDock] thread affinity update: actionOk="
+                << (actionOk ? "true" : "false")
+                << ", detail="
+                << resultText.toStdString()
+                << eol;
+            showActionResultMessage(
+                ks::i18n::contextText(
+                    QStringLiteral("process.thread.menu.affinity"),
+                    QStringLiteral("线程亲和性")),
+                actionOk,
+                resultText.toStdString(),
+                actionEvent);
+            requestAsyncThreadRefresh(true);
+        });
     QAction* suspendAction = contextMenu.addAction(
         blueTintedIcon(":/Icon/process_suspend.svg"),
         "挂起线程");
@@ -1618,11 +1649,6 @@ void ProcessDock::showThreadTableContextMenu(const QPoint& localPosition)
             QStringLiteral("process.thread.menu.r0_terminate"),
             QStringLiteral("R0结束线程")));
 
-    const ks::process::SystemThreadRecord* clickedThreadRecord = selectedThreadRecord();
-    const bool clickedThreadIsR0Only =
-        clickedThreadRecord != nullptr &&
-        (clickedThreadRecord->isR0OnlyThread ||
-            ((clickedThreadRecord->r0ThreadFlags & KSWORD_ARK_THREAD_FLAG_HIDDEN_FROM_ACTIVE_THREAD_LIST) != 0U));
     const bool hasR0ThreadControlTarget =
         clickedThreadRecord != nullptr &&
         clickedThreadRecord->ownerPid > 4U &&
@@ -1651,6 +1677,13 @@ void ProcessDock::showThreadTableContextMenu(const QPoint& localPosition)
         suspendAction->setToolTip(QStringLiteral("R0-only / hidden suspect 行只读展示，不执行线程操作。"));
         resumeAction->setToolTip(QStringLiteral("R0-only / hidden suspect 行只读展示，不执行线程操作。"));
         terminateAction->setToolTip(QStringLiteral("R0-only / hidden suspect 行只读展示，不执行线程操作。"));
+        if (affinityMenu != nullptr)
+        {
+            affinityMenu->setEnabled(false);
+            affinityMenu->setToolTip(ks::i18n::contextText(
+                QStringLiteral("process.thread.menu.affinity.suspect.tooltip"),
+                QStringLiteral("R0-only / hidden suspect 行不执行 R3 线程亲和性操作。")));
+        }
         const QString r0ControlToolTip = ks::i18n::contextText(
             QStringLiteral("process.thread.r0_control.suspect.tooltip"),
             QStringLiteral("R0-only / hidden suspect 行可按 TID/PID 通过 R0 挂起或恢复指定线程。"));
