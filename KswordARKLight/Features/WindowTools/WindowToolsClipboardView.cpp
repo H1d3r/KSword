@@ -38,6 +38,7 @@ constexpr UINT kMenuCopyVisible = 67602;
 constexpr UINT kMenuCopyPreview = 67603;
 constexpr UINT kMenuRefresh = 67604;
 constexpr UINT kMenuOpenOwnerProcess = 67605;
+constexpr UINT kMenuOpenClipboardProcess = 67606;
 
 constexpr int kGap = 6;
 constexpr int kRowHeight = 24;
@@ -377,6 +378,21 @@ DWORD CurrentClipboardOwnerProcessId() {
     return ::GetClipboardOwner() == owner ? processId : 0U;
 }
 
+// CurrentClipboardOpenProcessId follows the same live-read rule for the window
+// currently holding OpenClipboard. That window is often the direct explanation
+// for an unavailable snapshot, so it must not be confused with the data owner.
+DWORD CurrentClipboardOpenProcessId() {
+    const HWND opener = ::GetOpenClipboardWindow();
+    if (!opener || !::IsWindow(opener)) {
+        return 0;
+    }
+    DWORD processId = 0;
+    if (::GetWindowThreadProcessId(opener, &processId) == 0U || processId == 0U) {
+        return 0;
+    }
+    return ::GetOpenClipboardWindow() == opener ? processId : 0U;
+}
+
 void SetDetailText(HWND list, const int row, const int column, const std::wstring& text) {
     if (column == 0) {
         LVITEMW item{};
@@ -570,6 +586,27 @@ void OpenCurrentClipboardOwnerProcess(ClipboardViewState& state) {
     ::InvalidateRect(state.hwnd, nullptr, TRUE);
 }
 
+// OpenCurrentClipboardProcess identifies only the window that has the clipboard
+// open right now. It does not infer ownership from the last captured snapshot.
+void OpenCurrentClipboardProcess(ClipboardViewState& state) {
+    const DWORD processId = CurrentClipboardOpenProcessId();
+    if (processId == 0U) {
+        state.statusText = L"当前没有可读取的剪贴板打开者进程。";
+        ::InvalidateRect(state.hwnd, nullptr, TRUE);
+        return;
+    }
+
+    Ksword::Core::NavigationRequest request{};
+    request.target = Ksword::Core::NavigationTarget::ProcessDetails;
+    request.entity.kind = Ksword::Core::EntityKind::Process;
+    request.entity.id = processId;
+    state.statusText = Ksword::Ui::RequestEntityNavigation(state.hwnd, request)
+        ? L"已请求打开刚读取到的剪贴板打开者 PID " + std::to_wstring(processId) +
+            L" 的进程详细信息；目标页会重新确认当前进程实例。"
+        : L"无法导航到当前剪贴板打开者的进程实例。";
+    ::InvalidateRect(state.hwnd, nullptr, TRUE);
+}
+
 // EmptyClipboardWithConfirm is the only destructive action on this page. The
 // default button is 否 so a stray Enter cannot wipe the clipboard, and the
 // prompt names the two consequences that are not obvious: the data cannot be
@@ -623,12 +660,15 @@ void ShowContextMenu(ClipboardViewState& state, const POINT screenPoint) {
     }
     const bool hasSelection = SelectedModelIndex(state) >= 0;
     const bool hasCurrentOwnerProcess = CurrentClipboardOwnerProcessId() != 0U;
+    const bool hasCurrentClipboardProcess = CurrentClipboardOpenProcessId() != 0U;
     ::AppendMenuW(menu, MF_STRING | (hasSelection ? MF_ENABLED : MF_GRAYED), kMenuCopyRow, L"复制选中行");
     ::AppendMenuW(menu, MF_STRING, kMenuCopyVisible, L"复制可见行");
     ::AppendMenuW(menu, MF_STRING | (hasSelection ? MF_ENABLED : MF_GRAYED), kMenuCopyPreview, L"复制预览内容");
     ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     ::AppendMenuW(menu, MF_STRING | (hasCurrentOwnerProcess ? MF_ENABLED : MF_GRAYED),
         kMenuOpenOwnerProcess, L"查看当前剪贴板占有者进程的详细信息");
+    ::AppendMenuW(menu, MF_STRING | (hasCurrentClipboardProcess ? MF_ENABLED : MF_GRAYED),
+        kMenuOpenClipboardProcess, L"查看当前打开剪贴板的进程详细信息");
     ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     ::AppendMenuW(menu, MF_STRING, kMenuRefresh, L"刷新");
 
@@ -652,6 +692,9 @@ void ShowContextMenu(ClipboardViewState& state, const POINT screenPoint) {
         break;
     case kMenuOpenOwnerProcess:
         OpenCurrentClipboardOwnerProcess(state);
+        return;
+    case kMenuOpenClipboardProcess:
+        OpenCurrentClipboardProcess(state);
         return;
     case kMenuRefresh:
         RefreshClipboard(state);
