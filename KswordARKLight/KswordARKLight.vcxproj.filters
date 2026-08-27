@@ -549,6 +549,9 @@
     <ClCompile Include="Ui\EvidenceSession.cpp">
       <Filter>Ui</Filter>
     </ClCompile>
+    <ClCompile Include="Ui\EvidenceSessionView.cpp">
+      <Filter>Ui</Filter>
+    </ClCompile>
     <ClCompile Include="Ui\ExportUtil.cpp">
       <Filter>Ui</Filter>
     </ClCompile>
@@ -1149,6 +1152,9 @@
       <Filter>Ui</Filter>
     </ClInclude>
     <ClInclude Include="Ui\EvidenceSession.h">
+      <Filter>Ui</Filter>
+    </ClInclude>
+    <ClInclude Include="Ui\EvidenceSessionView.h">
       <Filter>Ui</Filter>
     </ClInclude>
     <ClInclude Include="Ui\ExportUtil.h">

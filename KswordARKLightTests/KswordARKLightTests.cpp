@@ -149,6 +149,8 @@ int wmain() {
         std::wstring::npos, L"evidence JSON schema");
     Expect(Ksword::Ui::RenderEvidenceDiff(session.latestDiff()).find(L"+ 4\tSystem") != std::wstring::npos,
         L"latest evidence diff");
+    Expect(session.erase(1U) && session.size() == 1U && !session.erase(1U),
+        L"evidence session erases one immutable item by sequence");
 
     if (failures == 0) {
         std::wcout << L"KswordARKLightTests: PASS\n";

@@ -38,6 +38,7 @@ class EvidenceSession final {
 public:
     std::uint64_t record(std::wstring source, std::wstring format, std::wstring text);
     std::vector<EvidenceItem> snapshot() const;
+    bool erase(std::uint64_t sequence);
     void clear();
     std::size_t size() const;
     EvidenceDiff latestDiff() const;

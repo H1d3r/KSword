@@ -149,6 +149,18 @@ std::vector<EvidenceItem> EvidenceSession::snapshot() const {
     return items_;
 }
 
+bool EvidenceSession::erase(const std::uint64_t sequence) {
+    std::scoped_lock lock(mutex_);
+    const auto item = std::find_if(items_.begin(), items_.end(), [sequence](const EvidenceItem& candidate) {
+        return candidate.sequence == sequence;
+    });
+    if (item == items_.end()) {
+        return false;
+    }
+    items_.erase(item);
+    return true;
+}
+
 void EvidenceSession::clear() {
     std::scoped_lock lock(mutex_);
     items_.clear();

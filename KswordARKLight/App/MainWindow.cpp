@@ -15,6 +15,7 @@
 #include "../Ui/Controls.h"
 #include "../Ui/EntityNavigation.h"
 #include "../Ui/EvidenceSession.h"
+#include "../Ui/EvidenceSessionView.h"
 #include "../Ui/ExportUtil.h"
 #include "../Ui/Theme.h"
 #include "../resource.h"
@@ -35,6 +36,7 @@ constexpr int kPrivilegeMenuId = 1001;
 constexpr int kDriverMenuId = 1002;
 constexpr int kCommandEditId = 1003;
 constexpr int kStatusTextId = 1004;
+constexpr int kEvidenceInspectorMenuId = 1099;
 constexpr int kEvidenceJsonPrivacyMenuId = 1100;
 constexpr int kEvidenceJsonRawMenuId = 1101;
 constexpr int kEvidenceTsvPrivacyMenuId = 1102;
@@ -290,6 +292,12 @@ LRESULT MainWindow::handleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             installDriverFromButton();
             return 0;
         }
+        if (id == kEvidenceInspectorMenuId) {
+            if (!Ksword::Ui::ShowEvidenceSessionInspector(hwnd_) && statusText_) {
+                ::SetWindowTextW(statusText_, L"证据会话检查器无法创建。");
+            }
+            return 0;
+        }
         if (id >= kEvidenceJsonPrivacyMenuId && id <= kEvidenceClearMenuId) {
             exportEvidence(id);
             return 0;
@@ -351,6 +359,8 @@ void MainWindow::createMenuBar() {
         ::AppendMenuW(windowMenu_, MF_STRING | MF_CHECKED, kWindowMenuDockBaseId + index, modules_[index].title.c_str());
     }
     ::AppendMenuW(mainMenu_, MF_POPUP, reinterpret_cast<UINT_PTR>(windowMenu_), L"窗口");
+    ::AppendMenuW(evidenceMenu_, MF_STRING, kEvidenceInspectorMenuId, L"查看证据会话...");
+    ::AppendMenuW(evidenceMenu_, MF_SEPARATOR, 0, nullptr);
     ::AppendMenuW(evidenceMenu_, MF_STRING, kEvidenceJsonPrivacyMenuId, L"导出 JSON（隐私脱敏）...");
     ::AppendMenuW(evidenceMenu_, MF_STRING, kEvidenceJsonRawMenuId, L"导出 JSON（完整）...");
     ::AppendMenuW(evidenceMenu_, MF_STRING, kEvidenceTsvPrivacyMenuId, L"导出 TSV（隐私脱敏）...");

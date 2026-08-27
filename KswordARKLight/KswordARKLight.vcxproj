@@ -242,6 +242,7 @@
     <ClCompile Include="Ui\Controls.cpp" />
     <ClCompile Include="Ui\EntityNavigation.cpp" />
     <ClCompile Include="Ui\EvidenceSession.cpp" />
+    <ClCompile Include="Ui\EvidenceSessionView.cpp" />
     <ClCompile Include="Ui\ExportUtil.cpp" />
     <ClCompile Include="Ui\FilterBar.cpp" />
     <ClCompile Include="Ui\IconUtil.cpp" />
@@ -445,6 +446,7 @@
     <ClInclude Include="Ui\Controls.h" />
     <ClInclude Include="Ui\EntityNavigation.h" />
     <ClInclude Include="Ui\EvidenceSession.h" />
+    <ClInclude Include="Ui\EvidenceSessionView.h" />
     <ClInclude Include="Ui\ExportUtil.h" />
     <ClInclude Include="Ui\AsyncTask.h" />
     <ClInclude Include="Ui\FilterBar.h" />
