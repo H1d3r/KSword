@@ -74,6 +74,7 @@ struct RegistrySearchHit {
 struct RegistrySearchCounters {
     std::size_t visitedKeyCount = 0;
     std::size_t visitedValueCount = 0;
+    // Includes bounded RegEnumKeyEx attempts, including a no-more-items probe.
     std::size_t inspectedSubKeyCount = 0;
     std::size_t matchedKeyCount = 0;
     std::size_t matchedValueCount = 0;

@@ -117,8 +117,8 @@ void AppendTsvHit(std::wstring& output, const RegistrySearchHit& hit) {
 std::wstring CountText(const RegistrySearchSnapshot& snapshot) {
     std::wstring text = L"已扫描 " + std::to_wstring(snapshot.counters.visitedKeyCount) +
         L" 个键、" + std::to_wstring(snapshot.counters.visitedValueCount) +
-        L" 个值；检查 " + std::to_wstring(snapshot.counters.inspectedSubKeyCount) +
-        L" 个子键条目；命中 " + std::to_wstring(snapshot.hits.size()) + L" 项";
+        L" 个值；进行了 " + std::to_wstring(snapshot.counters.inspectedSubKeyCount) +
+        L" 次子键枚举；命中 " + std::to_wstring(snapshot.hits.size()) + L" 项";
     if (snapshot.counters.readFailureCount != 0U) {
         text += L"；跳过 " + std::to_wstring(snapshot.counters.readFailureCount) + L" 个不可读项";
     }
