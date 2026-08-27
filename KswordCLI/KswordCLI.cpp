@@ -1191,6 +1191,8 @@ namespace
         { L"kernel", L"hooks", L"KswordCLI.exe kernel hooks [--flags 0xN] [--max-entries N] [--module NAME] [--limit N]", L"Alias-style inline hook scan.", L"Optional: --flags, --max-entries, --module, --limit.", L"" },
         { L"callback", L"set-rules", L"KswordCLI.exe callback set-rules --blob PATH", L"Load callback rule bytes.", L"Required: --blob.", L"" },
         { L"callback", L"runtime-state", L"KswordCLI.exe callback runtime-state", L"Query callback runtime state.", L"No options.", L"" },
+        { L"callback", L"monitor-status", L"KswordCLI.exe callback monitor-status", L"Query callback monitor capture state and ring counters.", L"No options.", L"Backed by IOCTL_KSWORD_ARK_CALLBACK_MONITOR_QUERY." },
+        { L"callback", L"monitor-read", L"KswordCLI.exe callback monitor-read [--after-sequence N] [--max-records N] [--limit N]", L"Read callback monitor records through an independent cursor.", L"Optional: --after-sequence, --max-records, --limit.", L"Backed by IOCTL_KSWORD_ARK_CALLBACK_MONITOR_READ; use next_sequence for the next read." },
         { L"callback", L"wait-event", L"KswordCLI.exe callback wait-event [--waiter-tag N]", L"Wait for one callback event packet.", L"Optional: --waiter-tag.", L"" },
         { L"callback", L"answer-event", L"KswordCLI.exe callback answer-event --event-guid GUID --decision N --source-session-id N [--answered-at UTC100NS]", L"Answer one pending callback event.", L"Required: --event-guid, --decision, --source-session-id. Optional: --answered-at.", L"" },
         { L"callback", L"cancel-pending", L"KswordCLI.exe callback cancel-pending", L"Cancel all pending callback decisions.", L"No options.", L"" },
@@ -5408,6 +5410,10 @@ namespace
     {
         if (argc < 3) { std::wcerr << L"error: callback requires a subcommand\n"; return 1; }
         const std::wstring sub = argv[2];
+        if (sub == L"monitor-status" || sub == L"monitor-read")
+        {
+            return commandArkDriverCallbackMonitor(argc, argv);
+        }
         const NamedArgs args = parseNamedArgs(argc, argv, 3);
         IoctlResult io{};
 
