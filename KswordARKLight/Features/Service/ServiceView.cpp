@@ -3,8 +3,10 @@
 #include "ServiceActions.h"
 #include "ServiceEnumerator.h"
 #include "ServiceModel.h"
+#include "../File/PathNavigator.h"
 #include "../../Ui/AsyncTask.h"
 #include "../../Ui/Controls.h"
+#include "../../Ui/EntityNavigation.h"
 #include "../../Ui/FilterBar.h"
 #include "../../Ui/ListViewUtil.h"
 #include "../../Ui/LoadingOverlay.h"
@@ -48,6 +50,8 @@ constexpr UINT kMenuCopyRow = 64605;
 constexpr UINT kMenuCopyVisible = 64606;
 constexpr UINT kMenuCopyDetail = 64607;
 constexpr UINT kMenuRefresh = 64608;
+constexpr UINT kMenuOpenProcess = 64609;
+constexpr UINT kMenuOpenConfiguredImageDirectory = 64610;
 
 constexpr UINT kMsgRefreshCompleted = WM_APP + 640;
 constexpr UINT kMsgFilterCompleted = WM_APP + 641;
@@ -604,7 +608,67 @@ std::wstring DetailAsText(const ServiceViewState& state) {
     return text;
 }
 
+void OpenSelectedServiceProcess(ServiceViewState& state) {
+    const ServiceEntry* entry = SelectedEntry(state);
+    if (!entry || !entry->hasStatus || entry->processId == 0U) {
+        state.statusText = L"服务快照没有可导航的运行 PID。";
+        ::InvalidateRect(state.hwnd, nullptr, TRUE);
+        return;
+    }
+    const DWORD processId = entry->processId;
+    Ksword::Core::NavigationRequest request{};
+    request.target = Ksword::Core::NavigationTarget::ProcessDetails;
+    request.entity.kind = Ksword::Core::EntityKind::Process;
+    request.entity.id = processId;
+    const bool routed = Ksword::Ui::RequestEntityNavigation(state.hwnd, request);
+    state.statusText = routed
+        ? L"已请求打开当前 PID " + std::to_wstring(processId) + L" 的进程详细信息；服务快照归属会重新校验。"
+        : L"无法导航到该服务快照的当前进程实例。";
+    ::InvalidateRect(state.hwnd, nullptr, TRUE);
+}
+
+void OpenSelectedServiceImageDirectory(ServiceViewState& state) {
+    const ServiceEntry* entry = SelectedEntry(state);
+    if (!entry || !entry->hasConfig) {
+        state.statusText = L"服务配置不可用，无法定位配置映像。";
+        ::InvalidateRect(state.hwnd, nullptr, TRUE);
+        return;
+    }
+    const std::wstring imagePath = ResolveServiceImagePathForBrowser(entry->binaryPath);
+    const std::wstring directory =
+        Ksword::Features::File::PathNavigator::parentDirectoryForKnownFilePath(imagePath);
+    if (directory.empty()) {
+        state.statusText = L"服务配置映像不是可精确导航的 DOS/UNC 文件路径。";
+        ::InvalidateRect(state.hwnd, nullptr, TRUE);
+        return;
+    }
+    Ksword::Core::NavigationRequest request{};
+    request.target = Ksword::Core::NavigationTarget::FileBrowser;
+    request.entity.kind = Ksword::Core::EntityKind::File;
+    request.entity.text = directory;
+    const bool routed = Ksword::Ui::RequestEntityNavigation(state.hwnd, request);
+    state.statusText = routed
+        ? L"已在文件模块打开服务配置映像所在目录。"
+        : L"文件模块当前无法接收服务配置映像所在目录。";
+    ::InvalidateRect(state.hwnd, nullptr, TRUE);
+}
+
 void ShowServiceContextMenu(ServiceViewState& state, POINT screenPoint) {
+    const HWND list = state.serviceList.hwnd();
+    if (!list) {
+        return;
+    }
+    POINT clientPoint = screenPoint;
+    ::ScreenToClient(list, &clientPoint);
+    LVHITTESTINFO hit{};
+    hit.pt = clientPoint;
+    const int hitRow = ListView_SubItemHitTest(list, &hit);
+    if (hitRow >= 0 && (ListView_GetItemState(list, hitRow, LVIS_SELECTED) & LVIS_SELECTED) == 0) {
+        ListView_SetItemState(list, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
+        ListView_SetItemState(list, hitRow, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+        RefreshSelectionDependentUi(state);
+    }
+
     const ServiceEntry* entry = SelectedEntry(state);
     HMENU menu = ::CreatePopupMenu();
     if (!menu) {
@@ -615,6 +679,12 @@ void ShowServiceContextMenu(ServiceViewState& state, POINT screenPoint) {
     const UINT stopFlags = MF_STRING | ((entry && ServiceCanStop(*entry) && !busy) ? MF_ENABLED : MF_GRAYED);
     const UINT pauseFlags = MF_STRING | ((entry && ServiceCanPause(*entry) && !busy) ? MF_ENABLED : MF_GRAYED);
     const UINT continueFlags = MF_STRING | ((entry && ServiceCanContinue(*entry) && !busy) ? MF_ENABLED : MF_GRAYED);
+    const bool canOpenProcess = entry != nullptr && entry->hasStatus && entry->processId != 0U;
+    const std::wstring imagePath = entry && entry->hasConfig
+        ? ResolveServiceImagePathForBrowser(entry->binaryPath)
+        : std::wstring{};
+    const bool canOpenConfiguredImageDirectory =
+        !Ksword::Features::File::PathNavigator::parentDirectoryForKnownFilePath(imagePath).empty();
     ::AppendMenuW(menu, startFlags, kMenuStart, L"启动");
     ::AppendMenuW(menu, stopFlags, kMenuStop, L"停止");
     ::AppendMenuW(menu, pauseFlags, kMenuPause, L"暂停");
@@ -624,6 +694,14 @@ void ShowServiceContextMenu(ServiceViewState& state, POINT screenPoint) {
     ::AppendMenuW(menu, MF_STRING, kMenuCopyVisible, L"复制可见行");
     ::AppendMenuW(menu, MF_STRING | (entry ? MF_ENABLED : MF_GRAYED), kMenuCopyDetail, L"复制详情");
     ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    HMENU investigationMenu = ::CreatePopupMenu();
+    if (investigationMenu) {
+        ::AppendMenuW(investigationMenu, MF_STRING | (canOpenProcess ? 0U : MF_GRAYED),
+            kMenuOpenProcess, L"打开当前 PID 的进程详情");
+        ::AppendMenuW(investigationMenu, MF_STRING | (canOpenConfiguredImageDirectory ? 0U : MF_GRAYED),
+            kMenuOpenConfiguredImageDirectory, L"打开配置映像所在目录");
+        ::AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(investigationMenu), L"关联调查");
+    }
     ::AppendMenuW(menu, MF_STRING, kMenuRefresh, L"刷新");
 
     const int command = ::TrackPopupMenu(
@@ -654,6 +732,12 @@ void ShowServiceContextMenu(ServiceViewState& state, POINT screenPoint) {
     case kMenuCopyDetail:
         state.statusText = CopyText(state.hwnd, DetailAsText(state)) ? L"已复制详情。" : L"复制失败。";
         ::InvalidateRect(state.hwnd, nullptr, TRUE);
+        break;
+    case kMenuOpenProcess:
+        OpenSelectedServiceProcess(state);
+        break;
+    case kMenuOpenConfiguredImageDirectory:
+        OpenSelectedServiceImageDirectory(state);
         break;
     case kMenuRefresh:
         BeginServiceRefresh(state);

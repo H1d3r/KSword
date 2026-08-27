@@ -20,4 +20,10 @@ ServiceEnumerationResult EnumerateServices();
 // service has since been deleted or became unreadable.
 ServiceEnumerationResult QuerySingleService(const std::wstring& serviceName);
 
+// ResolveServiceImagePathForBrowser extracts the configured service image from
+// an SCM binary command line, reuses the enumerator's existing system-root
+// resolution rules, and returns a path candidate for a strict FileBrowser
+// parent-directory route. It performs no file existence probe.
+std::wstring ResolveServiceImagePathForBrowser(const std::wstring& binaryPath);
+
 } // namespace Ksword::Features::Service

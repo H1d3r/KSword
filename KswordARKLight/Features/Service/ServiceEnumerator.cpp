@@ -242,6 +242,10 @@ ServiceEntry BuildEntry(const ks::service::ServiceRecord& record) {
 
 } // namespace
 
+std::wstring ResolveServiceImagePathForBrowser(const std::wstring& binaryPath) {
+    return ResolveImagePath(ExecutablePathFromCommandLine(binaryPath));
+}
+
 ServiceEnumerationResult EnumerateServices() {
     ServiceEnumerationResult result{};
 

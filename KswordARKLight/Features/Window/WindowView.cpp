@@ -3,6 +3,7 @@
 #include "WindowActions.h"
 #include "WindowEnumerator.h"
 #include "WindowModel.h"
+#include "../File/PathNavigator.h"
 #include "../WindowTools/WindowToolsHierarchyView.h"
 #include "../../../Ksword5.1/Ksword5.1/ArkDriverClient/ArkDriverClient.h"
 #include "../../Ui/AsyncTask.h"
@@ -12,6 +13,7 @@
 #include "../../Ui/ListViewUtil.h"
 #include "../../Ui/LoadingOverlay.h"
 #include "../../Ui/Theme.h"
+#include "../../Ui/EntityNavigation.h"
 #include "../../Ui/VirtualListView.h"
 
 #include <commctrl.h>
@@ -62,6 +64,8 @@ constexpr UINT kWindowMenuCopyDetailVisible = 62613;
 constexpr UINT kWindowMenuAllowCapture = 62614;
 constexpr UINT kWindowMenuBlockCapture = 62615;
 constexpr UINT kWindowMenuExcludeFromCapture = 62616;
+constexpr UINT kWindowMenuOpenProcess = 62617;
+constexpr UINT kWindowMenuOpenImageDirectory = 62618;
 constexpr UINT kMsgWindowRefreshCompleted = WM_APP + 610;
 constexpr UINT kMsgWindowFilterCompleted = WM_APP + 611;
 constexpr UINT kMsgWindowDetailCompleted = WM_APP + 612;
@@ -1233,6 +1237,60 @@ std::wstring CopyVirtualCell(const WindowViewState* state) {
     return rows[source].cells[static_cast<std::size_t>(state->contextColumn)];
 }
 
+// SelectedWindowSnapshot returns the currently selected retained window row
+// only in the normal window-list mode. Audit rows never pretend to carry the
+// same process-image provenance as an EnumWindows snapshot.
+const WindowSnapshotRow* SelectedWindowSnapshot(WindowViewState* state) {
+    if (!state || state->viewMode != WindowViewMode::WindowList) {
+        return nullptr;
+    }
+    return state->model.rowAt(SelectedModelIndex(state));
+}
+
+void OpenSelectedWindowProcess(WindowViewState* state) {
+    const WindowSnapshotRow* row = SelectedWindowSnapshot(state);
+    if (!state || !row || row->processId == 0U) {
+        if (state) {
+            state->statusText = L"窗口快照没有可导航的 PID。";
+            ::InvalidateRect(state->hwnd, nullptr, TRUE);
+        }
+        return;
+    }
+    const DWORD processId = row->processId;
+    Ksword::Core::NavigationRequest request{};
+    request.target = Ksword::Core::NavigationTarget::ProcessDetails;
+    request.entity.kind = Ksword::Core::EntityKind::Process;
+    request.entity.id = processId;
+    const bool routed = Ksword::Ui::RequestEntityNavigation(state->hwnd, request);
+    state->statusText = routed
+        ? L"已请求打开当前 PID " + std::to_wstring(processId) + L" 的进程详细信息；窗口快照归属会重新校验。"
+        : L"无法导航到该窗口快照的当前进程实例。";
+    ::InvalidateRect(state->hwnd, nullptr, TRUE);
+}
+
+void OpenSelectedWindowImageDirectory(WindowViewState* state) {
+    const WindowSnapshotRow* row = SelectedWindowSnapshot(state);
+    if (!state || !row) {
+        return;
+    }
+    const std::wstring directory =
+        Ksword::Features::File::PathNavigator::parentDirectoryForKnownFilePath(row->processImagePath);
+    if (directory.empty()) {
+        state->statusText = L"窗口快照中的映像路径不是可精确导航的 DOS/UNC 文件路径。";
+        ::InvalidateRect(state->hwnd, nullptr, TRUE);
+        return;
+    }
+    Ksword::Core::NavigationRequest request{};
+    request.target = Ksword::Core::NavigationTarget::FileBrowser;
+    request.entity.kind = Ksword::Core::EntityKind::File;
+    request.entity.text = directory;
+    const bool routed = Ksword::Ui::RequestEntityNavigation(state->hwnd, request);
+    state->statusText = routed
+        ? L"已在文件模块打开窗口映像所在目录。"
+        : L"文件模块当前无法接收窗口映像所在目录。";
+    ::InvalidateRect(state->hwnd, nullptr, TRUE);
+}
+
 // ShowWindowContextMenu exposes the retained Window page actions from the row
 // itself. Inputs are page state and screen coordinates; processing selects the
 // hit row when needed, groups detail/window actions into submenus, then
@@ -1258,6 +1316,10 @@ void ShowWindowContextMenu(WindowViewState* state, POINT screenPoint) {
 
     const bool hasWindow = state->viewMode == WindowViewMode::WindowList && SelectedWindow(state) != nullptr;
     const bool hasRow = ListView_GetNextItem(state->windowList, -1, LVNI_SELECTED) >= 0;
+    const WindowSnapshotRow* investigationRow = SelectedWindowSnapshot(state);
+    const bool canOpenProcess = investigationRow != nullptr && investigationRow->processId != 0U;
+    const bool canOpenImageDirectory = investigationRow != nullptr &&
+        !Ksword::Features::File::PathNavigator::parentDirectoryForKnownFilePath(investigationRow->processImagePath).empty();
     HMENU menu = ::CreatePopupMenu();
     if (!menu) {
         return;
@@ -1284,6 +1346,14 @@ void ShowWindowContextMenu(WindowViewState* state, POINT screenPoint) {
         ::AppendMenuW(captureMenu, MF_STRING | enabled, kWindowMenuBlockCapture, L"阻止屏幕捕获");
         ::AppendMenuW(captureMenu, MF_STRING | enabled, kWindowMenuExcludeFromCapture, L"从捕获中排除");
         ::AppendMenuW(menu, MF_POPUP | enabled, reinterpret_cast<UINT_PTR>(captureMenu), L"窗口捕获保护");
+    }
+    HMENU investigationMenu = ::CreatePopupMenu();
+    if (investigationMenu) {
+        ::AppendMenuW(investigationMenu, MF_STRING | (canOpenProcess ? 0U : MF_GRAYED),
+            kWindowMenuOpenProcess, L"打开当前 PID 的进程详情");
+        ::AppendMenuW(investigationMenu, MF_STRING | (canOpenImageDirectory ? 0U : MF_GRAYED),
+            kWindowMenuOpenImageDirectory, L"打开映像所在目录");
+        ::AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(investigationMenu), L"关联调查");
     }
     HMENU copyMenu = ::CreatePopupMenu();
     if (copyMenu) {
@@ -1346,6 +1416,12 @@ void ShowWindowContextMenu(WindowViewState* state, POINT screenPoint) {
         break;
     case kWindowMenuExcludeFromCapture:
         SetCaptureProtection(state, WDA_EXCLUDEFROMCAPTURE);
+        break;
+    case kWindowMenuOpenProcess:
+        OpenSelectedWindowProcess(state);
+        break;
+    case kWindowMenuOpenImageDirectory:
+        OpenSelectedWindowImageDirectory(state);
         break;
     default:
         break;
