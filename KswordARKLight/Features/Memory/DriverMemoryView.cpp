@@ -132,7 +132,7 @@ struct DriverMemoryViewState {
     MemoryWritePlan preparedWritePlan;
     bool hasPreparedWritePlan = false;
     std::shared_ptr<MemoryViewLifetime> lifetime = std::make_shared<MemoryViewLifetime>();
-    std::shared_ptr<std::atomic_bool> writebackCancellation;
+    std::shared_ptr<DriverMemoryWritebackCancellation> writebackCancellation;
     SnapshotPresentation snapshotPresentation = SnapshotPresentation::EditableHex;
     std::wstring editableHexText;
     bool hasEditableHexText = false;
@@ -810,7 +810,7 @@ void BeginApplyWritePlan(DriverMemoryViewState& state, const bool forceWrite, co
         SetStatus(state, L"没有可应用的差异计划。");
         return;
     }
-    if (firstPendingBlock > state.preparedWritePlan.blocks.size()) {
+    if (firstPendingBlock >= state.preparedWritePlan.blocks.size()) {
         InvalidatePreparedWritePlan(state);
         SetStatus(state, L"差异写回续写位置无效；请重新读取并预览差异。");
         UpdateSnapshotButtons(state);
@@ -825,7 +825,8 @@ void BeginApplyWritePlan(DriverMemoryViewState& state, const bool forceWrite, co
     }
 
     MemoryWritePlan plan = state.preparedWritePlan;
-    const std::shared_ptr<std::atomic_bool> cancellation = std::make_shared<std::atomic_bool>(false);
+    const std::shared_ptr<DriverMemoryWritebackCancellation> cancellation =
+        std::make_shared<DriverMemoryWritebackCancellation>();
     state.writebackCancellation = cancellation;
     state.operationInProgress = true;
     ::EnableWindow(state.readButton, FALSE);
@@ -1406,7 +1407,7 @@ LRESULT CALLBACK DriverMemoryViewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
             state->lifetime->alive.store(false, std::memory_order_release);
         }
         if (state && state->writebackCancellation) {
-            state->writebackCancellation->store(true, std::memory_order_release);
+            state->writebackCancellation->cancel();
         }
         if (state && state->operationTask) {
             state->operationTask->cancel();

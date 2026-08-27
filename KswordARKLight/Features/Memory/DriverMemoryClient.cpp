@@ -119,8 +119,26 @@ bool IsExactWrite(const DriverMemoryWriteResult& result, const std::size_t expec
         result.bytesWritten == expectedBytes;
 }
 
-bool IsCancellationRequested(const std::atomic_bool* cancellation) noexcept {
-    return cancellation != nullptr && cancellation->load(std::memory_order_acquire);
+bool IsCancellationRequested(const DriverMemoryWritebackCancellation* cancellation) noexcept {
+    return cancellation != nullptr && cancellation->isCancellationRequested();
+}
+
+// IssueDriverRequest holds the shared issuance gate across both the last
+// cancellation check and one blocking driver operation. Page destruction first
+// publishes cancellation, then takes the same gate to wait for any in-flight
+// request; it cannot race a new request into existence after destruction.
+template <typename Result, typename Request>
+bool IssueDriverRequest(const DriverMemoryWritebackCancellation* cancellation, Result& result, Request request) {
+    if (cancellation == nullptr) {
+        result = request();
+        return true;
+    }
+    const std::unique_lock<std::mutex> issuanceLock = cancellation->lockIssuanceGate();
+    if (cancellation->isCancellationRequested()) {
+        return false;
+    }
+    result = request();
+    return true;
 }
 
 void SetWritebackFailure(DriverMemoryWritebackResult& result,
@@ -161,6 +179,22 @@ DriverMemoryWriteResult MakeWriteValidationError(const DriverMemoryWriteRequest&
 }
 
 } // namespace
+
+void DriverMemoryWritebackCancellation::cancel() {
+    cancelled_.store(true, std::memory_order_release);
+    // Publishing cancellation before waiting closes the handoff race: a worker
+    // that releases an earlier request cannot acquire the gate for a new IOCTL.
+    const std::scoped_lock issuanceLock(issuanceGate_);
+    (void)issuanceLock;
+}
+
+bool DriverMemoryWritebackCancellation::isCancellationRequested() const noexcept {
+    return cancelled_.load(std::memory_order_acquire);
+}
+
+std::unique_lock<std::mutex> DriverMemoryWritebackCancellation::lockIssuanceGate() const {
+    return std::unique_lock<std::mutex>(issuanceGate_);
+}
 
 DriverMemoryClient::DriverMemoryClient() = default;
 
@@ -231,7 +265,7 @@ DriverMemoryWriteResult DriverMemoryClient::WriteMemory(const DriverMemoryWriteR
 DriverMemoryWritebackResult DriverMemoryClient::ApplyWritePlan(
     const MemoryWritePlan& plan,
     const bool forceWrite,
-    const std::atomic_bool* cancellation,
+    const DriverMemoryWritebackCancellation* cancellation,
     const std::size_t firstPendingBlock) {
     DriverMemoryWritebackResult result{};
     result.totalBlocks = plan.blocks.size();
@@ -250,13 +284,47 @@ DriverMemoryWritebackResult DriverMemoryClient::ApplyWritePlan(
         return result;
     }
     if (plan.blocks.empty()) {
+        if (firstPendingBlock != 0U) {
+            SetWritebackFailure(result, plan.baseAddress, L"空差异计划不接受续写位置。");
+            return result;
+        }
         result.success = true;
         result.statusText = L"差异计划没有变化字节，未发送写入请求。";
         return result;
     }
-    if (firstPendingBlock > plan.blocks.size()) {
+    if (firstPendingBlock >= plan.blocks.size()) {
         SetWritebackFailure(result, plan.baseAddress, L"差异写回续写位置超出计划范围。");
         return result;
+    }
+
+    // A normal-write prefix may have been verified before a user spends time in
+    // the separate FORCE confirmation dialog. Re-read that prefix now rather
+    // than trusting the old verification: if it changed, do not risk applying
+    // FORCE to a suffix of a no-longer-coherent snapshot.
+    std::size_t recheckedPrefixBytes = 0U;
+    for (std::size_t blockIndex = 0U; blockIndex < firstPendingBlock; ++blockIndex) {
+        const MemoryWriteBlock& block = plan.blocks[blockIndex];
+        if (IsCancellationRequested(cancellation)) {
+            SetWritebackCancelled(result, block.address, L"未继续复核已验证前缀或发送剩余块请求。");
+            return result;
+        }
+        const DriverMemoryReadRequest prefixRequest{
+            static_cast<DWORD>(plan.processId), block.address, block.desiredAfter.size() };
+        DriverMemoryReadResult prefixResult;
+        if (!IssueDriverRequest(cancellation, prefixResult, [&] { return ReadMemory(prefixRequest); })) {
+            SetWritebackCancelled(result, block.address, L"取消已生效，未继续复核已验证前缀。");
+            return result;
+        }
+        if (IsCancellationRequested(cancellation)) {
+            SetWritebackCancelled(result, block.address, L"已验证前缀复读已返回，未继续发送剩余块请求。");
+            return result;
+        }
+        if (!IsExactRead(prefixResult, block.desiredAfter)) {
+            SetWritebackFailure(result, block.address,
+                L"FORCE 续写已停止：此前已验证的普通写入块发生变化，需重新读取并预览。\r\n" + prefixResult.statusText);
+            return result;
+        }
+        recheckedPrefixBytes += block.desiredAfter.size();
     }
 
     for (std::size_t blockIndex = firstPendingBlock; blockIndex < plan.blocks.size(); ++blockIndex) {
@@ -272,7 +340,11 @@ DriverMemoryWritebackResult DriverMemoryClient::ApplyWritePlan(
 
         const DriverMemoryReadRequest preflightRequest{
             static_cast<DWORD>(plan.processId), block.address, block.expectedBefore.size() };
-        const DriverMemoryReadResult preflightResult = ReadMemory(preflightRequest);
+        DriverMemoryReadResult preflightResult;
+        if (!IssueDriverRequest(cancellation, preflightResult, [&] { return ReadMemory(preflightRequest); })) {
+            SetWritebackCancelled(result, block.address, L"取消已生效，未继续发送写前复读请求。");
+            return result;
+        }
         if (IsCancellationRequested(cancellation)) {
             SetWritebackCancelled(result, block.address, L"写前复读已返回，未继续发送写入请求。");
             return result;
@@ -291,7 +363,11 @@ DriverMemoryWritebackResult DriverMemoryClient::ApplyWritePlan(
             SetWritebackCancelled(result, block.address, L"写前复读一致，但已取消，未继续发送写入请求。");
             return result;
         }
-        const DriverMemoryWriteResult writeResult = WriteMemory(writeRequest, forceWrite);
+        DriverMemoryWriteResult writeResult;
+        if (!IssueDriverRequest(cancellation, writeResult, [&] { return WriteMemory(writeRequest, forceWrite); })) {
+            SetWritebackCancelled(result, block.address, L"取消已生效，未继续发送写入请求。");
+            return result;
+        }
         result.requestedBytes += block.desiredAfter.size();
         result.bytesWritten += writeResult.bytesWritten;
         if (IsCancellationRequested(cancellation)) {
@@ -321,7 +397,11 @@ DriverMemoryWritebackResult DriverMemoryClient::ApplyWritePlan(
             SetWritebackCancelled(result, block.address, L"写入已成功返回，未继续发送写后验证请求。");
             return result;
         }
-        const DriverMemoryReadResult verificationResult = ReadMemory(verificationRequest);
+        DriverMemoryReadResult verificationResult;
+        if (!IssueDriverRequest(cancellation, verificationResult, [&] { return ReadMemory(verificationRequest); })) {
+            SetWritebackCancelled(result, block.address, L"取消已生效，未继续发送写后验证请求。");
+            return result;
+        }
         if (IsCancellationRequested(cancellation)) {
             SetWritebackCancelled(result, block.address, L"写后验证已返回，未继续发送后续块请求。");
             return result;
@@ -340,7 +420,10 @@ DriverMemoryWritebackResult DriverMemoryClient::ApplyWritePlan(
         SetWritebackCancelled(result, plan.baseAddress, L"未发送完整快照复读请求。");
         return result;
     }
-    result.finalReadResult = ReadMemory(finalReadRequest);
+    if (!IssueDriverRequest(cancellation, result.finalReadResult, [&] { return ReadMemory(finalReadRequest); })) {
+        SetWritebackCancelled(result, plan.baseAddress, L"取消已生效，未继续发送完整快照复读请求。");
+        return result;
+    }
     if (IsCancellationRequested(cancellation)) {
         SetWritebackCancelled(result, plan.baseAddress, L"完整快照复读已返回，未将结果作为新的快照基线。");
         return result;
@@ -352,8 +435,15 @@ DriverMemoryWritebackResult DriverMemoryClient::ApplyWritePlan(
     }
 
     result.success = true;
-    result.statusText = L"差异写回完成：已验证 " + std::to_wstring(result.verifiedBlocks) + L" 个块、" +
-        std::to_wstring(result.bytesWritten) + L" 字节；完整快照复读一致。目标=" + FormatAddress(plan.baseAddress) + L"。";
+    if (firstPendingBlock == 0U) {
+        result.statusText = L"差异写回完成：已验证 " + std::to_wstring(result.verifiedBlocks) + L" 个块、" +
+            std::to_wstring(result.bytesWritten) + L" 字节；完整快照复读一致。目标=" + FormatAddress(plan.baseAddress) + L"。";
+    } else {
+        result.statusText = L"差异写回续写完成：已复核前缀 " + std::to_wstring(firstPendingBlock) + L" 个块、" +
+            std::to_wstring(recheckedPrefixBytes) + L" 字节；本次已验证 " + std::to_wstring(result.verifiedBlocks) +
+            L" 个 FORCE 块、" + std::to_wstring(result.bytesWritten) +
+            L" 字节；完整快照复读一致。目标=" + FormatAddress(plan.baseAddress) + L"。";
+    }
     return result;
 }
 

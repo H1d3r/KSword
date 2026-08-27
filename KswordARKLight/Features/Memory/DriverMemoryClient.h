@@ -4,8 +4,25 @@
 #include "MemoryWritePlan.h"
 
 #include <atomic>
+#include <mutex>
 
 namespace Ksword::Features::Memory {
+
+// DriverMemoryWritebackCancellation serializes cancellation with request
+// issuance. cancel() waits for one in-flight driver call if necessary, then
+// prevents the writeback worker from issuing another read or write request.
+// It is deliberately shared by the page and worker instead of relying on a
+// best-effort callback cancellation after the page has been destroyed.
+class DriverMemoryWritebackCancellation final {
+public:
+    void cancel();
+    bool isCancellationRequested() const noexcept;
+    std::unique_lock<std::mutex> lockIssuanceGate() const;
+
+private:
+    mutable std::mutex issuanceGate_;
+    std::atomic_bool cancelled_ = false;
+};
 
 // DriverMemoryWritebackResult describes a staged, verified plan application.
 // success means every block passed exact before/after reads and the full desired
@@ -56,14 +73,15 @@ public:
     // changed block, writes it, verifies it, then exactly re-reads the whole
     // desired snapshot. It never retries with FORCE unless forceWrite is true.
     // firstPendingBlock permits a separately confirmed FORCE continuation after
-    // an older or policy-driven driver accepted a verified normal-write prefix.
+    // an older or policy-driven driver accepted a verified normal-write prefix;
+    // that prefix is exact-rechecked before any remaining block is written.
     // cancellation is cooperative and checked before and after every driver
     // request; cancellation after a write always leaves the result requiring a
     // fresh snapshot rather than making a safety claim about target memory.
     DriverMemoryWritebackResult ApplyWritePlan(
         const MemoryWritePlan& plan,
         bool forceWrite,
-        const std::atomic_bool* cancellation = nullptr,
+        const DriverMemoryWritebackCancellation* cancellation = nullptr,
         std::size_t firstPendingBlock = 0U);
 };
 
