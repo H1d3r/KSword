@@ -438,9 +438,6 @@
     <ClCompile Include="Features\WindowTools\WindowToolsCommon.cpp">
       <Filter>Features\WindowTools</Filter>
     </ClCompile>
-    <ClCompile Include="Features\WindowTools\WindowToolsFeature.cpp">
-      <Filter>Features\WindowTools</Filter>
-    </ClCompile>
     <ClCompile Include="Features\WindowTools\WindowToolsHierarchyView.cpp">
       <Filter>Features\WindowTools</Filter>
     </ClCompile>
@@ -460,9 +457,6 @@
       <Filter>Features\NetTools</Filter>
     </ClCompile>
     <ClCompile Include="Features\NetTools\NetToolsEnumerator.cpp">
-      <Filter>Features\NetTools</Filter>
-    </ClCompile>
-    <ClCompile Include="Features\NetTools\NetToolsFeature.cpp">
       <Filter>Features\NetTools</Filter>
     </ClCompile>
     <ClCompile Include="Features\NetTools\NetToolsFirewallView.cpp">
@@ -532,6 +526,9 @@
       <Filter>Features\Window</Filter>
     </ClCompile>
     <ClCompile Include="Ui\Controls.cpp">
+      <Filter>Ui</Filter>
+    </ClCompile>
+    <ClCompile Include="Ui\ExportUtil.cpp">
       <Filter>Ui</Filter>
     </ClCompile>
     <ClCompile Include="Ui\FilterBar.cpp">
@@ -1013,9 +1010,6 @@
     <ClInclude Include="Features\WindowTools\WindowToolsCommon.h">
       <Filter>Features\WindowTools</Filter>
     </ClInclude>
-    <ClInclude Include="Features\WindowTools\WindowToolsFeature.h">
-      <Filter>Features\WindowTools</Filter>
-    </ClInclude>
     <ClInclude Include="Features\WindowTools\WindowToolsHierarchyView.h">
       <Filter>Features\WindowTools</Filter>
     </ClInclude>
@@ -1035,9 +1029,6 @@
       <Filter>Features\NetTools</Filter>
     </ClInclude>
     <ClInclude Include="Features\NetTools\NetToolsEnumerator.h">
-      <Filter>Features\NetTools</Filter>
-    </ClInclude>
-    <ClInclude Include="Features\NetTools\NetToolsFeature.h">
       <Filter>Features\NetTools</Filter>
     </ClInclude>
     <ClInclude Include="Features\NetTools\NetToolsFirewallView.h">
@@ -1110,6 +1101,9 @@
       <Filter>Resources</Filter>
     </ClInclude>
     <ClInclude Include="Ui\Controls.h">
+      <Filter>Ui</Filter>
+    </ClInclude>
+    <ClInclude Include="Ui\ExportUtil.h">
       <Filter>Ui</Filter>
     </ClInclude>
     <ClInclude Include="Ui\AsyncTask.h">

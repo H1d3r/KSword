@@ -4,6 +4,7 @@
 #include "NetToolsModel.h"
 #include "../../Ui/AsyncTask.h"
 #include "../../Ui/Controls.h"
+#include "../../Ui/ExportUtil.h"
 #include "../../Ui/FilterBar.h"
 #include "../../Ui/ListViewUtil.h"
 #include "../../Ui/LoadingOverlay.h"
@@ -33,6 +34,7 @@ constexpr int kFilterBarId = 66303;
 constexpr int kRuleListId = 66304;
 constexpr int kDetailListId = 66305;
 constexpr int kLoadingOverlayId = 66306;
+constexpr int kExportButtonId = 66307;
 
 constexpr UINT kMenuCopyRow = 66351;
 constexpr UINT kMenuCopyVisible = 66352;
@@ -69,6 +71,7 @@ struct FirewallFilterResult final {
 struct FirewallViewState final {
     HWND hwnd = nullptr;
     HWND refreshButton = nullptr;
+    HWND exportButton = nullptr;
     HWND directionCombo = nullptr;
     HWND filterBar = nullptr;
     HWND detailList = nullptr;
@@ -365,6 +368,33 @@ void BeginFirewallRefresh(FirewallViewState& state) {
         });
 }
 
+void ExportVisibleFirewallRules(FirewallViewState& state) {
+    static const std::vector<std::wstring> kColumnTitles = {
+        L"规则名称", L"方向", L"动作", L"启用", L"协议", L"本地端口", L"远端端口", L"配置文件", L"程序"
+    };
+    const std::wstring text = Ksword::Ui::BuildVisibleVirtualListTsv(kColumnTitles, state.ruleList);
+    if (text.empty()) {
+        state.statusText = L"没有可导出的当前可见防火墙规则。";
+        ::InvalidateRect(state.hwnd, nullptr, TRUE);
+        return;
+    }
+    std::wstring error;
+    switch (Ksword::Ui::SaveUtf8TextFileWithDialog(
+        state.hwnd, L"network_firewall_rules.tsv", L"导出防火墙规则",
+        L"TSV (*.tsv)\0*.tsv\0All Files (*.*)\0*.*\0", L"tsv", text, &error)) {
+    case Ksword::Ui::SaveTextFileResult::Saved:
+        state.statusText = L"已导出当前可见防火墙规则。";
+        break;
+    case Ksword::Ui::SaveTextFileResult::Cancelled:
+        state.statusText = L"已取消导出防火墙规则。";
+        break;
+    case Ksword::Ui::SaveTextFileResult::Failed:
+        state.statusText = L"导出防火墙规则失败：" + error;
+        break;
+    }
+    ::InvalidateRect(state.hwnd, nullptr, TRUE);
+}
+
 std::wstring RowsAsText(const FirewallViewState& state, bool visibleRows) {
     const auto& rows = state.ruleList.rows();
     const auto& visible = state.ruleList.visibleIndexes();
@@ -452,10 +482,13 @@ void LayoutView(FirewallViewState& state) {
     if (state.refreshButton) {
         ::MoveWindow(state.refreshButton, kGap, firstRowY, 64, kRowHeight, TRUE);
     }
+    if (state.exportButton) {
+        ::MoveWindow(state.exportButton, kGap + 64 + kGap, firstRowY, 82, kRowHeight, TRUE);
+    }
     // The combo needs room for its drop-down list, which Win32 sizes from the
     // control height rather than from the item count.
     if (state.directionCombo) {
-        ::MoveWindow(state.directionCombo, kGap + 64 + kGap, firstRowY, 120, kRowHeight * 6, TRUE);
+        ::MoveWindow(state.directionCombo, kGap + 64 + kGap + 82 + kGap, firstRowY, 120, kRowHeight * 6, TRUE);
     }
 
     const int secondRowY = firstRowY + kRowHeight + kGap;
@@ -481,6 +514,7 @@ void LayoutView(FirewallViewState& state) {
 bool CreateChildControls(FirewallViewState& state) {
     HWND hwnd = state.hwnd;
     state.refreshButton = Ksword::Ui::CreateButton(hwnd, kRefreshButtonId, L"刷新", 0, 0, 0, 0);
+    state.exportButton = Ksword::Ui::CreateButton(hwnd, kExportButtonId, L"导出 TSV", 0, 0, 0, 0);
 
     state.directionCombo = ::CreateWindowExW(0, WC_COMBOBOXW, L"",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWNLIST | CBS_HASSTRINGS,
@@ -526,7 +560,7 @@ bool CreateChildControls(FirewallViewState& state) {
     }
 
     state.loadingOverlay = Ksword::Ui::CreateLoadingOverlay(hwnd, kLoadingOverlayId, { 0, 0, 1, 1 });
-    if (!state.refreshButton || !state.filterBar || !state.detailList || !state.loadingOverlay) {
+    if (!state.refreshButton || !state.exportButton || !state.filterBar || !state.detailList || !state.loadingOverlay) {
         return false;
     }
 
@@ -592,9 +626,15 @@ LRESULT CALLBACK FirewallViewProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
                     Ksword::Ui::GetFilterBarText(state->filterBar), selectedStableKey, {});
                 return 0;
             }
-            if (notification == BN_CLICKED && id == kRefreshButtonId) {
-                BeginFirewallRefresh(*state);
-                return 0;
+            if (notification == BN_CLICKED) {
+                if (id == kRefreshButtonId) {
+                    BeginFirewallRefresh(*state);
+                    return 0;
+                }
+                if (id == kExportButtonId) {
+                    ExportVisibleFirewallRules(*state);
+                    return 0;
+                }
             }
         }
         break;

@@ -4,10 +4,10 @@
 
 namespace Ksword::Features::Window {
 
-// CreateWindowFeaturePage is the module facade for retained non-desktop window
-// management. Inputs are the dock parent HWND and bounds; processing delegates to
-// WindowView and uses EnumWindows/GetWindowInfo/GetClassName/GetWindowText inside
-// this module; output is the created child HWND or nullptr on failure.
+// CreateWindowFeaturePage creates the unified Window workspace. It owns one
+// tab host for retained window management, clipboard inspection, capture
+// protection, hierarchy diagnostics and global-hotkey probing; every page keeps
+// its own actions, filters and snapshot while the user switches tabs.
 HWND CreateWindowFeaturePage(HWND parent, const RECT& bounds);
 
 } // namespace Ksword::Features::Window

@@ -3,6 +3,7 @@
 #include "WindowToolsCommon.h"
 #include "../../Ui/AsyncTask.h"
 #include "../../Ui/Controls.h"
+#include "../../Ui/ExportUtil.h"
 #include "../../Ui/FilterBar.h"
 #include "../../Ui/ListViewUtil.h"
 #include "../../Ui/LoadingOverlay.h"
@@ -29,6 +30,7 @@ constexpr int kFilterBarId = 67202;
 constexpr int kWindowListId = 67203;
 constexpr int kReportEditId = 67204;
 constexpr int kLoadingOverlayId = 67205;
+constexpr int kExportButtonId = 67206;
 
 constexpr UINT kMenuCopyReport = 67641;
 constexpr UINT kMenuCopyRow = 67642;
@@ -69,6 +71,7 @@ struct HierarchyFilterResult final {
 struct HierarchyViewState final {
     HWND hwnd = nullptr;
     HWND refreshButton = nullptr;
+    HWND exportButton = nullptr;
     HWND filterBar = nullptr;
     HWND reportEdit = nullptr;
     HWND loadingOverlay = nullptr;
@@ -567,6 +570,24 @@ std::wstring ReportText(const HierarchyViewState& state) {
     return text;
 }
 
+void ExportVisibleRows(HierarchyViewState& state) {
+    const std::wstring text = Ksword::Ui::BuildVisibleVirtualListTsv(
+        { L"窗口句柄", L"标题", L"类名", L"PID", L"进程" }, state.windowList);
+    if (text.empty()) {
+        state.statusText = L"没有可导出的可见结果。";
+        ::InvalidateRect(state.hwnd, nullptr, TRUE);
+        return;
+    }
+    std::wstring error;
+    switch (Ksword::Ui::SaveUtf8TextFileWithDialog(state.hwnd, L"window_hierarchy.tsv", L"导出窗口层级诊断",
+        L"TSV (*.tsv)\0*.tsv\0All Files (*.*)\0*.*\0", L"tsv", text, &error)) {
+    case Ksword::Ui::SaveTextFileResult::Saved: state.statusText = L"窗口层级可见结果已导出。"; break;
+    case Ksword::Ui::SaveTextFileResult::Cancelled: state.statusText = L"已取消导出窗口层级结果。"; break;
+    case Ksword::Ui::SaveTextFileResult::Failed: state.statusText = L"导出窗口层级结果失败：" + error; break;
+    }
+    ::InvalidateRect(state.hwnd, nullptr, TRUE);
+}
+
 void ShowContextMenu(HierarchyViewState& state, const POINT screenPoint) {
     HMENU menu = ::CreatePopupMenu();
     if (!menu) {
@@ -610,8 +631,13 @@ void LayoutView(HierarchyViewState& state) {
     const int width = Width(client);
     const int height = Height(client);
 
+    int cursorX = kGap;
     if (state.refreshButton) {
-        ::MoveWindow(state.refreshButton, kGap, kGap, 64, kRowHeight, TRUE);
+        ::MoveWindow(state.refreshButton, cursorX, kGap, 64, kRowHeight, TRUE);
+    }
+    cursorX += 64 + kGap;
+    if (state.exportButton) {
+        ::MoveWindow(state.exportButton, cursorX, kGap, 78, kRowHeight, TRUE);
     }
     const int secondRowY = kGap * 2 + kRowHeight;
     if (state.filterBar) {
@@ -637,8 +663,9 @@ void LayoutView(HierarchyViewState& state) {
 bool CreateChildControls(HierarchyViewState& state) {
     HWND hwnd = state.hwnd;
     state.refreshButton = Ksword::Ui::CreateButton(hwnd, kRefreshButtonId, L"刷新", 0, 0, 0, 0);
+    state.exportButton = Ksword::Ui::CreateButton(hwnd, kExportButtonId, L"导出 TSV", 0, 0, 0, 0);
     state.filterBar = Ksword::Ui::CreateFilterBar(hwnd, kFilterBarId, L"筛选句柄、标题、类名与进程", 0, 0, 0, 0);
-    if (!state.refreshButton || !state.filterBar) {
+    if (!state.refreshButton || !state.exportButton || !state.filterBar) {
         return false;
     }
 
@@ -715,6 +742,10 @@ LRESULT CALLBACK HierarchyViewProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
             }
             if (notification == BN_CLICKED && id == kRefreshButtonId) {
                 BeginRefresh(*state);
+                return 0;
+            }
+            if (notification == BN_CLICKED && id == kExportButtonId) {
+                ExportVisibleRows(*state);
                 return 0;
             }
         }

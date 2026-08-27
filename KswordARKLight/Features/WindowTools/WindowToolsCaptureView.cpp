@@ -4,6 +4,7 @@
 #include "../../Core/Common.h"
 #include "../../Ui/AsyncTask.h"
 #include "../../Ui/Controls.h"
+#include "../../Ui/ExportUtil.h"
 #include "../../Ui/FilterBar.h"
 #include "../../Ui/ListViewUtil.h"
 #include "../../Ui/LoadingOverlay.h"
@@ -30,6 +31,7 @@ constexpr int kApplyButtonId = 67103;
 constexpr int kFilterBarId = 67104;
 constexpr int kWindowListId = 67105;
 constexpr int kLoadingOverlayId = 67106;
+constexpr int kExportButtonId = 67107;
 
 constexpr UINT kMenuApply = 67621;
 constexpr UINT kMenuCopyRow = 67622;
@@ -64,6 +66,7 @@ struct CaptureFilterResult final {
 struct CaptureViewState final {
     HWND hwnd = nullptr;
     HWND refreshButton = nullptr;
+    HWND exportButton = nullptr;
     HWND affinityCombo = nullptr;
     HWND applyButton = nullptr;
     HWND filterBar = nullptr;
@@ -262,6 +265,24 @@ void BeginRefresh(CaptureViewState& state) {
         });
 }
 
+void ExportVisibleRows(CaptureViewState& state) {
+    const std::wstring text = Ksword::Ui::BuildVisibleVirtualListTsv(
+        { L"窗口句柄", L"标题", L"类名", L"PID", L"进程", L"捕获保护", L"可见" }, state.windowList);
+    if (text.empty()) {
+        state.statusText = L"没有可导出的可见结果。";
+        ::InvalidateRect(state.hwnd, nullptr, TRUE);
+        return;
+    }
+    std::wstring error;
+    switch (Ksword::Ui::SaveUtf8TextFileWithDialog(state.hwnd, L"capture_protection.tsv", L"导出窗口捕获保护",
+        L"TSV (*.tsv)\0*.tsv\0All Files (*.*)\0*.*\0", L"tsv", text, &error)) {
+    case Ksword::Ui::SaveTextFileResult::Saved: state.statusText = L"窗口捕获保护可见结果已导出。"; break;
+    case Ksword::Ui::SaveTextFileResult::Cancelled: state.statusText = L"已取消导出窗口捕获保护结果。"; break;
+    case Ksword::Ui::SaveTextFileResult::Failed: state.statusText = L"导出窗口捕获保护结果失败：" + error; break;
+    }
+    ::InvalidateRect(state.hwnd, nullptr, TRUE);
+}
+
 DWORD SelectedAffinityChoice(const CaptureViewState& state) {
     const LRESULT selection = state.affinityCombo ? ::SendMessageW(state.affinityCombo, CB_GETCURSEL, 0, 0) : CB_ERR;
     if (selection == CB_ERR || selection < 0 ||
@@ -390,6 +411,10 @@ void LayoutView(CaptureViewState& state) {
         ::MoveWindow(state.refreshButton, cursorX, kGap, 64, kRowHeight, TRUE);
     }
     cursorX += 64 + kGap;
+    if (state.exportButton) {
+        ::MoveWindow(state.exportButton, cursorX, kGap, 78, kRowHeight, TRUE);
+    }
+    cursorX += 78 + kGap;
     // The combo needs room for its drop-down list, which Win32 sizes from the
     // control height rather than from the item count.
     if (state.affinityCombo) {
@@ -418,13 +443,14 @@ void LayoutView(CaptureViewState& state) {
 bool CreateChildControls(CaptureViewState& state) {
     HWND hwnd = state.hwnd;
     state.refreshButton = Ksword::Ui::CreateButton(hwnd, kRefreshButtonId, L"刷新", 0, 0, 0, 0);
+    state.exportButton = Ksword::Ui::CreateButton(hwnd, kExportButtonId, L"导出 TSV", 0, 0, 0, 0);
     state.applyButton = Ksword::Ui::CreateButton(hwnd, kApplyButtonId, L"应用到选中窗口", 0, 0, 0, 0);
     state.filterBar = Ksword::Ui::CreateFilterBar(hwnd, kFilterBarId, L"筛选句柄、标题、类名、进程与保护状态", 0, 0, 0, 0);
     state.affinityCombo = ::CreateWindowExW(0, WC_COMBOBOXW, L"",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWNLIST | CBS_HASSTRINGS,
         0, 0, 0, 0, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kAffinityComboId)),
         ::GetModuleHandleW(nullptr), nullptr);
-    if (!state.refreshButton || !state.applyButton || !state.filterBar || !state.affinityCombo) {
+    if (!state.refreshButton || !state.exportButton || !state.applyButton || !state.filterBar || !state.affinityCombo) {
         return false;
     }
     for (const DWORD choice : kAffinityChoices) {
@@ -499,6 +525,10 @@ LRESULT CALLBACK CaptureViewProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
             if (notification == BN_CLICKED) {
                 if (id == kRefreshButtonId) {
                     BeginRefresh(*state);
+                    return 0;
+                }
+                if (id == kExportButtonId) {
+                    ExportVisibleRows(*state);
                     return 0;
                 }
                 if (id == kApplyButtonId) {

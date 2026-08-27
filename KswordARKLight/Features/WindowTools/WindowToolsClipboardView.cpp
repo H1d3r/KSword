@@ -2,6 +2,7 @@
 
 #include "WindowToolsCommon.h"
 #include "../../Ui/Controls.h"
+#include "../../Ui/ExportUtil.h"
 #include "../../Ui/FilterBar.h"
 #include "../../Ui/ListViewUtil.h"
 #include "../../Ui/TextFindSupport.h"
@@ -28,6 +29,7 @@ constexpr int kFilterBarId = 67003;
 constexpr int kFormatListId = 67004;
 constexpr int kDetailListId = 67005;
 constexpr int kPreviewEditId = 67006;
+constexpr int kExportButtonId = 67007;
 
 constexpr UINT kMenuCopyRow = 67601;
 constexpr UINT kMenuCopyVisible = 67602;
@@ -115,6 +117,7 @@ struct ClipboardSnapshot final {
 struct ClipboardViewState final {
     HWND hwnd = nullptr;
     HWND refreshButton = nullptr;
+    HWND exportButton = nullptr;
     HWND emptyButton = nullptr;
     HWND filterBar = nullptr;
     HWND detailList = nullptr;
@@ -487,6 +490,24 @@ void RefreshClipboard(ClipboardViewState& state) {
     ::InvalidateRect(state.hwnd, nullptr, TRUE);
 }
 
+void ExportVisibleRows(ClipboardViewState& state) {
+    const std::wstring text = Ksword::Ui::BuildVisibleVirtualListTsv(
+        { L"格式 ID", L"名称", L"类别", L"数据大小", L"说明" }, state.formatList);
+    if (text.empty()) {
+        state.statusText = L"没有可导出的可见结果。";
+        ::InvalidateRect(state.hwnd, nullptr, TRUE);
+        return;
+    }
+    std::wstring error;
+    switch (Ksword::Ui::SaveUtf8TextFileWithDialog(state.hwnd, L"clipboard_formats.tsv", L"导出剪贴板格式",
+        L"TSV (*.tsv)\0*.tsv\0All Files (*.*)\0*.*\0", L"tsv", text, &error)) {
+    case Ksword::Ui::SaveTextFileResult::Saved: state.statusText = L"剪贴板可见结果已导出。"; break;
+    case Ksword::Ui::SaveTextFileResult::Cancelled: state.statusText = L"已取消导出剪贴板结果。"; break;
+    case Ksword::Ui::SaveTextFileResult::Failed: state.statusText = L"导出剪贴板结果失败：" + error; break;
+    }
+    ::InvalidateRect(state.hwnd, nullptr, TRUE);
+}
+
 // EmptyClipboardWithConfirm is the only destructive action on this page. The
 // default button is 否 so a stray Enter cannot wipe the clipboard, and the
 // prompt names the two consequences that are not obvious: the data cannot be
@@ -592,6 +613,7 @@ void LayoutView(ClipboardViewState& state) {
         cursorX += controlWidth + kGap;
     };
     place(state.refreshButton, 64);
+    place(state.exportButton, 78);
     place(state.emptyButton, 110);
 
     const int secondRowY = kGap * 2 + kRowHeight;
@@ -621,9 +643,10 @@ void LayoutView(ClipboardViewState& state) {
 bool CreateChildControls(ClipboardViewState& state) {
     HWND hwnd = state.hwnd;
     state.refreshButton = Ksword::Ui::CreateButton(hwnd, kRefreshButtonId, L"刷新", 0, 0, 0, 0);
+    state.exportButton = Ksword::Ui::CreateButton(hwnd, kExportButtonId, L"导出 TSV", 0, 0, 0, 0);
     state.emptyButton = Ksword::Ui::CreateButton(hwnd, kEmptyButtonId, L"清空剪贴板", 0, 0, 0, 0);
     state.filterBar = Ksword::Ui::CreateFilterBar(hwnd, kFilterBarId, L"筛选格式 ID、名称、类别与说明", 0, 0, 0, 0);
-    if (!state.refreshButton || !state.emptyButton || !state.filterBar) {
+    if (!state.refreshButton || !state.exportButton || !state.emptyButton || !state.filterBar) {
         return false;
     }
 
@@ -701,6 +724,10 @@ LRESULT CALLBACK ClipboardViewProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
             if (notification == BN_CLICKED) {
                 if (id == kRefreshButtonId) {
                     RefreshClipboard(*state);
+                    return 0;
+                }
+                if (id == kExportButtonId) {
+                    ExportVisibleRows(*state);
                     return 0;
                 }
                 if (id == kEmptyButtonId) {

@@ -5,6 +5,7 @@
 #include "NetToolsModel.h"
 #include "../../Ui/AsyncTask.h"
 #include "../../Ui/Controls.h"
+#include "../../Ui/ExportUtil.h"
 #include "../../Ui/FilterBar.h"
 #include "../../Ui/ListViewUtil.h"
 #include "../../Ui/LoadingOverlay.h"
@@ -35,6 +36,7 @@ constexpr int kFilterBarId = 66104;
 constexpr int kConnectionListId = 66105;
 constexpr int kDetailListId = 66106;
 constexpr int kLoadingOverlayId = 66107;
+constexpr int kExportButtonId = 66108;
 
 constexpr UINT kMenuClose = 66151;
 constexpr UINT kMenuCopyRow = 66152;
@@ -78,6 +80,7 @@ struct ConnectionActionTaskResult final {
 struct ConnectionViewState final {
     HWND hwnd = nullptr;
     HWND refreshButton = nullptr;
+    HWND exportButton = nullptr;
     HWND closeButton = nullptr;
     HWND protocolCombo = nullptr;
     HWND filterBar = nullptr;
@@ -381,6 +384,33 @@ void BeginConnectionRefresh(ConnectionViewState& state) {
         });
 }
 
+void ExportVisibleConnections(ConnectionViewState& state) {
+    static const std::vector<std::wstring> kColumnTitles = {
+        L"协议", L"本地地址", L"本地端口", L"远端地址", L"远端端口", L"状态", L"PID", L"进程名"
+    };
+    const std::wstring text = Ksword::Ui::BuildVisibleVirtualListTsv(kColumnTitles, state.connectionList);
+    if (text.empty()) {
+        state.statusText = L"没有可导出的当前可见连接。";
+        ::InvalidateRect(state.hwnd, nullptr, TRUE);
+        return;
+    }
+    std::wstring error;
+    switch (Ksword::Ui::SaveUtf8TextFileWithDialog(
+        state.hwnd, L"network_connections.tsv", L"导出连接列表",
+        L"TSV (*.tsv)\0*.tsv\0All Files (*.*)\0*.*\0", L"tsv", text, &error)) {
+    case Ksword::Ui::SaveTextFileResult::Saved:
+        state.statusText = L"已导出当前可见连接。";
+        break;
+    case Ksword::Ui::SaveTextFileResult::Cancelled:
+        state.statusText = L"已取消导出连接列表。";
+        break;
+    case Ksword::Ui::SaveTextFileResult::Failed:
+        state.statusText = L"导出连接列表失败：" + error;
+        break;
+    }
+    ::InvalidateRect(state.hwnd, nullptr, TRUE);
+}
+
 // ConfirmClose is the one prompt on this page. Deleting a TCB tears the socket
 // down without a FIN: the peer only finds out when its next send fails, whatever
 // was in flight is gone, and nothing restores it. The default button is 否 so a
@@ -547,6 +577,7 @@ void LayoutView(ConnectionViewState& state) {
         cursorX += controlWidth + kGap;
     };
     place(state.refreshButton, 64);
+    place(state.exportButton, 82);
     place(state.closeButton, 88);
     // The combo needs room for its drop-down list, which Win32 sizes from the
     // control height rather than from the item count.
@@ -577,6 +608,7 @@ void LayoutView(ConnectionViewState& state) {
 bool CreateChildControls(ConnectionViewState& state) {
     HWND hwnd = state.hwnd;
     state.refreshButton = Ksword::Ui::CreateButton(hwnd, kRefreshButtonId, L"刷新", 0, 0, 0, 0);
+    state.exportButton = Ksword::Ui::CreateButton(hwnd, kExportButtonId, L"导出 TSV", 0, 0, 0, 0);
     state.closeButton = Ksword::Ui::CreateButton(hwnd, kCloseButtonId, L"结束连接", 0, 0, 0, 0);
 
     state.protocolCombo = ::CreateWindowExW(0, WC_COMBOBOXW, L"",
@@ -622,7 +654,7 @@ bool CreateChildControls(ConnectionViewState& state) {
     }
 
     state.loadingOverlay = Ksword::Ui::CreateLoadingOverlay(hwnd, kLoadingOverlayId, { 0, 0, 1, 1 });
-    if (!state.refreshButton || !state.closeButton || !state.filterBar || !state.detailList || !state.loadingOverlay) {
+    if (!state.refreshButton || !state.exportButton || !state.closeButton || !state.filterBar || !state.detailList || !state.loadingOverlay) {
         return false;
     }
 
@@ -695,6 +727,9 @@ LRESULT CALLBACK ConnectionViewProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 switch (id) {
                 case kRefreshButtonId:
                     BeginConnectionRefresh(*state);
+                    return 0;
+                case kExportButtonId:
+                    ExportVisibleConnections(*state);
                     return 0;
                 case kCloseButtonId:
                     RunCloseConnection(*state);

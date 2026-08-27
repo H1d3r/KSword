@@ -1,0 +1,158 @@
+#include "ExportUtil.h"
+
+#include <commdlg.h>
+
+#include <algorithm>
+#include <array>
+#include <limits>
+#include <string>
+#include <vector>
+
+#pragma comment(lib, "Comdlg32.lib")
+
+namespace Ksword::Ui {
+namespace {
+
+std::wstring SanitizeTsvCell(std::wstring cell) {
+    for (wchar_t& character : cell) {
+        if (character == L'\t' || character == L'\r' || character == L'\n') {
+            character = L' ';
+        }
+    }
+    return cell;
+}
+
+void AppendTsvRow(std::wstring& output, const std::vector<std::wstring>& cells) {
+    for (std::size_t column = 0; column < cells.size(); ++column) {
+        if (column != 0) {
+            output.push_back(L'\t');
+        }
+        output += SanitizeTsvCell(cells[column]);
+    }
+    output += L"\r\n";
+}
+
+bool WriteAll(HANDLE file, const std::vector<char>& bytes, std::wstring* errorOut) {
+    std::size_t offset = 0;
+    while (offset < bytes.size()) {
+        const std::size_t remaining = bytes.size() - offset;
+        const DWORD chunk = static_cast<DWORD>((std::min)(
+            remaining, static_cast<std::size_t>((std::numeric_limits<DWORD>::max)())));
+        DWORD written = 0;
+        if (!::WriteFile(file, bytes.data() + offset, chunk, &written, nullptr) || written != chunk) {
+            if (errorOut) {
+                *errorOut = L"WriteFile 失败，错误 " + std::to_wstring(::GetLastError()) + L"。";
+            }
+            return false;
+        }
+        offset += written;
+    }
+    return true;
+}
+
+std::vector<char> ToUtf8WithBom(const std::wstring& text, std::wstring* errorOut) {
+    const int count = text.empty()
+        ? 0
+        : ::WideCharToMultiByte(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), nullptr, 0, nullptr, nullptr);
+    if (!text.empty() && count <= 0) {
+        if (errorOut) {
+            *errorOut = L"WideCharToMultiByte 失败，错误 " + std::to_wstring(::GetLastError()) + L"。";
+        }
+        return {};
+    }
+    std::vector<char> bytes;
+    bytes.reserve(3U + static_cast<std::size_t>(count));
+    bytes.insert(bytes.end(), { static_cast<char>(0xEF), static_cast<char>(0xBB), static_cast<char>(0xBF) });
+    if (count > 0) {
+        const std::size_t offset = bytes.size();
+        bytes.resize(offset + static_cast<std::size_t>(count));
+        if (::WideCharToMultiByte(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), bytes.data() + offset,
+                count, nullptr, nullptr) != count) {
+            if (errorOut) {
+                *errorOut = L"WideCharToMultiByte 失败，错误 " + std::to_wstring(::GetLastError()) + L"。";
+            }
+            return {};
+        }
+    }
+    return bytes;
+}
+
+} // namespace
+
+std::wstring BuildVisibleVirtualListTsv(
+    const std::vector<std::wstring>& columnTitles,
+    const VirtualListView& list) {
+    if (columnTitles.empty() || list.visibleIndexes().empty()) {
+        return {};
+    }
+    std::wstring output;
+    AppendTsvRow(output, columnTitles);
+    const auto& rows = list.rows();
+    for (const std::size_t index : list.visibleIndexes()) {
+        if (index < rows.size()) {
+            AppendTsvRow(output, rows[index].cells);
+        }
+    }
+    return output;
+}
+
+SaveTextFileResult SaveUtf8TextFileWithDialog(
+    HWND owner,
+    const wchar_t* suggestedFileName,
+    const wchar_t* dialogTitle,
+    const wchar_t* fileFilter,
+    const wchar_t* defaultExtension,
+    const std::wstring& text,
+    std::wstring* errorOut) {
+    if (errorOut) {
+        errorOut->clear();
+    }
+    std::array<wchar_t, MAX_PATH> path{};
+    if (suggestedFileName) {
+        ::wcsncpy_s(path.data(), path.size(), suggestedFileName, _TRUNCATE);
+    }
+    OPENFILENAMEW dialog{};
+    dialog.lStructSize = sizeof(dialog);
+    dialog.hwndOwner = owner;
+    dialog.lpstrFile = path.data();
+    dialog.nMaxFile = static_cast<DWORD>(path.size());
+    dialog.lpstrTitle = dialogTitle;
+    dialog.lpstrFilter = fileFilter;
+    dialog.lpstrDefExt = defaultExtension;
+    dialog.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+    if (!::GetSaveFileNameW(&dialog)) {
+        const DWORD error = ::CommDlgExtendedError();
+        if (error != 0 && errorOut) {
+            *errorOut = L"保存对话框失败，错误 " + std::to_wstring(error) + L"。";
+        }
+        return error == 0 ? SaveTextFileResult::Cancelled : SaveTextFileResult::Failed;
+    }
+
+    std::wstring conversionError;
+    const std::vector<char> bytes = ToUtf8WithBom(text, &conversionError);
+    if (bytes.empty()) {
+        if (errorOut) {
+            *errorOut = conversionError.empty() ? L"无法转换导出文本。" : conversionError;
+        }
+        return SaveTextFileResult::Failed;
+    }
+    HANDLE file = ::CreateFileW(path.data(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+        FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        if (errorOut) {
+            *errorOut = L"无法写入文件，错误 " + std::to_wstring(::GetLastError()) + L"。";
+        }
+        return SaveTextFileResult::Failed;
+    }
+    const bool written = WriteAll(file, bytes, errorOut);
+    const DWORD closeError = ::CloseHandle(file) ? ERROR_SUCCESS : ::GetLastError();
+    if (!written || closeError != ERROR_SUCCESS) {
+        if (written && errorOut) {
+            *errorOut = L"关闭导出文件失败，错误 " + std::to_wstring(closeError) + L"。";
+        }
+        return SaveTextFileResult::Failed;
+    }
+    return SaveTextFileResult::Saved;
+}
+
+} // namespace Ksword::Ui

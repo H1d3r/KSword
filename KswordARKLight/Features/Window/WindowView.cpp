@@ -6,6 +6,7 @@
 #include "../../../Ksword5.1/Ksword5.1/ArkDriverClient/ArkDriverClient.h"
 #include "../../Ui/AsyncTask.h"
 #include "../../Ui/Controls.h"
+#include "../../Ui/ExportUtil.h"
 #include "../../Ui/FilterBar.h"
 #include "../../Ui/ListViewUtil.h"
 #include "../../Ui/LoadingOverlay.h"
@@ -40,7 +41,8 @@ constexpr int kSortComboId = 62009;
 constexpr int kAuditModeComboId = 62010;
 constexpr int kFilterBarId = 62011;
 constexpr int kLoadingOverlayId = 62012;
-constexpr int kHeaderHeight = 62;
+constexpr int kExportButtonId = 62013;
+constexpr int kHeaderHeight = 96;
 constexpr int kGap = 6;
 constexpr int kDetailHeight = 210;
 constexpr UINT kWindowMenuRefreshDetail = 62601;
@@ -199,6 +201,7 @@ int Height(const RECT& rc) {
 struct WindowViewState {
     HWND hwnd = nullptr;
     HWND refreshButton = nullptr;
+    HWND exportButton = nullptr;
     HWND frontButton = nullptr;
     HWND restoreButton = nullptr;
     HWND minimizeButton = nullptr;
@@ -226,6 +229,39 @@ struct WindowViewState {
     std::unique_ptr<Ksword::Ui::AsyncSnapshotTask<WindowDetailSnapshot>> detailTask;
     std::unordered_map<std::wstring, int> processIconCache;
 };
+
+std::vector<std::wstring> WindowColumnTitles(const WindowViewState& state) {
+    if (state.viewMode == WindowViewMode::WindowList) {
+        return { L"进程 / PID", L"HWND", L"Title", L"Class", L"State" };
+    }
+    return { L"类别", L"数据源", L"入口 / 对象", L"状态", L"说明" };
+}
+
+void ExportVisibleRows(WindowViewState* state) {
+    if (!state) {
+        return;
+    }
+    const std::wstring text = Ksword::Ui::BuildVisibleVirtualListTsv(WindowColumnTitles(*state), state->virtualList);
+    if (text.empty()) {
+        state->statusText = L"没有可导出的可见结果。";
+        ::InvalidateRect(state->hwnd, nullptr, TRUE);
+        return;
+    }
+    std::wstring error;
+    switch (Ksword::Ui::SaveUtf8TextFileWithDialog(state->hwnd, L"window.tsv", L"导出窗口结果",
+        L"TSV (*.tsv)\0*.tsv\0All Files (*.*)\0*.*\0", L"tsv", text, &error)) {
+    case Ksword::Ui::SaveTextFileResult::Saved:
+        state->statusText = L"窗口可见结果已导出。";
+        break;
+    case Ksword::Ui::SaveTextFileResult::Cancelled:
+        state->statusText = L"已取消导出窗口结果。";
+        break;
+    case Ksword::Ui::SaveTextFileResult::Failed:
+        state->statusText = L"导出窗口结果失败：" + error;
+        break;
+    }
+    ::InvalidateRect(state->hwnd, nullptr, TRUE);
+}
 
 // AddColumn inserts one report-view column. Inputs are list HWND, column index,
 // title and width; processing sends LVM_INSERTCOLUMNW; no value is returned.
@@ -1250,12 +1286,16 @@ void LayoutView(WindowViewState* state) {
     ::MoveWindow(state->auditModeCombo, x, kGap, 180, 160, TRUE); x += 186;
     ::MoveWindow(state->sortCombo, x, kGap, 150, 160, TRUE); x += 156;
     ::MoveWindow(state->refreshButton, x, kGap, 78, 24, TRUE); x += 84;
-    ::MoveWindow(state->frontButton, x, kGap, 78, 24, TRUE); x += 84;
-    ::MoveWindow(state->restoreButton, x, kGap, 78, 24, TRUE); x += 84;
-    ::MoveWindow(state->minimizeButton, x, kGap, 78, 24, TRUE); x += 84;
-    ::MoveWindow(state->maximizeButton, x, kGap, 78, 24, TRUE); x += 84;
-    ::MoveWindow(state->closeButton, x, kGap, 78, 24, TRUE);
-    ::MoveWindow(state->filterBar, kGap, kGap + 28, std::max(100, width - (kGap * 2)), 24, TRUE);
+    ::MoveWindow(state->exportButton, x, kGap, 78, 24, TRUE);
+
+    x = kGap;
+    const int actionY = kGap + 28;
+    ::MoveWindow(state->frontButton, x, actionY, 78, 24, TRUE); x += 84;
+    ::MoveWindow(state->restoreButton, x, actionY, 78, 24, TRUE); x += 84;
+    ::MoveWindow(state->minimizeButton, x, actionY, 78, 24, TRUE); x += 84;
+    ::MoveWindow(state->maximizeButton, x, actionY, 78, 24, TRUE); x += 84;
+    ::MoveWindow(state->closeButton, x, actionY, 78, 24, TRUE); x += 84;
+    ::MoveWindow(state->filterBar, kGap, kGap * 3 + 48, std::max(100, width - kGap * 2), 24, TRUE);
 
     const int detailHeight = height > 480 ? kDetailHeight : height / 3;
     const int listTop = kHeaderHeight + kGap;
@@ -1293,6 +1333,7 @@ bool CreateChildControls(WindowViewState* state, HWND hwnd) {
         ::GetModuleHandleW(nullptr),
         nullptr);
     state->refreshButton = Ksword::Ui::CreateButton(hwnd, kRefreshButtonId, L"Refresh", 0, 0, 78, 24);
+    state->exportButton = Ksword::Ui::CreateButton(hwnd, kExportButtonId, L"导出 TSV", 0, 0, 78, 24);
     state->frontButton = Ksword::Ui::CreateButton(hwnd, kFrontButtonId, L"Front", 0, 0, 78, 24);
     state->restoreButton = Ksword::Ui::CreateButton(hwnd, kRestoreButtonId, L"Restore", 0, 0, 78, 24);
     state->minimizeButton = Ksword::Ui::CreateButton(hwnd, kMinimizeButtonId, L"Minimize", 0, 0, 78, 24);
@@ -1306,7 +1347,7 @@ bool CreateChildControls(WindowViewState* state, HWND hwnd) {
     state->detailList = ::CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | LVS_REPORT | LVS_SHOWSELALWAYS | LVS_SINGLESEL,
         0, 0, 100, 100, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kDetailListId)), ::GetModuleHandleW(nullptr), nullptr);
-    if (!state->auditModeCombo || !state->sortCombo || !state->refreshButton || !state->frontButton || !state->restoreButton || !state->minimizeButton || !state->filterBar ||
+    if (!state->auditModeCombo || !state->sortCombo || !state->refreshButton || !state->exportButton || !state->frontButton || !state->restoreButton || !state->minimizeButton || !state->filterBar ||
         !state->maximizeButton || !state->closeButton || !state->windowList || !state->detailList) {
         return false;
     }
@@ -1379,6 +1420,10 @@ bool RegisterWindowViewClass() {
             const int id = LOWORD(wParam);
             if (id == kRefreshButtonId) {
                 RefreshWindows(state);
+                return 0;
+            }
+            if (id == kExportButtonId) {
+                ExportVisibleRows(state);
                 return 0;
             }
             if (id == kAuditModeComboId && HIWORD(wParam) == CBN_SELCHANGE) {
