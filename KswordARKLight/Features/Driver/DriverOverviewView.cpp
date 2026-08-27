@@ -1,8 +1,11 @@
 #include "DriverOverviewView.h"
 
 #include "DriverActions.h"
+#include "../../Core/EntityRef.h"
+#include "../File/PathNavigator.h"
 #include "../../Ui/AsyncTask.h"
 #include "../../Ui/Controls.h"
+#include "../../Ui/EntityNavigation.h"
 #include "../../Ui/ExportUtil.h"
 #include "../../Ui/FilterBar.h"
 #include "../../Ui/ListViewUtil.h"
@@ -32,6 +35,7 @@ constexpr UINT kOverviewMenuCopyRow = 64103;
 constexpr UINT kOverviewMenuCopyName = 64104;
 constexpr UINT kOverviewMenuCopyPath = 64105;
 constexpr UINT kOverviewMenuCopyVisible = 64106;
+constexpr UINT kOverviewMenuOpenDirectory = 64107;
 constexpr UINT kMsgOverviewFilterCompleted = WM_APP + 596;
 constexpr UINT kMsgOverviewDetailCompleted = WM_APP + 597;
 constexpr wchar_t kOverviewDetailClass[] = L"KswordARKLight.DriverOverviewDetailDialog";
@@ -399,6 +403,29 @@ void ShowOverviewDetail(DriverOverviewViewState& state) {
         });
 }
 
+std::wstring DriverDirectoryForOverviewRow(const DriverOverviewRow& row) {
+    return Ksword::Features::File::PathNavigator::parentDirectoryForKnownFilePath(row.pathText);
+}
+
+// OpenOverviewDriverDirectory routes only a strict DOS/UNC parent directory.
+// Kernel, device and prefix aliases remain visible in the row but are never
+// guessed into a FileBrowser path.
+void OpenOverviewDriverDirectory(DriverOverviewViewState& state) {
+    DriverOverviewRow row;
+    if (!SelectedOverviewRow(state, &row)) {
+        return;
+    }
+    const std::wstring directory = DriverDirectoryForOverviewRow(row);
+    if (directory.empty()) {
+        return;
+    }
+    Ksword::Core::NavigationRequest request{};
+    request.target = Ksword::Core::NavigationTarget::FileBrowser;
+    request.entity.kind = Ksword::Core::EntityKind::File;
+    request.entity.text = directory;
+    Ksword::Ui::RequestEntityNavigation(state.hwnd, request);
+}
+
 std::wstring BuildOverviewTsv(const DriverOverviewViewState& state);
 
 // ShowOverviewContextMenu displays the overview right-click menu. Inputs are
@@ -411,12 +438,14 @@ void ShowOverviewContextMenu(DriverOverviewViewState& state, POINT screenPoint) 
     hit.pt = clientPoint;
     const int item = ListView_HitTest(state.listView, &hit);
     state.contextColumn = std::max(0, hit.iSubItem);
-    if (item >= 0) {
-        ListView_SetItemState(state.listView, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
+    ListView_SetItemState(state.listView, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
+    if (item >= 0 && static_cast<std::size_t>(item) < state.visibleRows.size()) {
         ListView_SetItemState(state.listView, item, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
     }
 
-    const bool hasSelection = SelectedOverviewRow(state, nullptr);
+    DriverOverviewRow selectedRow;
+    const bool hasSelection = SelectedOverviewRow(state, &selectedRow);
+    const bool hasNavigableDirectory = hasSelection && !DriverDirectoryForOverviewRow(selectedRow).empty();
     HMENU menu = ::CreatePopupMenu();
     if (!menu) {
         return;
@@ -435,11 +464,15 @@ void ShowOverviewContextMenu(DriverOverviewViewState& state, POINT screenPoint) 
         ::AppendMenuW(detailMenu, MF_STRING | (hasSelection ? 0U : MF_GRAYED), kOverviewMenuDetail, L"详细信息/R0 DriverObject");
         ::AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(detailMenu), L"详细信息");
     }
+    ::AppendMenuW(menu, MF_STRING | (hasNavigableDirectory ? 0U : MF_GRAYED),
+        kOverviewMenuOpenDirectory, L"打开驱动所在目录");
 
     const UINT command = ::TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, screenPoint.x, screenPoint.y, 0, state.hwnd, nullptr);
     ::DestroyMenu(menu);
     if (command == kOverviewMenuDetail) {
         ShowOverviewDetail(state);
+    } else if (command == kOverviewMenuOpenDirectory) {
+        OpenOverviewDriverDirectory(state);
     } else if (command == kOverviewMenuCopyCell ||
         command == kOverviewMenuCopyRow ||
         command == kOverviewMenuCopyName ||
