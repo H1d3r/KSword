@@ -89,6 +89,7 @@ private:
     void copySelectedEventRow();
     void copySelectedEventCell();
     void copyVisibleEventRows();
+    void exportVisibleEventRows();
     void copySelectedEventDetail();
     void showEventContextMenu(POINT screenPoint);
     bool handleVirtualEventDisplayInfo(NMLVDISPINFOW* displayInfo);
@@ -98,6 +99,7 @@ private:
     HWND stopButton_ = nullptr;
     HWND filterButton_ = nullptr;
     HWND clearButton_ = nullptr;
+    HWND exportButton_ = nullptr;
     HWND statusText_ = nullptr;
     HWND localFilterBar_ = nullptr;
     HWND eventList_ = nullptr;

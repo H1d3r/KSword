@@ -29,6 +29,7 @@ constexpr int kStartButtonId = 52001;
 constexpr int kStopButtonId = 52002;
 constexpr int kFilterButtonId = 52003;
 constexpr int kClearButtonId = 52004;
+constexpr int kExportButtonId = 52007;
 constexpr int kListId = 52005;
 constexpr int kLocalFilterBarId = 52006;
 constexpr UINT kStatusMessage = WM_APP + 62;
@@ -49,6 +50,7 @@ constexpr UINT kEtwMenuFilter = 52607;
 constexpr UINT kEtwMenuCopyCell = 52608;
 constexpr UINT kEtwMenuCopyVisible = 52609;
 constexpr UINT kEtwMenuOpenProcess = 52610;
+constexpr UINT kEtwMenuExportVisible = 52611;
 
 void EnsureViewClass() {
     static bool registered = false;
@@ -270,6 +272,10 @@ LRESULT EtwMonitorView::handleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             clearEventList();
             return 0;
         }
+        if (LOWORD(wParam) == kExportButtonId) {
+            exportVisibleEventRows();
+            return 0;
+        }
         break;
     case WM_NOTIFY:
         if (const auto* header = reinterpret_cast<const NMHDR*>(lParam);
@@ -362,7 +368,8 @@ void EtwMonitorView::createControls() {
     stopButton_ = Ksword::Ui::CreateButton(hwnd_, kStopButtonId, L"停止", 96, 12, 78, 28);
     filterButton_ = Ksword::Ui::CreateButton(hwnd_, kFilterButtonId, L"筛选器...", 180, 12, 96, 28);
     clearButton_ = Ksword::Ui::CreateButton(hwnd_, kClearButtonId, L"清空", 282, 12, 78, 28);
-    statusText_ = Ksword::Ui::CreateText(hwnd_, 0, L"ETW 已停止。筛选器在弹窗中配置。", 376, 18, 520, 22);
+    exportButton_ = Ksword::Ui::CreateButton(hwnd_, kExportButtonId, L"导出...", 366, 12, 88, 28);
+    statusText_ = Ksword::Ui::CreateText(hwnd_, 0, L"ETW 已停止。筛选器在弹窗中配置。", 470, 18, 520, 22);
     localFilterBar_ = Ksword::Ui::CreateFilterBar(hwnd_, kLocalFilterBarId, L"本地筛选所有事件字段和摘要", 12, 46, 320, 24);
 
     eventList_ = ::CreateWindowExW(
@@ -412,7 +419,7 @@ void EtwMonitorView::layout() {
     ::GetClientRect(hwnd_, &rc);
     const int width = rc.right - rc.left;
     const int height = rc.bottom - rc.top;
-    ::MoveWindow(statusText_, 376, 17, width - 388, 24, TRUE);
+    ::MoveWindow(statusText_, 470, 17, width - 482, 24, TRUE);
     ::MoveWindow(localFilterBar_, 12, 46, width - 24, 24, TRUE);
     ::MoveWindow(eventList_, 12, 76, width - 24, height - 88, TRUE);
 }
@@ -848,6 +855,37 @@ void EtwMonitorView::copyVisibleEventRows() {
     updateStatusText(CopyTextToClipboard(hwnd_, output.str()) ? L"已复制 ETW 可见结果。" : L"复制 ETW 可见结果失败。");
 }
 
+void EtwMonitorView::exportVisibleEventRows() {
+    const std::wstring text = BuildVisibleEtwEventsTsv(eventRows_, visibleEventIndexes_);
+    if (text.empty()) {
+        updateStatusText(L"没有可导出的 ETW 可见结果。");
+        return;
+    }
+
+    std::wstring error;
+    const Ksword::Ui::SaveTextFileResult result = Ksword::Ui::SaveUtf8TextFileWithDialog(
+        hwnd_,
+        L"ksword-arklight-etw.tsv",
+        L"导出 ETW 可见结果",
+        L"TSV 文件 (*.tsv)\0*.tsv\0所有文件 (*.*)\0*.*\0",
+        L"tsv",
+        text,
+        &error);
+    switch (result) {
+    case Ksword::Ui::SaveTextFileResult::Saved:
+        updateStatusText(L"ETW 可见结果已导出，并已记录到证据会话。");
+        break;
+    case Ksword::Ui::SaveTextFileResult::Cancelled:
+        updateStatusText(L"已取消导出 ETW 可见结果。");
+        break;
+    case Ksword::Ui::SaveTextFileResult::Failed:
+        updateStatusText(error.empty() ? L"导出 ETW 可见结果失败。" : error);
+        break;
+    default:
+        break;
+    }
+}
+
 void EtwMonitorView::copySelectedEventDetail() {
     EtwEvent eventRow;
     if (!selectedEvent(&eventRow)) {
@@ -902,6 +940,12 @@ void EtwMonitorView::showEventContextMenu(POINT screenPoint) {
         ::AppendMenuW(copyMenu, MF_STRING | (!visibleEventIndexes_.empty() ? 0U : MF_GRAYED), kEtwMenuCopyVisible, L"复制可见结果");
         ::AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(copyMenu), L"复制");
     }
+    HMENU exportMenu = ::CreatePopupMenu();
+    if (exportMenu) {
+        ::AppendMenuW(exportMenu, MF_STRING | (!visibleEventIndexes_.empty() ? 0U : MF_GRAYED),
+            kEtwMenuExportVisible, L"导出可见结果...");
+        ::AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(exportMenu), L"导出");
+    }
     HMENU sessionMenu = ::CreatePopupMenu();
     if (sessionMenu) {
         ::AppendMenuW(sessionMenu, MF_STRING | (controller_.running() ? MF_GRAYED : 0U), kEtwMenuStart, L"开始");
@@ -939,6 +983,9 @@ void EtwMonitorView::showEventContextMenu(POINT screenPoint) {
         break;
     case kEtwMenuCopyVisible:
         copyVisibleEventRows();
+        break;
+    case kEtwMenuExportVisible:
+        exportVisibleEventRows();
         break;
     case kEtwMenuClear:
         clearPendingEvents();

@@ -1,6 +1,7 @@
 #include "../KswordARKLight/Core/DriverLeasePolicy.h"
 #include "../KswordARKLight/Core/EntityRef.h"
 #include "../KswordARKLight/Features/File/PathNavigator.h"
+#include "../KswordARKLight/Features/Monitor/EtwEventModel.h"
 #include "../KswordARKLight/Features/Memory/MemorySnapshot.h"
 #include "../KswordARKLight/Features/Memory/MemoryInspection.h"
 #include "../KswordARKLight/Features/Memory/MemoryWritePlan.h"
@@ -106,6 +107,30 @@ int wmain() {
     Expect(PathNavigator::parentDirectoryForKnownFilePath(L"svchost.exe -k netsvcs").empty() &&
             PathNavigator::parentDirectoryForKnownFilePath(L"\\\\?\\C:\\Windows\\notepad.exe").empty(),
         L"known file parent rejects command and extended syntax");
+
+    Ksword::Features::Monitor::EtwEvent firstEtwEvent{};
+    firstEtwEvent.timeText = L"2026-08-27 10:00:00.000";
+    firstEtwEvent.providerText = L"Provider One";
+    firstEtwEvent.eventId = 10U;
+    firstEtwEvent.level = 4U;
+    firstEtwEvent.processId = 100U;
+    firstEtwEvent.threadId = 101U;
+    firstEtwEvent.summary = L"first summary";
+    Ksword::Features::Monitor::EtwEvent secondEtwEvent{};
+    secondEtwEvent.timeText = L"2026-08-27 10:00:01.000";
+    secondEtwEvent.providerText = L"Provider\tTwo";
+    secondEtwEvent.eventId = 20U;
+    secondEtwEvent.level = 5U;
+    secondEtwEvent.processId = 200U;
+    secondEtwEvent.threadId = 201U;
+    secondEtwEvent.summary = L"second\r\nsummary";
+    const std::wstring etwTsv = Ksword::Features::Monitor::BuildVisibleEtwEventsTsv(
+        { firstEtwEvent, secondEtwEvent }, { 1U, 0U });
+    Expect(etwTsv.find(L"PID\t时间\tProvider\tTID\tEventId\tLevel\t摘要\r\n200\t2026-08-27 10:00:01.000\tProvider Two\t201\t20\t5\tsecond  summary\r\n100") == 0U,
+        L"ETW TSV follows visible order and sanitizes cell delimiters");
+    Expect(Ksword::Features::Monitor::BuildVisibleEtwEventsTsv({ firstEtwEvent }, {}).empty() &&
+            Ksword::Features::Monitor::BuildVisibleEtwEventsTsv({ firstEtwEvent }, { 3U }).empty(),
+        L"ETW TSV rejects empty and invalid visible snapshots");
 
     MemorySnapshotHistory snapshots(2U);
     Expect(!snapshots.record(0U, 0x1000U, 4U, { 1U }, L"bad"), L"snapshot rejects missing pid");
