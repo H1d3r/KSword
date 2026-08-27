@@ -211,6 +211,8 @@
     <ClCompile Include="Features\SysTools\EventLogView.cpp" />
     <ClCompile Include="Features\SysTools\FileHolderScanner.cpp" />
     <ClCompile Include="Features\SysTools\FileHolderView.cpp" />
+    <ClCompile Include="Features\SysTools\IoctlDecoder.cpp" />
+    <ClCompile Include="Features\SysTools\IoctlDecoderView.cpp" />
     <ClCompile Include="Features\SysTools\SysToolsFeature.cpp" />
     <ClCompile Include="Features\SysTools\SystemTimeInfo.cpp" />
     <ClCompile Include="Features\SysTools\SystemTimeView.cpp" />
@@ -414,6 +416,8 @@
     <ClInclude Include="Features\SysTools\EventLogView.h" />
     <ClInclude Include="Features\SysTools\FileHolderScanner.h" />
     <ClInclude Include="Features\SysTools\FileHolderView.h" />
+    <ClInclude Include="Features\SysTools\IoctlDecoder.h" />
+    <ClInclude Include="Features\SysTools\IoctlDecoderView.h" />
     <ClInclude Include="Features\SysTools\SysToolsFeature.h" />
     <ClInclude Include="Features\SysTools\SystemTimeInfo.h" />
     <ClInclude Include="Features\SysTools\SystemTimeView.h" />

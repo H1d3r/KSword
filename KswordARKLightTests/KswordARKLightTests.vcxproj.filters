@@ -9,6 +9,7 @@
     <ClCompile Include="..\KswordARKLight\Core\EntityRef.cpp"><Filter>Production</Filter></ClCompile>
     <ClCompile Include="..\KswordARKLight\Features\File\PathNavigator.cpp"><Filter>Production</Filter></ClCompile>
     <ClCompile Include="..\KswordARKLight\Features\Monitor\EtwEventModel.cpp"><Filter>Production</Filter></ClCompile>
+    <ClCompile Include="..\KswordARKLight\Features\SysTools\IoctlDecoder.cpp"><Filter>Production</Filter></ClCompile>
     <ClCompile Include="..\KswordARKLight\Features\Memory\MemorySnapshot.cpp"><Filter>Production</Filter></ClCompile>
     <ClCompile Include="..\KswordARKLight\Features\Memory\MemoryInspection.cpp"><Filter>Production</Filter></ClCompile>
     <ClCompile Include="..\KswordARKLight\Features\Memory\MemoryWritePlan.cpp"><Filter>Production</Filter></ClCompile>
@@ -19,6 +20,7 @@
     <ClInclude Include="..\KswordARKLight\Core\EntityRef.h"><Filter>Production</Filter></ClInclude>
     <ClInclude Include="..\KswordARKLight\Features\File\PathNavigator.h"><Filter>Production</Filter></ClInclude>
     <ClInclude Include="..\KswordARKLight\Features\Monitor\EtwEventModel.h"><Filter>Production</Filter></ClInclude>
+    <ClInclude Include="..\KswordARKLight\Features\SysTools\IoctlDecoder.h"><Filter>Production</Filter></ClInclude>
     <ClInclude Include="..\KswordARKLight\Features\Memory\MemorySnapshot.h"><Filter>Production</Filter></ClInclude>
     <ClInclude Include="..\KswordARKLight\Features\Memory\MemoryInspection.h"><Filter>Production</Filter></ClInclude>
     <ClInclude Include="..\KswordARKLight\Features\Memory\MemoryWritePlan.h"><Filter>Production</Filter></ClInclude>

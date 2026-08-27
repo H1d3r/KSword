@@ -435,6 +435,12 @@
     <ClCompile Include="Features\SysTools\FileHolderView.cpp">
       <Filter>Features\SysTools</Filter>
     </ClCompile>
+    <ClCompile Include="Features\SysTools\IoctlDecoder.cpp">
+      <Filter>Features\SysTools</Filter>
+    </ClCompile>
+    <ClCompile Include="Features\SysTools\IoctlDecoderView.cpp">
+      <Filter>Features\SysTools</Filter>
+    </ClCompile>
     <ClCompile Include="Features\SysTools\SysToolsFeature.cpp">
       <Filter>Features\SysTools</Filter>
     </ClCompile>
@@ -1035,6 +1041,12 @@
       <Filter>Features\SysTools</Filter>
     </ClInclude>
     <ClInclude Include="Features\SysTools\FileHolderView.h">
+      <Filter>Features\SysTools</Filter>
+    </ClInclude>
+    <ClInclude Include="Features\SysTools\IoctlDecoder.h">
+      <Filter>Features\SysTools</Filter>
+    </ClInclude>
+    <ClInclude Include="Features\SysTools\IoctlDecoderView.h">
       <Filter>Features\SysTools</Filter>
     </ClInclude>
     <ClInclude Include="Features\SysTools\SysToolsFeature.h">

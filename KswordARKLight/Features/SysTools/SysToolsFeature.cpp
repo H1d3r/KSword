@@ -3,6 +3,7 @@
 #include "ContextMenuView.h"
 #include "EventLogView.h"
 #include "FileHolderView.h"
+#include "IoctlDecoderView.h"
 #include "SystemTimeView.h"
 #include "../../Ui/WorkspaceHost.h"
 
@@ -16,6 +17,7 @@ constexpr int kFileHolderTab = 67010;
 constexpr int kEventLogTab = 67011;
 constexpr int kContextMenuTab = 67012;
 constexpr int kSystemTimeTab = 67013;
+constexpr int kIoctlDecoderTab = 67014;
 
 } // namespace
 
@@ -29,6 +31,8 @@ HWND CreateSysToolsFeaturePage(HWND parent, const RECT& bounds) {
         [](HWND host, const RECT& pageBounds) { return CreateContextMenuView(host, pageBounds); } });
     tabs.push_back({ kSystemTimeTab, L"系统时间", L"按需采集系统时间和时区证据。",
         [](HWND host, const RECT& pageBounds) { return CreateSystemTimeView(host, pageBounds); } });
+    tabs.push_back({ kIoctlDecoderTab, L"IOCTL 解码", L"离线拆解 CTL_CODE 位字段，不访问驱动。",
+        [](HWND host, const RECT& pageBounds) { return CreateIoctlDecoderView(host, pageBounds); } });
 
     Ksword::Ui::WorkspaceOptions options{};
     options.tabControlId = 67001;

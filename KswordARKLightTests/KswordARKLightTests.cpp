@@ -2,6 +2,7 @@
 #include "../KswordARKLight/Core/EntityRef.h"
 #include "../KswordARKLight/Features/File/PathNavigator.h"
 #include "../KswordARKLight/Features/Monitor/EtwEventModel.h"
+#include "../KswordARKLight/Features/SysTools/IoctlDecoder.h"
 #include "../KswordARKLight/Features/Memory/MemorySnapshot.h"
 #include "../KswordARKLight/Features/Memory/MemoryInspection.h"
 #include "../KswordARKLight/Features/Memory/MemoryWritePlan.h"
@@ -131,6 +132,25 @@ int wmain() {
     Expect(Ksword::Features::Monitor::BuildVisibleEtwEventsTsv({ firstEtwEvent }, {}).empty() &&
             Ksword::Features::Monitor::BuildVisibleEtwEventsTsv({ firstEtwEvent }, { 3U }).empty(),
         L"ETW TSV rejects empty and invalid visible snapshots");
+
+    const auto ioctl = Ksword::Features::SysTools::DecodeIoctlCode(L" 0x222004 ");
+    Expect(ioctl.state == Ksword::Features::SysTools::IoctlDecodeState::Valid &&
+            ioctl.code == 0x00222004U && ioctl.deviceType == 0x0022U && ioctl.function == 0x0801U &&
+            ioctl.access == 0U && ioctl.method == 0U && !ioctl.common && ioctl.custom,
+        L"IOCTL decoder extracts standard CTL_CODE fields");
+    const auto ioctlBoundary = Ksword::Features::SysTools::DecodeIoctlCode(L"FFFFFFFF");
+    Expect(ioctlBoundary.state == Ksword::Features::SysTools::IoctlDecodeState::Valid &&
+            ioctlBoundary.deviceType == 0xFFFFU && ioctlBoundary.function == 0x0FFFU &&
+            ioctlBoundary.access == 3U && ioctlBoundary.method == 3U && ioctlBoundary.common && ioctlBoundary.custom,
+        L"IOCTL decoder preserves common custom and field boundaries");
+    Expect(Ksword::Features::SysTools::DecodeIoctlCode(L"").state == Ksword::Features::SysTools::IoctlDecodeState::Empty &&
+            Ksword::Features::SysTools::DecodeIoctlCode(L"0x").state == Ksword::Features::SysTools::IoctlDecodeState::Invalid &&
+            Ksword::Features::SysTools::DecodeIoctlCode(L"123456789").state == Ksword::Features::SysTools::IoctlDecodeState::Invalid &&
+            Ksword::Features::SysTools::DecodeIoctlCode(L"0x22G004").state == Ksword::Features::SysTools::IoctlDecodeState::Invalid,
+        L"IOCTL decoder rejects malformed and overflow input");
+    Expect(Ksword::Features::SysTools::BuildIoctlDecodedReport(ioctl).find(L"FILE_ANY_ACCESS") != std::wstring::npos &&
+            Ksword::Features::SysTools::BuildIoctlDecodedReport(ioctlBoundary).find(L"METHOD_NEITHER") != std::wstring::npos,
+        L"IOCTL decoder report includes standard access and method names");
 
     MemorySnapshotHistory snapshots(2U);
     Expect(!snapshots.record(0U, 0x1000U, 4U, { 1U }, L"bad"), L"snapshot rejects missing pid");
