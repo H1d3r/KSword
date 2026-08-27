@@ -1,7 +1,9 @@
 #include "WindowToolsClipboardView.h"
 
 #include "WindowToolsCommon.h"
+#include "../../Core/EntityRef.h"
 #include "../../Ui/Controls.h"
+#include "../../Ui/EntityNavigation.h"
 #include "../../Ui/ExportUtil.h"
 #include "../../Ui/FilterBar.h"
 #include "../../Ui/ListViewUtil.h"
@@ -35,6 +37,7 @@ constexpr UINT kMenuCopyRow = 67601;
 constexpr UINT kMenuCopyVisible = 67602;
 constexpr UINT kMenuCopyPreview = 67603;
 constexpr UINT kMenuRefresh = 67604;
+constexpr UINT kMenuOpenOwnerProcess = 67605;
 
 constexpr int kGap = 6;
 constexpr int kRowHeight = 24;
@@ -359,6 +362,21 @@ ClipboardSnapshot CaptureClipboardSnapshot(HWND owner) {
     return snapshot;
 }
 
+// CurrentClipboardOwnerProcessId intentionally reads the owner HWND again at
+// click time. The snapshot is useful evidence, but its HWND and PID can both be
+// stale by the time the user opens process details.
+DWORD CurrentClipboardOwnerProcessId() {
+    const HWND owner = ::GetClipboardOwner();
+    if (!owner || !::IsWindow(owner)) {
+        return 0;
+    }
+    DWORD processId = 0;
+    if (::GetWindowThreadProcessId(owner, &processId) == 0U || processId == 0U) {
+        return 0;
+    }
+    return ::GetClipboardOwner() == owner ? processId : 0U;
+}
+
 void SetDetailText(HWND list, const int row, const int column, const std::wstring& text) {
     if (column == 0) {
         LVITEMW item{};
@@ -432,6 +450,28 @@ void ShowPreviewForSelection(ClipboardViewState& state) {
         L"数据大小：" + info.sizeText + L"\r\n" +
         L"说明：" + info.note;
     ::SetWindowTextW(state.previewEdit, text.c_str());
+}
+
+// SelectRowAtPoint makes row-scoped context commands operate on the row the
+// user actually right-clicked, never on a stale selection left by filtering or
+// keyboard navigation. A click on empty space deliberately leaves no row
+// selected while keeping page-scoped actions available.
+void SelectRowAtPoint(ClipboardViewState& state, const POINT screenPoint) {
+    const HWND list = state.formatList.hwnd();
+    if (!list) {
+        return;
+    }
+    POINT clientPoint = screenPoint;
+    ::ScreenToClient(list, &clientPoint);
+    LVHITTESTINFO hit{};
+    hit.pt = clientPoint;
+    const int clickedItem = ListView_SubItemHitTest(list, &hit);
+    ListView_SetItemState(list, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
+    const auto& visible = state.formatList.visibleIndexes();
+    if (clickedItem >= 0 && static_cast<std::size_t>(clickedItem) < visible.size()) {
+        ListView_SetItemState(list, clickedItem, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+    }
+    ShowPreviewForSelection(state);
 }
 
 // ApplyFilter runs on the UI thread on purpose. The row count here is the number
@@ -508,6 +548,28 @@ void ExportVisibleRows(ClipboardViewState& state) {
     ::InvalidateRect(state.hwnd, nullptr, TRUE);
 }
 
+// OpenCurrentClipboardOwnerProcess routes only the live owner PID. The process
+// page resolves that PID again, preserving the page's current-instance contract
+// without requiring an additional source-side process handle or privilege.
+void OpenCurrentClipboardOwnerProcess(ClipboardViewState& state) {
+    const DWORD processId = CurrentClipboardOwnerProcessId();
+    if (processId == 0U) {
+        state.statusText = L"当前剪贴板没有可读取的占有者进程。";
+        ::InvalidateRect(state.hwnd, nullptr, TRUE);
+        return;
+    }
+
+    Ksword::Core::NavigationRequest request{};
+    request.target = Ksword::Core::NavigationTarget::ProcessDetails;
+    request.entity.kind = Ksword::Core::EntityKind::Process;
+    request.entity.id = processId;
+    state.statusText = Ksword::Ui::RequestEntityNavigation(state.hwnd, request)
+        ? L"已请求打开刚读取到的剪贴板占有者 PID " + std::to_wstring(processId) +
+            L" 的进程详细信息；目标页会重新确认当前进程实例。"
+        : L"无法导航到当前剪贴板占有者的进程实例。";
+    ::InvalidateRect(state.hwnd, nullptr, TRUE);
+}
+
 // EmptyClipboardWithConfirm is the only destructive action on this page. The
 // default button is 否 so a stray Enter cannot wipe the clipboard, and the
 // prompt names the two consequences that are not obvious: the data cannot be
@@ -554,14 +616,19 @@ std::wstring PreviewText(const ClipboardViewState& state) {
 }
 
 void ShowContextMenu(ClipboardViewState& state, const POINT screenPoint) {
+    SelectRowAtPoint(state, screenPoint);
     HMENU menu = ::CreatePopupMenu();
     if (!menu) {
         return;
     }
     const bool hasSelection = SelectedModelIndex(state) >= 0;
+    const bool hasCurrentOwnerProcess = CurrentClipboardOwnerProcessId() != 0U;
     ::AppendMenuW(menu, MF_STRING | (hasSelection ? MF_ENABLED : MF_GRAYED), kMenuCopyRow, L"复制选中行");
     ::AppendMenuW(menu, MF_STRING, kMenuCopyVisible, L"复制可见行");
     ::AppendMenuW(menu, MF_STRING | (hasSelection ? MF_ENABLED : MF_GRAYED), kMenuCopyPreview, L"复制预览内容");
+    ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    ::AppendMenuW(menu, MF_STRING | (hasCurrentOwnerProcess ? MF_ENABLED : MF_GRAYED),
+        kMenuOpenOwnerProcess, L"查看当前剪贴板占有者进程的详细信息");
     ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     ::AppendMenuW(menu, MF_STRING, kMenuRefresh, L"刷新");
 
@@ -583,6 +650,9 @@ void ShowContextMenu(ClipboardViewState& state, const POINT screenPoint) {
         message = CopyTextToClipboard(state.hwnd, PreviewText(state))
             ? L"已复制预览内容。" : L"复制失败。";
         break;
+    case kMenuOpenOwnerProcess:
+        OpenCurrentClipboardOwnerProcess(state);
+        return;
     case kMenuRefresh:
         RefreshClipboard(state);
         return;
