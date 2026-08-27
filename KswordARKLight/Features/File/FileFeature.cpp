@@ -1719,4 +1719,15 @@ HWND CreateFileFeaturePage(HWND parent, const RECT& bounds) {
     return hwnd;
 }
 
+bool RequestFileFeatureNavigate(HWND page, const std::wstring& path) {
+    FileFeatureHostState* state = StateFromHostWindow(page);
+    if (!state || !state->browserPage || path.empty()) {
+        return false;
+    }
+    state->currentTab = kBrowserTabIndex;
+    ::SendMessageW(state->tab, TCM_SETCURSEL, static_cast<WPARAM>(kBrowserTabIndex), 0);
+    ShowHostPages(*state);
+    return RequestFileViewNavigate(state->browserPage, path);
+}
+
 } // namespace Ksword::Features::File

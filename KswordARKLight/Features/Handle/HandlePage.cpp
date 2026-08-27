@@ -7,6 +7,7 @@
 #include "../../Ui/AsyncTask.h"
 #include "../../Ui/Controls.h"
 #include "../../Ui/FilterBar.h"
+#include "../../Ui/ExportUtil.h"
 #include "../../Ui/ListViewUtil.h"
 #include "../../Ui/LoadingOverlay.h"
 #include "../../Ui/TabUtil.h"
@@ -48,6 +49,7 @@ constexpr UINT kHandleMenuCopyVisible = 57103;
 constexpr UINT kMsgHandleRefreshCompleted = WM_APP + 574;
 constexpr UINT kMsgHandleFilterCompleted = WM_APP + 575;
 constexpr UINT kMsgHandleDetailCompleted = WM_APP + 576;
+constexpr UINT kMsgExternalProcess = WM_APP + 577;
 
 struct HandleFilterResult {
     std::uint64_t snapshotGeneration = 0;
@@ -336,31 +338,7 @@ void InsertDetailColumns(HWND list) {
 }
 
 bool CopyTextToClipboard(HWND owner, const std::wstring& text) {
-    if (text.empty() || !::OpenClipboard(owner)) {
-        return false;
-    }
-    ::EmptyClipboard();
-    const SIZE_T bytes = (text.size() + 1U) * sizeof(wchar_t);
-    HGLOBAL memory = ::GlobalAlloc(GMEM_MOVEABLE, bytes);
-    if (!memory) {
-        ::CloseClipboard();
-        return false;
-    }
-    void* target = ::GlobalLock(memory);
-    if (!target) {
-        ::GlobalFree(memory);
-        ::CloseClipboard();
-        return false;
-    }
-    std::memcpy(target, text.c_str(), bytes);
-    ::GlobalUnlock(memory);
-    if (!::SetClipboardData(CF_UNICODETEXT, memory)) {
-        ::GlobalFree(memory);
-        ::CloseClipboard();
-        return false;
-    }
-    ::CloseClipboard();
-    return true;
+    return Ksword::Ui::CopyTextToClipboard(owner, text, L"句柄审计");
 }
 
 void AppendTsvRow(std::wstring& output, const std::vector<std::wstring>& cells) {
@@ -460,6 +438,11 @@ HWND HandlePage::Create(HWND parent, const RECT& bounds) {
         delete page;
     }
     return hwnd;
+}
+
+bool HandlePage::SetProcessId(HWND page, const DWORD processId) {
+    return page && processId != 0 &&
+        ::SendMessageW(page, kMsgExternalProcess, static_cast<WPARAM>(processId), 0) != 0;
 }
 
 LRESULT CALLBACK HandlePage::WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
@@ -933,6 +916,14 @@ void HandlePage::SetStatus(const std::wstring& text) {
 
 LRESULT HandlePage::HandleMessage(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
     switch (message) {
+    case kMsgExternalProcess:
+        if (pidEdit_ && wParam != 0) {
+            const std::wstring text = std::to_wstring(static_cast<DWORD>(wParam));
+            ::SetWindowTextW(pidEdit_, text.c_str());
+            Refresh();
+            return TRUE;
+        }
+        return FALSE;
     case WM_CREATE:
         if (!Initialize(hwnd)) {
             return -1;

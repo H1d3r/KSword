@@ -1,6 +1,8 @@
 #pragma once
 
+#include "../Core/DriverLease.h"
 #include "../Core/DriverService.h"
+#include "../Core/EntityRef.h"
 #include "../Core/Privilege.h"
 #include "../Docking/DockManager.h"
 #include "../Ui/PlaceholderPage.h"
@@ -8,6 +10,7 @@
 #include "../Core/Win32Lean.h"
 
 #include <memory>
+#include <optional>
 #include <vector>
 
 namespace Ksword::App {
@@ -46,9 +49,8 @@ private:
 
     void createMenuBar();
     void createChildControls();
-    // createCommandInput creates the compact owned edit window used for command
-    // launching. There is no input; processing subclasses the edit and positions
-    // it beside the topmost menu item; no value is returned.
+    // createCommandInput creates the compact owned edit window used for typed
+    // navigation and explicit ! shell commands.
     void createCommandInput();
     void createModuleDocks();
     // createModulePlaceholderPage creates a lightweight tab body used during
@@ -91,10 +93,15 @@ private:
     // is no input; processing stores per-privilege results and updates status
     // text/tooltips without modal dialogs; no value is returned.
     void enableStartupPrivileges();
-    // executeCommandInput starts cmd.exe /k with the current edit text. There is
-    // no input; processing ignores blank input, creates a new console, clears
-    // the edit, and never waits for the child process; no value is returned.
+    // executeCommandInput parses navigation by default. Only a leading ! starts
+    // cmd.exe /k in a new console; the shell never executes ordinary search text.
     void executeCommandInput();
+    bool routeNavigation(const Ksword::Core::NavigationRequest& request);
+    bool applyNavigationToModule(int moduleIndex, const Ksword::Core::NavigationRequest& request);
+    int moduleIndexForCommandId(int commandId) const;
+    int moduleIndexForTitle(const std::wstring& query) const;
+    bool activateModule(int moduleIndex);
+    void exportEvidence(int commandId);
     void layout();
     void refreshPrivilegeText();
     void refreshDriverText(const Ksword::Core::DriverRuntimeStatus& status);
@@ -105,9 +112,8 @@ private:
     void queryDriverStatusDeferred();
     void handleUiAccessButtonClicked();
     void installDriverFromButton();
-    // stopDriverOnExit requests SCM to unload KswordARK as the Light shell is
-    // closing. There is no input; processing uses the normal service-stop
-    // path without a modal error dialog so window teardown can continue.
+    // stopDriverOnExit unloads only a driver started by Light and only after the
+    // last live Light lease is released. Pre-existing drivers remain running.
     void stopDriverOnExit();
     // requestProcessDockRefreshIfLoaded 用途：R0 驱动可用后通知已物化进程页重新枚举。
     // 处理过程：只投递刷新消息，不直接访问进程页内部控件或 R0 IOCTL。
@@ -121,12 +127,15 @@ private:
     HWND statusText_;
     HMENU mainMenu_;
     HMENU windowMenu_;
+    HMENU evidenceMenu_;
     WNDPROC commandEditProc_;
     std::unique_ptr<Ksword::Docking::DockManager> dockManager_;
     std::vector<Ksword::Ui::ModuleDescriptor> modules_;
     std::vector<DockSlot> dockSlots_;
+    std::vector<std::optional<Ksword::Core::NavigationRequest>> pendingNavigation_;
     std::vector<Ksword::Core::PrivilegeEnableResult> startupPrivilegeResults_;
     std::wstring startupPrivilegeSummary_;
+    Ksword::Core::DriverLease driverLease_;
     Ksword::Core::DriverRuntimeStatus driverStatus_;
     bool driverStatusKnown_ = false;
 };

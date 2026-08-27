@@ -60,6 +60,7 @@ constexpr UINT kMsgSnapshotCompleted = WM_APP + 560;
 constexpr UINT kMsgTreeChildrenCompleted = WM_APP + 561;
 constexpr UINT kMsgFilterCompleted = WM_APP + 562;
 constexpr UINT kMsgOperationCompleted = WM_APP + 563;
+constexpr UINT kMsgExternalNavigate = WM_APP + 564;
 constexpr int kLoadingOverlayId = 68109;
 
 struct RegistryRefreshSnapshot {
@@ -1263,6 +1264,15 @@ LRESULT CALLBACK RegistryViewProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             return 0;
         }
         break;
+    case kMsgExternalNavigate:
+        if (state && lParam != 0) {
+            const auto* path = reinterpret_cast<const std::wstring*>(lParam);
+            if (!path->empty()) {
+                NavigateTo(*state, *path);
+                return TRUE;
+            }
+        }
+        return FALSE;
     case WM_NOTIFY:
         if (state) {
             const auto* header = reinterpret_cast<const NMHDR*>(lParam);
@@ -1453,6 +1463,11 @@ HWND CreateRegistryView(HWND parent, const RECT& bounds) {
         delete state;
     }
     return hwnd;
+}
+
+bool RequestRegistryViewNavigate(HWND page, const std::wstring& path) {
+    return page && !path.empty() &&
+        ::SendMessageW(page, kMsgExternalNavigate, 0, reinterpret_cast<LPARAM>(&path)) != 0;
 }
 
 } // namespace Ksword::Features::Registry

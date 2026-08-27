@@ -13,6 +13,7 @@
 #include "../../Ui/TabUtil.h"
 #include "../../Ui/Theme.h"
 #include "../../Ui/VirtualListView.h"
+#include "../../Ui/WorkspaceHost.h"
 
 #include <algorithm>
 #include <commctrl.h>
@@ -85,13 +86,13 @@ struct NetworkAuditPageState final {
 
 struct NetworkViewState final {
     HWND hwnd = nullptr;
-    HWND tab = nullptr;
+    HWND workspace = nullptr;
     HWND connectionView = nullptr;
     HWND diagnosticView = nullptr;
     HWND firewallView = nullptr;
     NetworkAuditModel model;
     std::vector<std::unique_ptr<NetworkAuditPageState>> auditPages;
-    int currentTab = kConnectionTabIndex;
+    bool auditRefreshStarted = false;
     std::unique_ptr<Ksword::Ui::AsyncSnapshotTask<std::vector<NetworkAuditPage>>> refreshTask;
 };
 
@@ -131,31 +132,7 @@ void SetSummary(NetworkAuditPageState& page, const std::wstring& text) {
 }
 
 bool CopyTextToClipboard(HWND owner, const std::wstring& text) {
-    if (text.empty() || !::OpenClipboard(owner)) {
-        return false;
-    }
-    ::EmptyClipboard();
-    const SIZE_T bytes = (text.size() + 1U) * sizeof(wchar_t);
-    HGLOBAL memory = ::GlobalAlloc(GMEM_MOVEABLE, bytes);
-    if (!memory) {
-        ::CloseClipboard();
-        return false;
-    }
-    void* target = ::GlobalLock(memory);
-    if (!target) {
-        ::GlobalFree(memory);
-        ::CloseClipboard();
-        return false;
-    }
-    std::memcpy(target, text.c_str(), bytes);
-    ::GlobalUnlock(memory);
-    if (!::SetClipboardData(CF_UNICODETEXT, memory)) {
-        ::GlobalFree(memory);
-        ::CloseClipboard();
-        return false;
-    }
-    ::CloseClipboard();
-    return true;
+    return Ksword::Ui::CopyTextToClipboard(owner, text, L"网络审计");
 }
 
 std::vector<std::wstring> ColumnTitles(const NetworkAuditPage& page) {
@@ -563,90 +540,80 @@ bool RegisterNetworkAuditPageClass() {
     return registered;
 }
 
-void ShowCurrentPage(NetworkViewState& state) {
-    if (state.connectionView) {
-        ::ShowWindow(state.connectionView, state.currentTab == kConnectionTabIndex ? SW_SHOW : SW_HIDE);
-    }
-    if (state.diagnosticView) {
-        ::ShowWindow(state.diagnosticView, state.currentTab == kDiagnosticTabIndex ? SW_SHOW : SW_HIDE);
-    }
-    if (state.firewallView) {
-        ::ShowWindow(state.firewallView, state.currentTab == kFirewallTabIndex ? SW_SHOW : SW_HIDE);
-    }
-    for (const std::unique_ptr<NetworkAuditPageState>& page : state.auditPages) {
-        if (page && page->hwnd) {
-            const bool active = state.currentTab == kFirstAuditTabIndex + page->auditIndex;
-            ::ShowWindow(page->hwnd, active ? SW_SHOW : SW_HIDE);
-        }
-    }
-}
-
 void LayoutNetworkChildren(NetworkViewState& state) {
-    if (!state.tab) {
+    if (!state.workspace) {
         return;
     }
     RECT client{};
     ::GetClientRect(state.hwnd, &client);
-    constexpr int margin = 6;
-    ::MoveWindow(state.tab, margin, margin, (std::max)(100, Width(client) - margin * 2),
-        (std::max)(100, Height(client) - margin * 2), TRUE);
-    const RECT display = Ksword::Ui::GetTabDisplayRect(state.tab);
-    const HWND childViews[] = { state.connectionView, state.diagnosticView, state.firewallView };
-    for (HWND child : childViews) {
-        if (child) {
-            ::MoveWindow(child, display.left, display.top, Width(display), Height(display), TRUE);
-        }
-    }
-    for (const std::unique_ptr<NetworkAuditPageState>& page : state.auditPages) {
-        if (page && page->hwnd) {
-            ::MoveWindow(page->hwnd, display.left, display.top, Width(display), Height(display), TRUE);
-        }
-    }
-    ShowCurrentPage(state);
+    ::MoveWindow(state.workspace, 0, 0, (std::max)(1, Width(client)), (std::max)(1, Height(client)), TRUE);
 }
 
 bool CreateNetworkChildren(NetworkViewState& state) {
     if (!RegisterNetworkAuditPageClass()) {
         return false;
     }
-    state.tab = Ksword::Ui::CreateTabControl(state.hwnd, kTabControlId, 0, 0, 0, 0);
-    if (!state.tab) {
-        return false;
-    }
     constexpr const wchar_t* kTabTitles[] = {
         L"连接管理", L"网络诊断", L"防火墙规则", L"TCP/UDP R0 cross-view", L"AFD endpoint",
         L"WFP callout/filter/provider", L"NDIS protocol/filter", L"NSI / interfaces / routes"
     };
-    for (int index = 0; index < static_cast<int>(std::size(kTabTitles)); ++index) {
-        Ksword::Ui::AddTabPage(state.tab, index, { kTabTitles[index], static_cast<LPARAM>(index) });
+    state.auditPages.resize(kAuditTabCount);
+    std::vector<Ksword::Ui::WorkspaceTabDescriptor> tabs;
+    tabs.push_back({ kConnectionTabIndex, kTabTitles[kConnectionTabIndex], L"按需枚举当前 TCP/UDP 连接。",
+        [&state](HWND host, const RECT& bounds) {
+            state.connectionView = NetTools::CreateNetToolsConnectionView(host, bounds);
+            return state.connectionView;
+        } });
+    tabs.push_back({ kDiagnosticTabIndex, kTabTitles[kDiagnosticTabIndex], L"按需执行网络诊断命令。",
+        [&state](HWND host, const RECT& bounds) {
+            state.diagnosticView = NetTools::CreateNetToolsDiagnosticView(host, bounds);
+            return state.diagnosticView;
+        } });
+    tabs.push_back({ kFirewallTabIndex, kTabTitles[kFirewallTabIndex], L"按需枚举防火墙规则。",
+        [&state](HWND host, const RECT& bounds) {
+            state.firewallView = NetTools::CreateNetToolsFirewallView(host, bounds);
+            return state.firewallView;
+        } });
+    for (int auditIndex = 0; auditIndex < kAuditTabCount; ++auditIndex) {
+        const int tabId = kFirstAuditTabIndex + auditIndex;
+        tabs.push_back({ tabId, kTabTitles[tabId], L"按需创建 R0/R3 网络栈审计页。",
+            [&state, auditIndex](HWND host, const RECT& bounds) -> HWND {
+                auto page = std::make_unique<NetworkAuditPageState>();
+                page->owner = &state;
+                page->auditIndex = auditIndex;
+                page->hwnd = ::CreateWindowExW(
+                    0, kNetworkAuditPageClass, L"",
+                    WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
+                    bounds.left, bounds.top, Width(bounds), Height(bounds), host, nullptr,
+                    ::GetModuleHandleW(nullptr), page.get());
+                if (!page->hwnd) {
+                    return nullptr;
+                }
+                HWND hwnd = page->hwnd;
+                state.auditPages[static_cast<std::size_t>(auditIndex)] = std::move(page);
+                RenderAuditPage(*state.auditPages[static_cast<std::size_t>(auditIndex)]);
+                return hwnd;
+            } });
     }
-    ::SendMessageW(state.tab, TCM_SETCURSEL, kConnectionTabIndex, 0);
-    state.currentTab = kConnectionTabIndex;
-
-    RECT pageRect{ 0, 0, 100, 100 };
-    ::GetClientRect(state.tab, &pageRect);
-    TabCtrl_AdjustRect(state.tab, FALSE, &pageRect);
-    const RECT childBounds{ 0, 0, (std::max)(1, Width(pageRect)), (std::max)(1, Height(pageRect)) };
-    state.connectionView = NetTools::CreateNetToolsConnectionView(state.tab, childBounds);
-    state.diagnosticView = NetTools::CreateNetToolsDiagnosticView(state.tab, childBounds);
-    state.firewallView = NetTools::CreateNetToolsFirewallView(state.tab, childBounds);
-    if (!state.connectionView || !state.diagnosticView || !state.firewallView) {
-        return false;
-    }
-    state.auditPages.reserve(kAuditTabCount);
-    for (int index = 0; index < kAuditTabCount; ++index) {
-        auto page = std::make_unique<NetworkAuditPageState>();
-        page->owner = &state;
-        page->auditIndex = index;
-        page->hwnd = ::CreateWindowExW(0, kNetworkAuditPageClass, L"", WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
-            0, 0, Width(childBounds), Height(childBounds), state.tab, nullptr, ::GetModuleHandleW(nullptr), page.get());
-        if (!page->hwnd) {
-            return false;
+    Ksword::Ui::WorkspaceOptions options{};
+    options.tabControlId = kTabControlId;
+    options.initialTabId = kConnectionTabIndex;
+    options.margin = 6;
+    options.pageActivated = [&state](const int tabId, HWND) {
+        if (tabId >= kFirstAuditTabIndex) {
+            NetworkAuditPageState* page = AuditPageFor(state, tabId - kFirstAuditTabIndex);
+            if (page) {
+                RenderAuditPage(*page);
+            }
+            if (!state.auditRefreshStarted && state.refreshTask) {
+                state.auditRefreshStarted = true;
+                BeginNetworkRefresh(state);
+            }
         }
-        state.auditPages.push_back(std::move(page));
-    }
-    Ksword::Ui::SetWindowFontRecursive(state.hwnd);
-    return true;
+    };
+    state.workspace = Ksword::Ui::CreateWorkspaceHost(
+        state.hwnd, { 0, 0, 1, 1 }, std::move(tabs), std::move(options));
+    return state.workspace != nullptr;
 }
 
 bool RegisterNetworkViewClass() {
@@ -672,25 +639,12 @@ bool RegisterNetworkViewClass() {
             }
             state->refreshTask = std::make_unique<Ksword::Ui::AsyncSnapshotTask<std::vector<NetworkAuditPage>>>(hwnd, kMsgRefreshCompleted);
             LayoutNetworkChildren(*state);
-            BeginNetworkRefresh(*state);
             return 0;
         case WM_SIZE:
             if (state) {
                 LayoutNetworkChildren(*state);
             }
             return 0;
-        case WM_NOTIFY: {
-            const auto* header = reinterpret_cast<const NMHDR*>(lParam);
-            if (state && header && header->hwndFrom == state->tab && header->code == TCN_SELCHANGE) {
-                const LRESULT selected = ::SendMessageW(state->tab, TCM_GETCURSEL, 0, 0);
-                if (selected >= 0) {
-                    state->currentTab = static_cast<int>(selected);
-                    LayoutNetworkChildren(*state);
-                }
-                return 0;
-            }
-            break;
-        }
         case kMsgRefreshCompleted:
             if (state && state->refreshTask && state->refreshTask->consume(hwnd, wParam, lParam)) {
                 return 0;
@@ -731,6 +685,16 @@ HWND CreateNetworkFeatureView(HWND parent, const RECT& bounds) {
         delete state;
     }
     return hwnd;
+}
+
+bool RequestNetworkFeatureViewProcess(HWND view, const DWORD processId) {
+    NetworkViewState* state = NetworkStateFromWindow(view);
+    if (!state || processId == 0 || !state->workspace ||
+        !Ksword::Ui::ActivateWorkspaceHostTab(state->workspace, kConnectionTabIndex, true)) {
+        return false;
+    }
+    state->connectionView = Ksword::Ui::WorkspaceHostPage(state->workspace, kConnectionTabIndex, true);
+    return NetTools::RequestNetToolsConnectionProcessFilter(state->connectionView, processId);
 }
 
 } // namespace Ksword::Features::Network

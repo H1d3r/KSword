@@ -7,6 +7,8 @@
 #include "../ProcessDetail/ProcessDetailFeature.h"
 #include "../../Ui/Controls.h"
 #include "../../Ui/AsyncTask.h"
+#include "../../Ui/EntityNavigation.h"
+#include "../../Ui/ExportUtil.h"
 #include "../../Ui/FilterBar.h"
 #include "../../Ui/ListViewUtil.h"
 #include "../../Ui/Theme.h"
@@ -55,6 +57,7 @@ constexpr UINT kMsgRequestRefresh = WM_APP + 521;
 constexpr UINT kMsgRefreshCompleted = WM_APP + 522;
 constexpr UINT kMsgFilterCompleted = WM_APP + 523;
 constexpr UINT kMsgActionCompleted = WM_APP + 524;
+constexpr UINT kMsgOpenDetails = WM_APP + 525;
 constexpr int kTreeIndentPixels = 18;
 constexpr int kTreeIconGap = 4;
 constexpr int kTreeTextGap = 4;
@@ -99,6 +102,11 @@ struct ProcessFilterResult {
 struct ProcessViewActionResult {
     ProcessActionResult result;
     bool refreshRequired = false;
+};
+
+struct ExternalDetailRequest final {
+    DWORD processId = 0;
+    ULONGLONG expectedCreationTime100ns = 0;
 };
 
 enum class ProcessRowVisualState {
@@ -315,6 +323,42 @@ struct ProcessViewState {
     std::unique_ptr<Ksword::Ui::AsyncSnapshotTask<ProcessFilterResult>> filterTask;
     std::unique_ptr<Ksword::Ui::AsyncSnapshotTask<ProcessViewActionResult>> actionTask;
 };
+
+ULONGLONG ResolveCurrentProcessCreationTime(
+    const ProcessViewState& state,
+    const DWORD processId,
+    const ULONGLONG expectedCreationTime100ns) {
+    for (const ProcessSnapshotRow& row : state.model.rows()) {
+        if (row.processId != processId) {
+            continue;
+        }
+        if (expectedCreationTime100ns != 0U && row.creationTime100ns != expectedCreationTime100ns) {
+            return 0U;
+        }
+        if (row.creationTime100ns != 0U) {
+            return row.creationTime100ns;
+        }
+    }
+
+    HANDLE process = ::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, processId);
+    if (!process) {
+        return 0U;
+    }
+    FILETIME creation{};
+    FILETIME exit{};
+    FILETIME kernel{};
+    FILETIME user{};
+    ULARGE_INTEGER value{};
+    if (::GetProcessTimes(process, &creation, &exit, &kernel, &user)) {
+        value.LowPart = creation.dwLowDateTime;
+        value.HighPart = creation.dwHighDateTime;
+    }
+    ::CloseHandle(process);
+    if (expectedCreationTime100ns != 0U && value.QuadPart != expectedCreationTime100ns) {
+        return 0U;
+    }
+    return value.QuadPart;
+}
 
 // KernelProcessSnapshotEntry 用途：保存 ArkDriverClient R0 枚举返回的一行进程证据。
 // 调用方式：EnumerateProcessesByR0Driver 填充，ApplyDefaultHiddenProcessAudit 合并到 R3 行。
@@ -1668,34 +1712,7 @@ void ApplyR0ProcessAuditRows(std::vector<ProcessSnapshotRow>& rows, std::wstring
 // the owner HWND and text. Processing allocates CF_UNICODETEXT global memory and
 // transfers ownership to the clipboard. Return value reports success.
 bool WriteClipboardText(HWND owner, const std::wstring& text) {
-    if (text.empty() || !::OpenClipboard(owner)) {
-        return false;
-    }
-
-    const SIZE_T bytes = (text.size() + 1) * sizeof(wchar_t);
-    HGLOBAL memory = ::GlobalAlloc(GMEM_MOVEABLE, bytes);
-    if (!memory) {
-        ::CloseClipboard();
-        return false;
-    }
-
-    void* target = ::GlobalLock(memory);
-    if (!target) {
-        ::GlobalFree(memory);
-        ::CloseClipboard();
-        return false;
-    }
-    std::memcpy(target, text.c_str(), bytes);
-    ::GlobalUnlock(memory);
-
-    ::EmptyClipboard();
-    if (!::SetClipboardData(CF_UNICODETEXT, memory)) {
-        ::GlobalFree(memory);
-        ::CloseClipboard();
-        return false;
-    }
-    ::CloseClipboard();
-    return true;
+    return Ksword::Ui::CopyTextToClipboard(owner, text, L"进程模块");
 }
 
 // DetailDemandForColumns 用途：仅为当前可见深度列请求主程序进程库的额外采集。
@@ -2276,6 +2293,53 @@ void ExecuteMenuItem(ProcessViewState& state, ProcessActionId actionId) {
         return;
     }
 
+    if (actionId == ProcessActionId::OpenImageInFileModule ||
+        actionId == ProcessActionId::OpenNetworkForProcess ||
+        actionId == ProcessActionId::OpenHandlesForProcess ||
+        actionId == ProcessActionId::OpenEtwForProcess ||
+        actionId == ProcessActionId::OpenWindowsForProcess) {
+        const std::vector<int> selectedIndexes = SelectedDisplayIndexes(state);
+        if (selectedIndexes.size() != 1U || selectedIndexes.front() < 0 ||
+            static_cast<std::size_t>(selectedIndexes.front()) >= state.presentationRows.size()) {
+            SetStatus(state, L"关联调查需要单选一个进程。");
+            return;
+        }
+        const ProcessPresentationRow& selectedRow =
+            state.presentationRows[static_cast<std::size_t>(selectedIndexes.front())];
+        Ksword::Core::NavigationRequest request{};
+        request.entity.kind = Ksword::Core::EntityKind::Process;
+        request.entity.id = selectedRow.processId;
+        request.entity.creationTime100ns = selectedRow.creationTime100ns;
+        switch (actionId) {
+        case ProcessActionId::OpenImageInFileModule:
+            if (selectedRow.iconPath.empty()) {
+                SetStatus(state, L"该进程没有可用的映像路径。");
+                return;
+            }
+            request.target = Ksword::Core::NavigationTarget::FileBrowser;
+            request.entity.kind = Ksword::Core::EntityKind::File;
+            request.entity.text = selectedRow.iconPath;
+            break;
+        case ProcessActionId::OpenNetworkForProcess:
+            request.target = Ksword::Core::NavigationTarget::NetworkConnections;
+            break;
+        case ProcessActionId::OpenHandlesForProcess:
+            request.target = Ksword::Core::NavigationTarget::HandleTable;
+            break;
+        case ProcessActionId::OpenEtwForProcess:
+            request.target = Ksword::Core::NavigationTarget::EtwMonitor;
+            break;
+        case ProcessActionId::OpenWindowsForProcess:
+            request.target = Ksword::Core::NavigationTarget::WindowManager;
+            break;
+        default:
+            return;
+        }
+        const bool routed = Ksword::Ui::RequestEntityNavigation(state.hwnd, request);
+        SetStatus(state, routed ? L"已跳转到关联调查模块。" : L"关联调查模块当前无法接收该实体。");
+        return;
+    }
+
     if (actionId == ProcessActionId::R0InjectDll || actionId == ProcessActionId::R0InjectShellcode) {
         const std::vector<DWORD> pids = SelectedPids(state);
         if (pids.size() != 1) {
@@ -2332,7 +2396,12 @@ void ShowContextMenu(ProcessViewState& state, POINT screenPoint) {
         const bool immediateAction = id == ProcessActionId::CopyCell ||
             id == ProcessActionId::CopyRow ||
             id == ProcessActionId::CopyVisibleResults ||
-            id == ProcessActionId::OpenDetails;
+            id == ProcessActionId::OpenDetails ||
+            id == ProcessActionId::OpenImageInFileModule ||
+            id == ProcessActionId::OpenNetworkForProcess ||
+            id == ProcessActionId::OpenHandlesForProcess ||
+            id == ProcessActionId::OpenEtwForProcess ||
+            id == ProcessActionId::OpenWindowsForProcess;
         ::AppendMenuW(parent, MF_STRING | (enabled && (!actionRunning || immediateAction) ? 0U : MF_GRAYED), command, text);
     };
     auto appendPopup = [](HMENU parent, HMENU child, const wchar_t* text) {
@@ -2374,6 +2443,14 @@ void ShowContextMenu(ProcessViewState& state, POINT screenPoint) {
     appendAction(priorityMenu, ProcessActionId::SetPriorityRealtime, L"Realtime", hasProcessSelection);
     appendPopup(processMenu, priorityMenu, L"优先级");
     appendPopup(menu, processMenu, L"进程");
+
+    HMENU investigationMenu = ::CreatePopupMenu();
+    appendAction(investigationMenu, ProcessActionId::OpenImageInFileModule, L"在文件模块定位映像", singleProcess);
+    appendAction(investigationMenu, ProcessActionId::OpenNetworkForProcess, L"查看关联网络连接", singleProcess);
+    appendAction(investigationMenu, ProcessActionId::OpenHandlesForProcess, L"查看进程句柄", singleProcess);
+    appendAction(investigationMenu, ProcessActionId::OpenEtwForProcess, L"筛选 ETW 事件", singleProcess);
+    appendAction(investigationMenu, ProcessActionId::OpenWindowsForProcess, L"查看进程窗口", singleProcess);
+    appendPopup(menu, investigationMenu, L"关联调查");
 
     HMENU r0Menu = ::CreatePopupMenu();
     appendAction(r0Menu, ProcessActionId::R0TerminateProcess, L"R0结束进程", hasProcessSelection);
@@ -2596,6 +2673,18 @@ LRESULT CALLBACK ProcessViewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             RestartRefreshTimer(*state);
         }
         return 0;
+    case kMsgOpenDetails:
+        if (state && lParam != 0) {
+            const auto* request = reinterpret_cast<const ExternalDetailRequest*>(lParam);
+            const ULONGLONG creationTime = ResolveCurrentProcessCreationTime(
+                *state, request->processId, request->expectedCreationTime100ns);
+            if (creationTime != 0U && OpenProcessDetailWindow(hwnd, request->processId, creationTime)) {
+                SetStatus(*state, L"已按稳定进程身份打开详细信息窗口。");
+                return TRUE;
+            }
+            SetStatus(*state, L"无法确认当前 PID 对应的进程实例，已拒绝跨页打开。");
+        }
+        return FALSE;
     case kMsgRefreshCompleted:
         if (state && state->refreshTask && state->refreshTask->consume(hwnd, wParam, lParam)) {
             return 0;
@@ -2824,6 +2913,14 @@ void RequestProcessViewRefresh(HWND view) {
         // view 用途：已创建的进程页窗口；PostMessage 避免驱动状态回调同步阻塞主窗口。
         ::PostMessageW(view, kMsgRequestRefresh, 0, 0);
     }
+}
+
+bool RequestProcessViewOpenDetails(HWND view, DWORD processId, ULONGLONG expectedCreationTime100ns) {
+    if (!view || processId == 0) {
+        return false;
+    }
+    const ExternalDetailRequest request{ processId, expectedCreationTime100ns };
+    return ::SendMessageW(view, kMsgOpenDetails, 0, reinterpret_cast<LPARAM>(&request)) != 0;
 }
 
 } // namespace Ksword::Features::Process

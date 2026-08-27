@@ -6,6 +6,7 @@
 #include "../../Ui/AsyncTask.h"
 #include "../../Ui/Controls.h"
 #include "../../Ui/ExportUtil.h"
+#include "../../Ui/EntityNavigation.h"
 #include "../../Ui/FilterBar.h"
 #include "../../Ui/ListViewUtil.h"
 #include "../../Ui/LoadingOverlay.h"
@@ -21,6 +22,7 @@
 #include <cstring>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -43,10 +45,12 @@ constexpr UINT kMenuCopyRow = 66152;
 constexpr UINT kMenuCopyVisible = 66153;
 constexpr UINT kMenuCopyDetail = 66154;
 constexpr UINT kMenuRefresh = 66155;
+constexpr UINT kMenuOpenProcess = 66156;
 
 constexpr UINT kMsgRefreshCompleted = WM_APP + 670;
 constexpr UINT kMsgFilterCompleted = WM_APP + 671;
 constexpr UINT kMsgActionCompleted = WM_APP + 672;
+constexpr UINT kMsgExternalProcessFilter = WM_APP + 673;
 
 constexpr int kGap = 6;
 constexpr int kRowHeight = 24;
@@ -122,31 +126,7 @@ void SetDetailText(HWND list, int row, int column, const std::wstring& text) {
 }
 
 bool CopyText(HWND owner, const std::wstring& text) {
-    if (text.empty() || !::OpenClipboard(owner)) {
-        return false;
-    }
-    ::EmptyClipboard();
-    const SIZE_T bytes = (text.size() + 1) * sizeof(wchar_t);
-    HGLOBAL memory = ::GlobalAlloc(GMEM_MOVEABLE, bytes);
-    if (!memory) {
-        ::CloseClipboard();
-        return false;
-    }
-    void* target = ::GlobalLock(memory);
-    if (!target) {
-        ::GlobalFree(memory);
-        ::CloseClipboard();
-        return false;
-    }
-    std::memcpy(target, text.c_str(), bytes);
-    ::GlobalUnlock(memory);
-    if (!::SetClipboardData(CF_UNICODETEXT, memory)) {
-        ::GlobalFree(memory);
-        ::CloseClipboard();
-        return false;
-    }
-    ::CloseClipboard();
-    return true;
+    return Ksword::Ui::CopyTextToClipboard(owner, text, L"网络连接");
 }
 
 int SelectedModelIndex(const ConnectionViewState& state) {
@@ -279,7 +259,17 @@ void RequestConnectionFilter(ConnectionViewState& state,
             result.useRegex = useRegex;
             result.selectedStableKey = std::move(selectedStableKey);
             result.topStableKey = std::move(topStableKey);
-            result.visibleIndexes = Ksword::Ui::VirtualListView::FilterRowIndexes(*rows, result.query, useRegex);
+            constexpr std::wstring_view pidPrefix = L"pid:";
+            if (!useRegex && result.query.rfind(pidPrefix, 0) == 0) {
+                const std::wstring suffix = L"|" + result.query.substr(pidPrefix.size());
+                for (std::size_t index = 0; index < rows->size(); ++index) {
+                    if ((*rows)[index].stableKey.ends_with(suffix)) {
+                        result.visibleIndexes.push_back(index);
+                    }
+                }
+            } else {
+                result.visibleIndexes = Ksword::Ui::VirtualListView::FilterRowIndexes(*rows, result.query, useRegex);
+            }
             return result;
         },
         [&state](std::uint64_t, std::optional<ConnectionFilterResult>&& result, std::exception_ptr error) {
@@ -532,6 +522,8 @@ void ShowConnectionContextMenu(ConnectionViewState& state, POINT screenPoint) {
     ::AppendMenuW(menu, MF_STRING, kMenuCopyVisible, L"复制可见行");
     ::AppendMenuW(menu, MF_STRING | (entry ? MF_ENABLED : MF_GRAYED), kMenuCopyDetail, L"复制详情");
     ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    ::AppendMenuW(menu, MF_STRING | (entry && entry->processId != 0 ? MF_ENABLED : MF_GRAYED),
+        kMenuOpenProcess, L"打开所属进程详细信息");
     ::AppendMenuW(menu, MF_STRING, kMenuRefresh, L"刷新");
 
     const int command = ::TrackPopupMenu(
@@ -553,6 +545,18 @@ void ShowConnectionContextMenu(ConnectionViewState& state, POINT screenPoint) {
     case kMenuCopyDetail:
         state.statusText = CopyText(state.hwnd, DetailAsText(state)) ? L"已复制详情。" : L"复制失败。";
         ::InvalidateRect(state.hwnd, nullptr, TRUE);
+        break;
+    case kMenuOpenProcess:
+        if (entry && entry->processId != 0) {
+            Ksword::Core::NavigationRequest request{};
+            request.target = Ksword::Core::NavigationTarget::ProcessDetails;
+            request.entity.kind = Ksword::Core::EntityKind::Process;
+            request.entity.id = entry->processId;
+            state.statusText = Ksword::Ui::RequestEntityNavigation(state.hwnd, request)
+                ? L"已打开所属进程详细信息。"
+                : L"无法打开所属进程详细信息。";
+            ::InvalidateRect(state.hwnd, nullptr, TRUE);
+        }
         break;
     case kMenuRefresh:
         BeginConnectionRefresh(state);
@@ -693,6 +697,14 @@ LRESULT CALLBACK ConnectionViewProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             LayoutView(*state);
         }
         return 0;
+    case kMsgExternalProcessFilter:
+        if (state && wParam != 0) {
+            const std::wstring query = L"pid:" + std::to_wstring(static_cast<DWORD>(wParam));
+            Ksword::Ui::SetFilterBarText(state->filterBar, query, false);
+            RequestConnectionFilter(*state, query, {}, {});
+            return TRUE;
+        }
+        return FALSE;
     case WM_COMMAND:
         if (!state) {
             break;
@@ -842,6 +854,11 @@ HWND CreateNetToolsConnectionView(HWND parent, const RECT& bounds) {
         0, kConnectionViewClass, L"", WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
         bounds.left, bounds.top, bounds.right - bounds.left, bounds.bottom - bounds.top,
         parent, nullptr, ::GetModuleHandleW(nullptr), nullptr);
+}
+
+bool RequestNetToolsConnectionProcessFilter(HWND page, const DWORD processId) {
+    return page && processId != 0 &&
+        ::SendMessageW(page, kMsgExternalProcessFilter, static_cast<WPARAM>(processId), 0) != 0;
 }
 
 } // namespace Ksword::Features::NetTools

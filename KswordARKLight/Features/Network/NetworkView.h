@@ -15,4 +15,6 @@ HWND CreateNetworkFeatureView(HWND parent, const RECT& bounds);
 // returned.
 void ResizeNetworkFeatureView(HWND view, const RECT& bounds);
 
+bool RequestNetworkFeatureViewProcess(HWND view, DWORD processId);
+
 } // namespace Ksword::Features::Network

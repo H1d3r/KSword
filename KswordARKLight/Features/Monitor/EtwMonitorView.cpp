@@ -2,6 +2,7 @@
 
 #include "../../Ui/Controls.h"
 #include "../../Ui/FilterBar.h"
+#include "../../Ui/ExportUtil.h"
 #include "../../Ui/TextFindSupport.h"
 #include "../../Ui/Theme.h"
 #include "EtwFilterDialog.h"
@@ -16,6 +17,7 @@
 #include <iterator>
 #include <regex>
 #include <sstream>
+#include <string_view>
 #include <vector>
 
 namespace Ksword::Features::Monitor {
@@ -30,6 +32,7 @@ constexpr int kListId = 52005;
 constexpr int kLocalFilterBarId = 52006;
 constexpr UINT kStatusMessage = WM_APP + 62;
 constexpr UINT kLocalFilterMessage = WM_APP + 63;
+constexpr UINT kExternalProcessFilterMessage = WM_APP + 64;
 constexpr UINT_PTR kEventFlushTimerId = 52061;
 constexpr UINT kEventFlushIntervalMs = 150;
 constexpr std::size_t kMaxEventRows = 5000;
@@ -157,6 +160,10 @@ bool ContainsCaseInsensitive(const std::wstring& value, const std::wstring& quer
 // materialized VirtualListRow snapshot. A non-null pattern means the ".*" toggle
 // is on and the expression compiled.
 bool MatchesEvent(const EtwEvent& eventRow, const std::wstring& query, const std::wregex* pattern) {
+    constexpr std::wstring_view pidPrefix = L"pid:";
+    if (query.size() > pidPrefix.size() && query.compare(0, pidPrefix.size(), pidPrefix) == 0) {
+        return query.substr(pidPrefix.size()) == NumberText(eventRow.processId);
+    }
     const auto matches = [&query, pattern](const std::wstring& text) {
         return pattern != nullptr ? std::regex_search(text, *pattern) : ContainsCaseInsensitive(text, query);
     };
@@ -173,31 +180,7 @@ bool MatchesEvent(const EtwEvent& eventRow, const std::wstring& query, const std
 // HWND and text; processing transfers CF_UNICODETEXT to the system clipboard;
 // output reports success.
 bool CopyTextToClipboard(HWND owner, const std::wstring& text) {
-    if (!::OpenClipboard(owner)) {
-        return false;
-    }
-    ::EmptyClipboard();
-    const SIZE_T bytes = (text.size() + 1) * sizeof(wchar_t);
-    HGLOBAL memory = ::GlobalAlloc(GMEM_MOVEABLE, bytes);
-    if (!memory) {
-        ::CloseClipboard();
-        return false;
-    }
-    void* target = ::GlobalLock(memory);
-    if (!target) {
-        ::GlobalFree(memory);
-        ::CloseClipboard();
-        return false;
-    }
-    std::memcpy(target, text.c_str(), bytes);
-    ::GlobalUnlock(memory);
-    if (!::SetClipboardData(CF_UNICODETEXT, memory)) {
-        ::GlobalFree(memory);
-        ::CloseClipboard();
-        return false;
-    }
-    ::CloseClipboard();
-    return true;
+    return Ksword::Ui::CopyTextToClipboard(owner, text, L"ETW 监控");
 }
 
 } // namespace
@@ -337,6 +320,15 @@ LRESULT EtwMonitorView::handleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             return 0;
         }
         break;
+    case kExternalProcessFilterMessage:
+        if (wParam != 0 && localFilterBar_) {
+            const std::wstring query = L"pid:" + std::to_wstring(static_cast<DWORD>(wParam));
+            Ksword::Ui::SetFilterBarText(localFilterBar_, query, false);
+            requestLocalFilter(query);
+            Ksword::Ui::FocusFilterBar(localFilterBar_);
+            return 1;
+        }
+        return 0;
     case WM_CTLCOLORSTATIC: {
         HDC dc = reinterpret_cast<HDC>(wParam);
         ::SetBkMode(dc, TRANSPARENT);
@@ -939,6 +931,11 @@ HWND CreateEtwMonitorPage(HWND parent, const RECT& bounds) {
     }
     view->setDeleteOnDestroy(true);
     return view->hwnd();
+}
+
+bool RequestEtwMonitorProcessFilter(HWND page, const DWORD processId) {
+    return page && processId != 0 &&
+        ::SendMessageW(page, kExternalProcessFilterMessage, static_cast<WPARAM>(processId), 0) != 0;
 }
 
 } // namespace Ksword::Features::Monitor

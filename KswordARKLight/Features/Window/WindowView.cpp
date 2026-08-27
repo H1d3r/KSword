@@ -65,6 +65,7 @@ constexpr UINT kWindowMenuExcludeFromCapture = 62616;
 constexpr UINT kMsgWindowRefreshCompleted = WM_APP + 610;
 constexpr UINT kMsgWindowFilterCompleted = WM_APP + 611;
 constexpr UINT kMsgWindowDetailCompleted = WM_APP + 612;
+constexpr UINT kMsgExternalQuery = WM_APP + 613;
 
 #ifndef WDA_EXCLUDEFROMCAPTURE
 #define WDA_EXCLUDEFROMCAPTURE 0x00000011
@@ -340,31 +341,7 @@ std::wstring ListText(HWND list, int row, int column) {
 // processing transfers CF_UNICODETEXT; output reports success to callers that
 // update the status line.
 bool CopyText(HWND owner, const std::wstring& text) {
-    if (text.empty() || !::OpenClipboard(owner)) {
-        return false;
-    }
-    ::EmptyClipboard();
-    const SIZE_T bytes = (text.size() + 1) * sizeof(wchar_t);
-    HGLOBAL memory = ::GlobalAlloc(GMEM_MOVEABLE, bytes);
-    if (!memory) {
-        ::CloseClipboard();
-        return false;
-    }
-    void* target = ::GlobalLock(memory);
-    if (!target) {
-        ::GlobalFree(memory);
-        ::CloseClipboard();
-        return false;
-    }
-    std::memcpy(target, text.c_str(), bytes);
-    ::GlobalUnlock(memory);
-    if (!::SetClipboardData(CF_UNICODETEXT, memory)) {
-        ::GlobalFree(memory);
-        ::CloseClipboard();
-        return false;
-    }
-    ::CloseClipboard();
-    return true;
+    return Ksword::Ui::CopyTextToClipboard(owner, text, L"窗口模块");
 }
 
 // AddIconFromShell extracts one small executable icon. Inputs are an image list
@@ -1571,6 +1548,15 @@ bool RegisterWindowViewClass() {
                 return 0;
             }
             break;
+        case kMsgExternalQuery:
+            if (state && state->filterBar && lParam != 0) {
+                const auto* query = reinterpret_cast<const std::wstring*>(lParam);
+                Ksword::Ui::SetFilterBarText(state->filterBar, *query, false);
+                RequestWindowFilter(state, *query);
+                Ksword::Ui::FocusFilterBar(state->filterBar);
+                return 1;
+            }
+            return 0;
         case WM_NOTIFY: {
             auto* notify = reinterpret_cast<NMHDR*>(lParam);
             if (state && notify && notify->idFrom == kWindowListId) {
@@ -1682,6 +1668,11 @@ HWND CreateWindowFeatureView(HWND parent, const RECT& bounds) {
         delete state;
     }
     return hwnd;
+}
+
+bool RequestWindowFeatureViewQuery(HWND page, const std::wstring& query) {
+    return page && !query.empty() &&
+        ::SendMessageW(page, kMsgExternalQuery, 0, reinterpret_cast<LPARAM>(&query)) != 0;
 }
 
 } // namespace Ksword::Features::Window

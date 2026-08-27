@@ -121,4 +121,8 @@ private:
 // session. Inputs are parent and bounds; output is the page HWND or null.
 HWND CreateEtwMonitorPage(HWND parent, const RECT& bounds);
 
+// RequestEtwMonitorProcessFilter focuses the local ETW event view on one PID.
+// The page may be running or stopped; the filter is retained for later events.
+bool RequestEtwMonitorProcessFilter(HWND page, DWORD processId);
+
 } // namespace Ksword::Features::Monitor
