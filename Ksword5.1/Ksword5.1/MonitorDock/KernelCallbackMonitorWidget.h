@@ -93,6 +93,7 @@ private:
 
     std::atomic_bool m_workerStop{ false };
     std::atomic_bool m_captureRunning{ false };
+    std::atomic_bool m_driverCaptureActive{ false };
     std::atomic_bool m_paused{ false };
     std::atomic_bool m_cursorResetRequested{ false };
     std::atomic_uint64_t m_cursorResetValue{ 0 };

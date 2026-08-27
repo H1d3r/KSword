@@ -23,6 +23,27 @@ C_ASSERT(sizeof(KSWORD_ARK_CALLBACK_MONITOR_EVENT) == 1264U);
 C_ASSERT(sizeof(KSWORD_ARK_CALLBACK_MONITOR_READ_REQUEST) == 24U);
 C_ASSERT(FIELD_OFFSET(KSWORD_ARK_CALLBACK_MONITOR_READ_RESPONSE, records) == 72U);
 
+#define KSWORD_ARK_CALLBACK_MONITOR_CONTROL_SPIN_LIMIT 65536UL
+
+static BOOLEAN
+KswordArkCallbackMonitorTryAcquireWriterLockBounded(
+    _Inout_ KSWORD_ARK_CALLBACK_RUNTIME* Runtime
+    )
+{
+    ULONG spinIndex = 0UL;
+
+    // 控制 IOCTL 允许等待正在提交的短记录，但必须有界，避免单核或优先级反转时无限占用 CPU。
+    for (spinIndex = 0UL;
+         spinIndex < KSWORD_ARK_CALLBACK_MONITOR_CONTROL_SPIN_LIMIT;
+         ++spinIndex) {
+        if (InterlockedCompareExchange(&Runtime->MonitorWriterLock, 1L, 0L) == 0L) {
+            return TRUE;
+        }
+        YieldProcessor();
+    }
+    return FALSE;
+}
+
 static ULONG
 KswordArkCallbackMonitorRegisteredMask(
     _In_ const KSWORD_ARK_CALLBACK_RUNTIME* Runtime
@@ -279,28 +300,32 @@ KswordArkCallbackMonitorControl(
         }
         if (NT_SUCCESS(status)) {
             // 控制线程可以等待短暂的单写者临界区；系统回调仍只做 try-lock。
-            while (InterlockedCompareExchange(&runtime->MonitorWriterLock, 1L, 0L) != 0L) {
-                YieldProcessor();
+            writerLockHeld = KswordArkCallbackMonitorTryAcquireWriterLockBounded(runtime);
+            if (!writerLockHeld) {
+                status = STATUS_DEVICE_BUSY;
             }
-            writerLockHeld = TRUE;
-            previousMask = InterlockedCompareExchange(&runtime->MonitorCategoryMask, 0L, 0L);
-            if (previousMask == 0L) {
-                // 没有回调可写时才能安全重置整个大 ring。
-                RtlZeroMemory(runtime->MonitorSlots, sizeof(runtime->MonitorSlots));
-                (VOID)InterlockedExchange64(&runtime->MonitorLatestSequence, 0LL);
-                (VOID)InterlockedExchange64(&runtime->MonitorDroppedCount, 0LL);
+            else {
+                previousMask = InterlockedCompareExchange(&runtime->MonitorCategoryMask, 0L, 0L);
+                if (previousMask == 0L) {
+                    // 没有回调可写时才能安全重置整个大 ring。
+                    RtlZeroMemory(runtime->MonitorSlots, sizeof(runtime->MonitorSlots));
+                    (VOID)InterlockedExchange64(&runtime->MonitorLatestSequence, 0LL);
+                    (VOID)InterlockedExchange64(&runtime->MonitorDroppedCount, 0LL);
+                }
+                (VOID)InterlockedExchange(&runtime->MonitorCategoryMask, (LONG)requestedMask);
             }
-            (VOID)InterlockedExchange(&runtime->MonitorCategoryMask, (LONG)requestedMask);
         }
     }
     else if (Request->action == KSWORD_ARK_CALLBACK_MONITOR_ACTION_STOP) {
         // 与已进入提交临界区的回调同步，STOP 返回后不会再有尾部记录。
-        while (InterlockedCompareExchange(&runtime->MonitorWriterLock, 1L, 0L) != 0L) {
-            YieldProcessor();
+        writerLockHeld = KswordArkCallbackMonitorTryAcquireWriterLockBounded(runtime);
+        if (!writerLockHeld) {
+            status = STATUS_DEVICE_BUSY;
         }
-        writerLockHeld = TRUE;
-        (VOID)InterlockedExchange(&runtime->MonitorCategoryMask, 0L);
-        status = STATUS_SUCCESS;
+        else {
+            (VOID)InterlockedExchange(&runtime->MonitorCategoryMask, 0L);
+            status = STATUS_SUCCESS;
+        }
     }
     else {
         status = STATUS_INVALID_PARAMETER;

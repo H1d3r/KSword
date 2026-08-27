@@ -382,26 +382,43 @@ public:
         const QString& result,
         const bool regex)
     {
+        const QString normalizedOperation = operation.trimmed();
+        const QString normalizedPid = pid.trimmed();
+        const QString normalizedProcess = process.trimmed();
+        const QString normalizedPath = path.trimmed();
+        const QString normalizedResult = result.trimmed();
+        if (m_category == category &&
+            m_operation == normalizedOperation &&
+            m_pid == normalizedPid &&
+            m_process == normalizedProcess &&
+            m_path == normalizedPath &&
+            m_result == normalizedResult &&
+            m_regex == regex)
+        {
+            return;
+        }
+
         m_category = category;
-        m_operation = operation.trimmed();
-        m_pid = pid.trimmed();
-        m_process = process.trimmed();
-        m_path = path.trimmed();
-        m_result = result.trimmed();
+        m_operation = normalizedOperation;
+        m_pid = normalizedPid;
+        m_process = normalizedProcess;
+        m_path = normalizedPath;
+        m_result = normalizedResult;
         m_regex = regex;
         m_invalidRegex = false;
         if (m_regex)
         {
-            const QStringList patterns{ m_operation, m_pid, m_process, m_path, m_result };
-            for (const QString& pattern : patterns)
-            {
-                if (!pattern.isEmpty() &&
-                    !QRegularExpression(pattern, QRegularExpression::CaseInsensitiveOption).isValid())
-                {
-                    m_invalidRegex = true;
-                    break;
-                }
-            }
+            m_operationRegex = QRegularExpression(m_operation, QRegularExpression::CaseInsensitiveOption);
+            m_pidRegex = QRegularExpression(m_pid, QRegularExpression::CaseInsensitiveOption);
+            m_processRegex = QRegularExpression(m_process, QRegularExpression::CaseInsensitiveOption);
+            m_pathRegex = QRegularExpression(m_path, QRegularExpression::CaseInsensitiveOption);
+            m_resultRegex = QRegularExpression(m_result, QRegularExpression::CaseInsensitiveOption);
+            m_invalidRegex =
+                (!m_operation.isEmpty() && !m_operationRegex.isValid()) ||
+                (!m_pid.isEmpty() && !m_pidRegex.isValid()) ||
+                (!m_process.isEmpty() && !m_processRegex.isValid()) ||
+                (!m_path.isEmpty() && !m_pathRegex.isValid()) ||
+                (!m_result.isEmpty() && !m_resultRegex.isValid());
         }
         invalidateRowsFilter();
     }
@@ -433,15 +450,23 @@ protected:
             .arg(row->parentProcessId);
         const QString processText = QStringLiteral("%1 %2")
             .arg(QString::fromStdWString(row->processName), callbackProcessText(*row));
-        return matches(m_operation, callbackOperationText(*row)) &&
-            matches(m_pid, pidText) &&
-            matches(m_process, processText) &&
-            matches(m_path, QString::fromStdWString(row->path)) &&
-            matches(m_result, callbackResultText(*row));
+        const QString operationSourceText = callbackOperationText(*row);
+        const QString operationDisplayText = ks::i18n::sourceText(operationSourceText);
+        const QString operationSearchText = operationDisplayText == operationSourceText
+            ? operationSourceText
+            : QStringLiteral("%1 %2").arg(operationSourceText, operationDisplayText);
+        return matches(m_operation, operationSearchText, m_operationRegex) &&
+            matches(m_pid, pidText, m_pidRegex) &&
+            matches(m_process, processText, m_processRegex) &&
+            matches(m_path, QString::fromStdWString(row->path), m_pathRegex) &&
+            matches(m_result, callbackResultText(*row), m_resultRegex);
     }
 
 private:
-    bool matches(const QString& pattern, const QString& value) const
+    bool matches(
+        const QString& pattern,
+        const QString& value,
+        const QRegularExpression& expression) const
     {
         if (pattern.isEmpty())
         {
@@ -451,9 +476,7 @@ private:
         {
             return value.contains(pattern, Qt::CaseInsensitive);
         }
-        return QRegularExpression(pattern, QRegularExpression::CaseInsensitiveOption)
-            .match(value)
-            .hasMatch();
+        return expression.match(value).hasMatch();
     }
 
     std::uint32_t m_category = 0;
@@ -462,6 +485,11 @@ private:
     QString m_process;
     QString m_path;
     QString m_result;
+    QRegularExpression m_operationRegex;
+    QRegularExpression m_pidRegex;
+    QRegularExpression m_processRegex;
+    QRegularExpression m_pathRegex;
+    QRegularExpression m_resultRegex;
     bool m_regex = false;
     bool m_invalidRegex = false;
 };
@@ -699,6 +727,22 @@ void KernelCallbackMonitorWidget::startCapture()
     }
 
     ksword::ark::DriverClient client;
+    if (m_driverCaptureActive.load())
+    {
+        const ksword::ark::CallbackMonitorStatusResult cleanupStatus = client.controlCallbackMonitor(
+            KSWORD_ARK_CALLBACK_MONITOR_ACTION_STOP,
+            0UL);
+        if (!cleanupStatus.io.ok)
+        {
+            m_lastDisplayedError = QString::fromStdString(cleanupStatus.io.message);
+            updateActionState();
+            updateStatusLabel();
+            return;
+        }
+        m_driverCaptureActive.store(false);
+        m_runtimeFlags.store(cleanupStatus.runtimeFlags);
+        m_activeCategoryMask.store(cleanupStatus.categoryMask);
+    }
     const ksword::ark::CallbackMonitorStatusResult status = client.controlCallbackMonitor(
         KSWORD_ARK_CALLBACK_MONITOR_ACTION_START,
         mask);
@@ -732,6 +776,7 @@ void KernelCallbackMonitorWidget::startCapture()
         m_workerUnsupported = false;
     }
     m_eventModel->clearRows();
+    m_driverCaptureActive.store(true);
     m_captureRunning.store(true);
     m_worker = std::thread(&KernelCallbackMonitorWidget::workerMain, this);
     updateActionState();
@@ -748,7 +793,7 @@ void KernelCallbackMonitorWidget::stopCapture(const bool destroying)
         m_worker.join();
     }
     m_paused.store(false);
-    if (wasRunning)
+    if (wasRunning || m_driverCaptureActive.load())
     {
         ksword::ark::DriverClient client;
         const ksword::ark::CallbackMonitorStatusResult status = client.controlCallbackMonitor(
@@ -757,6 +802,10 @@ void KernelCallbackMonitorWidget::stopCapture(const bool destroying)
         if (!destroying && !status.io.ok)
         {
             m_lastDisplayedError = QString::fromStdString(status.io.message);
+        }
+        if (status.io.ok)
+        {
+            m_driverCaptureActive.store(false);
         }
         m_runtimeFlags.store(status.runtimeFlags);
         m_activeCategoryMask.store(status.categoryMask);
@@ -807,10 +856,31 @@ void KernelCallbackMonitorWidget::clearLocalEvents()
 void KernelCallbackMonitorWidget::workerMain()
 {
     ksword::ark::DriverClient client;
+    const auto stopDriverAfterFailure = [this, &client](ksword::ark::DriverHandle* const existingHandle) {
+        const ksword::ark::CallbackMonitorStatusResult stopStatus = existingHandle != nullptr
+            ? client.controlCallbackMonitor(
+                *existingHandle,
+                KSWORD_ARK_CALLBACK_MONITOR_ACTION_STOP,
+                0UL)
+            : client.controlCallbackMonitor(
+                KSWORD_ARK_CALLBACK_MONITOR_ACTION_STOP,
+                0UL);
+        if (stopStatus.io.ok)
+        {
+            m_driverCaptureActive.store(false);
+            m_runtimeFlags.store(stopStatus.runtimeFlags);
+            m_activeCategoryMask.store(stopStatus.categoryMask);
+        }
+        m_captureRunning.store(false);
+        m_paused.store(false);
+        m_workerStop.store(true);
+    };
+
     ksword::ark::DriverHandle handle = client.open();
     if (!handle.isValid())
     {
         recordWorkerFailure("open KswordARK control device failed", false);
+        stopDriverAfterFailure(nullptr);
         return;
     }
 
@@ -829,6 +899,7 @@ void KernelCallbackMonitorWidget::workerMain()
         if (!readResult.io.ok)
         {
             recordWorkerFailure(readResult.io.message, readResult.unsupported);
+            stopDriverAfterFailure(&handle);
             break;
         }
         if (generation != m_readerGeneration.load())
@@ -923,8 +994,8 @@ void KernelCallbackMonitorWidget::flushPendingEvents()
         {
             m_eventTable->scrollToBottom();
         }
+        applyFilters();
     }
-    applyFilters();
     updateStatusLabel();
 }
 
@@ -950,7 +1021,7 @@ void KernelCallbackMonitorWidget::updateActionState()
     const bool running = m_captureRunning.load();
     const bool paused = m_paused.load();
     m_startButton->setEnabled(!running || paused);
-    m_stopButton->setEnabled(running);
+    m_stopButton->setEnabled(running || m_driverCaptureActive.load());
     m_pauseButton->setEnabled(running);
     m_pauseButton->setIcon(QIcon(paused
         ? QStringLiteral(":/Icon/process_start.svg")
