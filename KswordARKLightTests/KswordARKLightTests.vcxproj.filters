@@ -7,6 +7,7 @@
   <ItemGroup>
     <ClCompile Include="KswordARKLightTests.cpp"><Filter>Tests</Filter></ClCompile>
     <ClCompile Include="..\KswordARKLight\Core\EntityRef.cpp"><Filter>Production</Filter></ClCompile>
+    <ClCompile Include="..\KswordARKLight\Features\File\PathNavigator.cpp"><Filter>Production</Filter></ClCompile>
     <ClCompile Include="..\KswordARKLight\Features\Memory\MemorySnapshot.cpp"><Filter>Production</Filter></ClCompile>
     <ClCompile Include="..\KswordARKLight\Features\Memory\MemoryInspection.cpp"><Filter>Production</Filter></ClCompile>
     <ClCompile Include="..\KswordARKLight\Features\Memory\MemoryWritePlan.cpp"><Filter>Production</Filter></ClCompile>
@@ -15,6 +16,7 @@
   <ItemGroup>
     <ClInclude Include="..\KswordARKLight\Core\DriverLeasePolicy.h"><Filter>Production</Filter></ClInclude>
     <ClInclude Include="..\KswordARKLight\Core\EntityRef.h"><Filter>Production</Filter></ClInclude>
+    <ClInclude Include="..\KswordARKLight\Features\File\PathNavigator.h"><Filter>Production</Filter></ClInclude>
     <ClInclude Include="..\KswordARKLight\Features\Memory\MemorySnapshot.h"><Filter>Production</Filter></ClInclude>
     <ClInclude Include="..\KswordARKLight\Features\Memory\MemoryInspection.h"><Filter>Production</Filter></ClInclude>
     <ClInclude Include="..\KswordARKLight\Features\Memory\MemoryWritePlan.h"><Filter>Production</Filter></ClInclude>

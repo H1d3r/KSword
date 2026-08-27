@@ -1,5 +1,6 @@
 #include "../KswordARKLight/Core/DriverLeasePolicy.h"
 #include "../KswordARKLight/Core/EntityRef.h"
+#include "../KswordARKLight/Features/File/PathNavigator.h"
 #include "../KswordARKLight/Features/Memory/MemorySnapshot.h"
 #include "../KswordARKLight/Features/Memory/MemoryInspection.h"
 #include "../KswordARKLight/Features/Memory/MemoryWritePlan.h"
@@ -69,6 +70,23 @@ int wmain() {
     const auto shell = ParseCommandInput(L"! whoami /all");
     Expect(shell.kind == CommandInputKind::Shell && shell.shellCommand == L"whoami /all", L"explicit shell escape");
     Expect(ParseCommandInput(L"pid zero").kind == CommandInputKind::Invalid, L"invalid pid rejected");
+
+    using Ksword::Features::File::PathNavigator;
+    Expect(PathNavigator::normalizeKnownDirectoryPath(L" C:/Program Files/KSword/ ") == L"C:\\Program Files\\KSword",
+        L"known DOS directory normalizes without probing");
+    Expect(PathNavigator::normalizeKnownDirectoryPath(L"\\\\server\\share\\folder\\") == L"\\\\server\\share\\folder",
+        L"known UNC directory normalizes without probing");
+    Expect(PathNavigator::normalizeKnownDirectoryPath(L"\\Device\\HarddiskVolume3\\Windows").empty() &&
+            PathNavigator::normalizeKnownDirectoryPath(L"\\\\?\\C:\\Windows").empty() &&
+            PathNavigator::normalizeKnownDirectoryPath(L"C:relative").empty(),
+        L"known directory rejects device extended and relative syntax");
+    Expect(PathNavigator::parentDirectoryForKnownFilePath(L"C:\\Windows\\System32\\notepad.exe") == L"C:\\Windows\\System32" &&
+            PathNavigator::parentDirectoryForKnownFilePath(L"\\\\server\\share\\folder\\report.txt") == L"\\\\server\\share\\folder" &&
+            PathNavigator::parentDirectoryForKnownFilePath(L"C:\\pagefile.sys") == L"C:\\",
+        L"known file parent stays within explicit DOS and UNC routes");
+    Expect(PathNavigator::parentDirectoryForKnownFilePath(L"svchost.exe -k netsvcs").empty() &&
+            PathNavigator::parentDirectoryForKnownFilePath(L"\\\\?\\C:\\Windows\\notepad.exe").empty(),
+        L"known file parent rejects command and extended syntax");
 
     MemorySnapshotHistory snapshots(2U);
     Expect(!snapshots.record(0U, 0x1000U, 4U, { 1U }, L"bad"), L"snapshot rejects missing pid");

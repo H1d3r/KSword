@@ -53,6 +53,7 @@
   <ItemGroup>
     <ClCompile Include="KswordARKLightTests.cpp" />
     <ClCompile Include="..\KswordARKLight\Core\EntityRef.cpp" />
+    <ClCompile Include="..\KswordARKLight\Features\File\PathNavigator.cpp" />
     <ClCompile Include="..\KswordARKLight\Features\Memory\MemorySnapshot.cpp" />
     <ClCompile Include="..\KswordARKLight\Features\Memory\MemoryInspection.cpp" />
     <ClCompile Include="..\KswordARKLight\Features\Memory\MemoryWritePlan.cpp" />
@@ -61,6 +62,7 @@
   <ItemGroup>
     <ClInclude Include="..\KswordARKLight\Core\DriverLeasePolicy.h" />
     <ClInclude Include="..\KswordARKLight\Core\EntityRef.h" />
+    <ClInclude Include="..\KswordARKLight\Features\File\PathNavigator.h" />
     <ClInclude Include="..\KswordARKLight\Features\Memory\MemorySnapshot.h" />
     <ClInclude Include="..\KswordARKLight\Features\Memory\MemoryInspection.h" />
     <ClInclude Include="..\KswordARKLight\Features\Memory\MemoryWritePlan.h" />
