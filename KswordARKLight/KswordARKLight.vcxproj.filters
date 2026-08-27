@@ -308,6 +308,9 @@
     <ClCompile Include="Features\Memory\MemoryFeature.cpp">
       <Filter>Features\Memory</Filter>
     </ClCompile>
+    <ClCompile Include="Features\Memory\MemorySnapshot.cpp">
+      <Filter>Features\Memory</Filter>
+    </ClCompile>
     <ClCompile Include="Features\Misc\MiscFeature.cpp">
       <Filter>Features\Misc</Filter>
     </ClCompile>
@@ -900,6 +903,9 @@
       <Filter>Features\Memory</Filter>
     </ClInclude>
     <ClInclude Include="Features\Memory\MemoryFeature.h">
+      <Filter>Features\Memory</Filter>
+    </ClInclude>
+    <ClInclude Include="Features\Memory\MemorySnapshot.h">
       <Filter>Features\Memory</Filter>
     </ClInclude>
     <ClInclude Include="Features\Misc\MiscFeature.h">

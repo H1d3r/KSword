@@ -2,6 +2,7 @@
 
 #include "DriverMemoryClient.h"
 #include "DriverMemoryModel.h"
+#include "MemorySnapshot.h"
 #include "../../Ui/AsyncTask.h"
 #include "../../Ui/Controls.h"
 #include "../../Ui/FilterBar.h"
@@ -34,6 +35,8 @@ constexpr int kHexEditId = 51006;
 constexpr int kStatusEditId = 51007;
 constexpr int kHistoryFilterId = 51008;
 constexpr int kHistoryListId = 51009;
+constexpr int kSnapshotPreviousButtonId = 51010;
+constexpr int kSnapshotNextButtonId = 51011;
 constexpr UINT kMemoryMenuRead = 51501;
 constexpr UINT kMemoryMenuWrite = 51502;
 constexpr UINT kMemoryMenuCopyHex = 51503;
@@ -88,10 +91,13 @@ struct DriverMemoryViewState {
     HWND statusEdit = nullptr;
     HWND readButton = nullptr;
     HWND writeButton = nullptr;
+    HWND snapshotPreviousButton = nullptr;
+    HWND snapshotNextButton = nullptr;
     HWND historyFilter = nullptr;
     bool operationInProgress = false;
     std::vector<MemoryHistoryEntry> history;
     std::uint64_t nextHistorySequence = 1;
+    MemorySnapshotHistory snapshots;
     std::uint64_t historyGeneration = 0;
     std::wstring historyFilterQuery;
     bool historyFilterUseRegex = false;
@@ -101,6 +107,9 @@ struct DriverMemoryViewState {
     std::unique_ptr<Ksword::Ui::AsyncSnapshotTask<MemoryOperationSnapshot>> operationTask;
     std::unique_ptr<Ksword::Ui::AsyncSnapshotTask<MemoryHistoryFilterResult>> historyFilterTask;
 };
+
+DriverMemoryViewState* StateFromWindow(HWND hwnd);
+std::wstring FormatHex64(std::uint64_t value);
 
 // GetWindowTextString copies text from a Win32 edit control. Input is the child
 // HWND; processing queries length and copies the text; output is an empty string
@@ -125,6 +134,51 @@ void SetStatus(DriverMemoryViewState& state, const std::wstring& text) {
     if (state.statusEdit) {
         ::SetWindowTextW(state.statusEdit, text.c_str());
     }
+}
+
+// UpdateSnapshotButtons makes snapshot navigation opt-in and prevents a stale
+// button click while an I/O request is running. A snapshot is local immutable
+// data, so moving through it never triggers a driver request.
+void UpdateSnapshotButtons(DriverMemoryViewState& state) {
+    const bool enabled = !state.operationInProgress;
+    if (state.snapshotPreviousButton) {
+        ::EnableWindow(state.snapshotPreviousButton, enabled && state.snapshots.canMovePrevious());
+    }
+    if (state.snapshotNextButton) {
+        ::EnableWindow(state.snapshotNextButton, enabled && state.snapshots.canMoveNext());
+    }
+    ::InvalidateRect(state.hwnd, nullptr, FALSE);
+}
+
+// ApplyCurrentSnapshot replaces the editable fields with one already-read
+// snapshot. The action intentionally preserves the original returned length so
+// a partial driver read cannot be presented as a complete requested range.
+bool ApplyCurrentSnapshot(DriverMemoryViewState& state) {
+    const MemoryReadSnapshot* snapshot = state.snapshots.current();
+    if (!snapshot) {
+        return false;
+    }
+    if (state.pidEdit) {
+        ::SetWindowTextW(state.pidEdit, std::to_wstring(snapshot->processId).c_str());
+    }
+    if (state.addressEdit) {
+        ::SetWindowTextW(state.addressEdit, FormatHex64(snapshot->address).c_str());
+    }
+    if (state.lengthEdit) {
+        ::SetWindowTextW(state.lengthEdit, std::to_wstring(snapshot->bytes.size()).c_str());
+    }
+    if (state.hexEdit) {
+        ::SetWindowTextW(state.hexEdit, FormatHexBytesForDisplay(snapshot->bytes).c_str());
+    }
+    std::wstring status = snapshot->statusText;
+    if (!status.empty()) {
+        status += L"\r\n";
+    }
+    status += L"已打开内存快照 " + std::to_wstring(state.snapshots.currentPosition()) + L"/" +
+        std::to_wstring(state.snapshots.size()) + L"；未重新读取目标进程。";
+    SetStatus(state, status);
+    UpdateSnapshotButtons(state);
+    return true;
 }
 
 std::wstring FormatHex64(const std::uint64_t value) {
@@ -329,6 +383,7 @@ void LayoutChildren(DriverMemoryViewState& state, const RECT& rc) {
     const int labelWidth = 58;
     const int editHeight = 24;
     const int buttonWidth = 88;
+    const int snapshotButtonWidth = 74;
     const int gap = 8;
     const int width = rc.right - rc.left;
     const int height = rc.bottom - rc.top;
@@ -342,6 +397,8 @@ void LayoutChildren(DriverMemoryViewState& state, const RECT& rc) {
     const int buttonTop = rowTop + editHeight + gap;
     ::MoveWindow(state.readButton, margin, buttonTop, buttonWidth, editHeight + 2, TRUE);
     ::MoveWindow(state.writeButton, margin + buttonWidth + gap, buttonTop, buttonWidth, editHeight + 2, TRUE);
+    ::MoveWindow(state.snapshotPreviousButton, margin + (buttonWidth + gap) * 2, buttonTop, snapshotButtonWidth, editHeight + 2, TRUE);
+    ::MoveWindow(state.snapshotNextButton, margin + (buttonWidth + gap) * 2 + snapshotButtonWidth + gap, buttonTop, snapshotButtonWidth, editHeight + 2, TRUE);
 
     const int filterTop = buttonTop + editHeight + gap;
     const int hexTop = filterTop + editHeight + gap;
@@ -377,6 +434,12 @@ void PaintLabels(HWND hwnd, HDC dc) {
     Ksword::Ui::DrawTextLine(dc, L"Address", address, muted, Ksword::Ui::SystemUIFont(), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     Ksword::Ui::DrawTextLine(dc, L"Length", length, muted, Ksword::Ui::SystemUIFont(), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     Ksword::Ui::DrawTextLine(dc, L"操作历史筛选（匹配全部列和状态）", filter, muted, Ksword::Ui::SystemUIFont(), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    const DriverMemoryViewState* state = StateFromWindow(hwnd);
+    const std::wstring snapshotText = state && state->snapshots.current()
+        ? L"读取快照 " + std::to_wstring(state->snapshots.currentPosition()) + L"/" + std::to_wstring(state->snapshots.size())
+        : L"读取快照 0/0";
+    RECT snapshot{ 372, 70, rc.right - 12, 94 };
+    Ksword::Ui::DrawTextLine(dc, snapshotText, snapshot, muted, Ksword::Ui::SystemUIFont(), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 }
 
 // StateFromWindow returns the state pointer stored on the page HWND. Input is a
@@ -408,6 +471,7 @@ void HandleRead(DriverMemoryViewState& state) {
     state.operationInProgress = true;
     ::EnableWindow(state.readButton, FALSE);
     ::EnableWindow(state.writeButton, FALSE);
+    UpdateSnapshotButtons(state);
     SetStatus(state, L"正在后台执行 R0 内存读取…");
     state.operationTask->request(
         [request] {
@@ -426,13 +490,20 @@ void HandleRead(DriverMemoryViewState& state) {
             ::EnableWindow(state.writeButton, TRUE);
             if (error || !snapshot.has_value()) {
                 SetStatus(state, L"R0 内存读取异常结束。");
+                UpdateSnapshotButtons(state);
                 return;
             }
             if (snapshot->readResult.success) {
                 ::SetWindowTextW(state.hexEdit, FormatHexBytesForDisplay(snapshot->readResult.bytes).c_str());
+                state.snapshots.record(snapshot->processId,
+                    snapshot->address,
+                    snapshot->requestedBytes,
+                    snapshot->readResult.bytes,
+                    snapshot->readResult.statusText);
             }
             SetStatus(state, snapshot->readResult.statusText);
             AppendMemoryHistory(state, *snapshot);
+            UpdateSnapshotButtons(state);
         });
 }
 
@@ -458,6 +529,7 @@ void HandleWrite(DriverMemoryViewState& state) {
     state.operationInProgress = true;
     ::EnableWindow(state.readButton, FALSE);
     ::EnableWindow(state.writeButton, FALSE);
+    UpdateSnapshotButtons(state);
     SetStatus(state, L"正在后台执行 R0 内存写入…");
     state.operationTask->request(
         [request = std::move(request)] {
@@ -475,11 +547,25 @@ void HandleWrite(DriverMemoryViewState& state) {
             ::EnableWindow(state.writeButton, TRUE);
             if (error || !snapshot.has_value()) {
                 SetStatus(state, L"R0 内存写入异常结束。");
+                UpdateSnapshotButtons(state);
                 return;
             }
             SetStatus(state, snapshot->writeResult.statusText);
             AppendMemoryHistory(state, *snapshot);
+            UpdateSnapshotButtons(state);
         });
+}
+
+void MoveToPreviousSnapshot(DriverMemoryViewState& state) {
+    if (!state.operationInProgress && state.snapshots.movePrevious()) {
+        ApplyCurrentSnapshot(state);
+    }
+}
+
+void MoveToNextSnapshot(DriverMemoryViewState& state) {
+    if (!state.operationInProgress && state.snapshots.moveNext()) {
+        ApplyCurrentSnapshot(state);
+    }
 }
 
 // NormalizeHexBuffer parses and rewrites the hex edit as canonical two-digit
@@ -652,6 +738,8 @@ void CreateChildControls(DriverMemoryViewState& state) {
     state.lengthEdit = CreateEdit(state.hwnd, kLengthEditId, L"16", 0, 0, 0, 0, 0);
     state.readButton = Ksword::Ui::CreateButton(state.hwnd, kReadButtonId, L"Read", 0, 0, 0, 0);
     state.writeButton = Ksword::Ui::CreateButton(state.hwnd, kWriteButtonId, L"Write", 0, 0, 0, 0);
+    state.snapshotPreviousButton = Ksword::Ui::CreateButton(state.hwnd, kSnapshotPreviousButtonId, L"上一快照", 0, 0, 0, 0);
+    state.snapshotNextButton = Ksword::Ui::CreateButton(state.hwnd, kSnapshotNextButtonId, L"下一快照", 0, 0, 0, 0);
     state.hexEdit = CreateEdit(state.hwnd,
         kHexEditId,
         L"",
@@ -697,6 +785,7 @@ LRESULT CALLBACK DriverMemoryViewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
             state->operationTask = std::make_unique<Ksword::Ui::AsyncSnapshotTask<MemoryOperationSnapshot>>(hwnd, kMsgMemoryOperationCompleted);
             state->historyFilterTask = std::make_unique<Ksword::Ui::AsyncSnapshotTask<MemoryHistoryFilterResult>>(hwnd, kMsgMemoryHistoryFilterCompleted);
             RebuildMemoryHistory(*state);
+            UpdateSnapshotButtons(*state);
         }
         return 0;
     case WM_SIZE:
@@ -719,6 +808,14 @@ LRESULT CALLBACK DriverMemoryViewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
             }
             if (id == kWriteButtonId) {
                 HandleWrite(*state);
+                return 0;
+            }
+            if (id == kSnapshotPreviousButtonId) {
+                MoveToPreviousSnapshot(*state);
+                return 0;
+            }
+            if (id == kSnapshotNextButtonId) {
+                MoveToNextSnapshot(*state);
                 return 0;
             }
         }

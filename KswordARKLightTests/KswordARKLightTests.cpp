@@ -1,5 +1,6 @@
 #include "../KswordARKLight/Core/DriverLeasePolicy.h"
 #include "../KswordARKLight/Core/EntityRef.h"
+#include "../KswordARKLight/Features/Memory/MemorySnapshot.h"
 #include "../KswordARKLight/Ui/EvidenceSession.h"
 
 #include <iostream>
@@ -24,6 +25,7 @@ int wmain() {
     using Ksword::Core::EntityKind;
     using Ksword::Core::NavigationTarget;
     using Ksword::Core::ParseCommandInput;
+    using Ksword::Features::Memory::MemorySnapshotHistory;
 
     Expect(DriverLeasePolicy::OwnsStartTransition(false, true), L"new driver start is owned");
     Expect(!DriverLeasePolicy::OwnsStartTransition(true, true), L"pre-existing driver is not owned");
@@ -52,6 +54,17 @@ int wmain() {
     const auto shell = ParseCommandInput(L"! whoami /all");
     Expect(shell.kind == CommandInputKind::Shell && shell.shellCommand == L"whoami /all", L"explicit shell escape");
     Expect(ParseCommandInput(L"pid zero").kind == CommandInputKind::Invalid, L"invalid pid rejected");
+
+    MemorySnapshotHistory snapshots(2U);
+    Expect(!snapshots.record(0U, 0x1000U, 4U, { 1U }, L"bad"), L"snapshot rejects missing pid");
+    Expect(snapshots.record(42U, 0x1000U, 4U, { 1U, 2U, 3U, 4U }, L"first"), L"first snapshot recorded");
+    Expect(snapshots.record(42U, 0x2000U, 2U, { 5U, 6U }, L"second"), L"second snapshot recorded");
+    Expect(snapshots.canMovePrevious() && !snapshots.canMoveNext(), L"snapshot back navigation available");
+    Expect(snapshots.movePrevious() && snapshots.current() && snapshots.current()->address == 0x1000U,
+        L"snapshot previous selects first bytes");
+    Expect(snapshots.record(42U, 0x3000U, 1U, { 7U }, L"branch"), L"snapshot branch recorded");
+    Expect(snapshots.size() == 2U && !snapshots.canMoveNext() && snapshots.current() && snapshots.current()->address == 0x3000U,
+        L"snapshot branch truncates forward history");
 
     const std::wstring redacted = Ksword::Ui::RedactEvidenceText(
         L"C:\\Users\\Felix\\Desktop\\sample.txt", Ksword::Ui::EvidenceRedaction::Privacy);

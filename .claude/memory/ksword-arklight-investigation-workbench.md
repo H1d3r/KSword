@@ -23,3 +23,10 @@
 - `Ui/EvidenceSession` 记录成功的通用剪贴板/文件导出，支持 session snapshot、最近两次行级 diff、JSON/TSV 和 `C:\Users\<name>` 隐私脱敏。
 - `KswordARKLightTests` 只测试纯策略/解析/证据逻辑，Release 使用 `/W4 /WX`；CI 在 Light Release 构建后构建并执行测试。
 - 主 Light 项目使用 `/W4` 但暂不全局 `/WX`，避免历史第三方/旧模块警告一次性阻断；新增纯逻辑必须进入独立 `/WX` 测试项目。
+
+## 兼容性护栏
+
+- Lite 保持原生 Win32 x64、静态 CRT 与单 EXE/系统 DLL 部署；不要直接搬入 Qt、ADS、插件或额外运行时。
+- 高版本 Windows API 必须按现有 `GetProcAddress` 范式延迟绑定；页面级 `Unsupported`/`Partial` 是正常结果，不能把一个可选诊断字段升级为进程启动前置条件。
+- 新驱动能力必须 capability-gated：旧驱动、未加载驱动或无管理员权限时，R3 浏览、导出、证据会话和原有管理入口继续可用。
+- 内存读取快照只来自已经成功的既有虚拟内存读 IOCTL；快照前进/后退只重放本地不可变字节，不重新读取目标或要求新协议。
