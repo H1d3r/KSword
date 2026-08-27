@@ -2,10 +2,13 @@
 #include "../KswordARKLight/Core/EntityRef.h"
 #include "../KswordARKLight/Features/Memory/MemorySnapshot.h"
 #include "../KswordARKLight/Features/Memory/MemoryInspection.h"
+#include "../KswordARKLight/Features/Memory/MemoryWritePlan.h"
 #include "../KswordARKLight/Ui/EvidenceSession.h"
 
 #include <iostream>
+#include <limits>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -83,6 +86,41 @@ int wmain() {
         L"memory inspection extracts ascii and utf16 text runs");
     Expect(Ksword::Features::Memory::BuildMemorySnapshotTextReport(inspect).find(L"ReturnedBytes") != std::wstring::npos,
         L"memory inspection report includes snapshot metadata");
+
+    MemoryReadSnapshot writableSnapshot{};
+    writableSnapshot.sequence = 8U;
+    writableSnapshot.processId = 88U;
+    writableSnapshot.address = 0x2000U;
+    writableSnapshot.requestedBytes = 10U;
+    writableSnapshot.bytes = { 0U, 1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U, 9U };
+    Ksword::Features::Memory::MemoryWritePlan writePlan{};
+    std::wstring planError;
+    const std::vector<std::uint8_t> editedBytes = { 0U, 9U, 8U, 3U, 4U, 7U, 8U, 9U, 8U, 9U };
+    Expect(Ksword::Features::Memory::BuildMemoryWritePlan(writableSnapshot, editedBytes, 2U, writePlan, planError),
+        L"memory write plan accepts same-length edited snapshot");
+    Expect(writePlan.changedByteCount == 5U && writePlan.blocks.size() == 3U,
+        L"memory write plan merges and splits contiguous differences");
+    Expect(writePlan.blocks[0].address == 0x2001U && writePlan.blocks[0].desiredAfter == std::vector<std::uint8_t>{ 9U, 8U } &&
+            writePlan.blocks[1].address == 0x2005U && writePlan.blocks[1].desiredAfter == std::vector<std::uint8_t>{ 7U, 8U } &&
+            writePlan.blocks[2].address == 0x2007U && writePlan.blocks[2].desiredAfter == std::vector<std::uint8_t>{ 9U },
+        L"memory write plan preserves exact chunk addresses and payloads");
+    Expect(Ksword::Features::Memory::ValidateMemoryWritePlan(writePlan, planError),
+        L"memory write plan validates generated blocks");
+
+    Ksword::Features::Memory::MemoryWritePlan noChangePlan{};
+    Expect(Ksword::Features::Memory::BuildMemoryWritePlan(writableSnapshot, writableSnapshot.bytes, 2U, noChangePlan, planError) &&
+            noChangePlan.changedByteCount == 0U && noChangePlan.blocks.empty(),
+        L"memory write plan does not create no-op writes");
+    Expect(!Ksword::Features::Memory::BuildMemoryWritePlan(writableSnapshot, { 1U }, 2U, noChangePlan, planError),
+        L"memory write plan rejects length drift");
+    MemoryReadSnapshot overflowSnapshot = writableSnapshot;
+    overflowSnapshot.address = (std::numeric_limits<std::uint64_t>::max)();
+    Expect(!Ksword::Features::Memory::BuildMemoryWritePlan(overflowSnapshot, editedBytes, 2U, noChangePlan, planError),
+        L"memory write plan rejects address wraparound");
+    Ksword::Features::Memory::MemoryWritePlan malformedPlan = writePlan;
+    malformedPlan.blocks[0].desiredAfter[0] = 0U;
+    Expect(!Ksword::Features::Memory::ValidateMemoryWritePlan(malformedPlan, planError),
+        L"memory write plan rejects desired-byte drift");
 
     const std::wstring redacted = Ksword::Ui::RedactEvidenceText(
         L"C:\\Users\\Felix\\Desktop\\sample.txt", Ksword::Ui::EvidenceRedaction::Privacy);
