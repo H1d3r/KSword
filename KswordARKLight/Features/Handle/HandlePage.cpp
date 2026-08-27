@@ -3,9 +3,11 @@
 #include "HandleClient.h"
 
 #include "../../Core/Common.h"
+#include "../../Core/EntityRef.h"
 
 #include "../../Ui/AsyncTask.h"
 #include "../../Ui/Controls.h"
+#include "../../Ui/EntityNavigation.h"
 #include "../../Ui/FilterBar.h"
 #include "../../Ui/ExportUtil.h"
 #include "../../Ui/ListViewUtil.h"
@@ -46,6 +48,7 @@ constexpr int kDetailTabIndex = 1;
 constexpr UINT kHandleMenuCopyCell = 57101;
 constexpr UINT kHandleMenuCopyRow = 57102;
 constexpr UINT kHandleMenuCopyVisible = 57103;
+constexpr UINT kHandleMenuOpenProcessDetails = 57104;
 constexpr UINT kMsgHandleRefreshCompleted = WM_APP + 574;
 constexpr UINT kMsgHandleFilterCompleted = WM_APP + 575;
 constexpr UINT kMsgHandleDetailCompleted = WM_APP + 576;
@@ -400,6 +403,14 @@ int SelectedSnapshotIndex(const HandlePageState& state) {
     return static_cast<int>(rows[source].itemData);
 }
 
+// HasAuditedProcessIdentity accepts only the PID/creation-time pair retained
+// from the successful HandleTable snapshot preflight. A PID alone is not
+// sufficient because it could have been recycled after enumeration.
+bool HasAuditedProcessIdentity(const HandlePageState& state) {
+    return state.snapshotProcessId != 0U &&
+        state.snapshotProcessCreationTime100ns != 0U;
+}
+
 std::wstring StableKeyAtVisibleIndex(const HandlePageState& state, const int visibleIndex) {
     const auto& visible = state.handleList.visibleIndexes();
     const auto& rows = state.handleList.rows();
@@ -721,6 +732,13 @@ void HandlePage::ShowHandleContextMenu(POINT screenPoint) {
     ::AppendMenuW(menu, MF_STRING | (hasSelection ? 0U : MF_GRAYED), kHandleMenuCopyCell, L"复制单元格");
     ::AppendMenuW(menu, MF_STRING | (hasSelection ? 0U : MF_GRAYED), kHandleMenuCopyRow, L"复制行");
     ::AppendMenuW(menu, MF_STRING | (!state_->handleList.visibleIndexes().empty() ? 0U : MF_GRAYED), kHandleMenuCopyVisible, L"复制可见结果");
+    ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    const bool hasAuditedProcessIdentity = HasAuditedProcessIdentity(*state_);
+    ::AppendMenuW(
+        menu,
+        MF_STRING | (hasAuditedProcessIdentity ? 0U : MF_GRAYED),
+        kHandleMenuOpenProcessDetails,
+        L"查看已审计进程详细信息");
     const UINT command = ::TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, screenPoint.x, screenPoint.y, 0, hwnd_, nullptr);
     ::DestroyMenu(menu);
     if (command == kHandleMenuCopyCell) {
@@ -729,6 +747,22 @@ void HandlePage::ShowHandleContextMenu(POINT screenPoint) {
         SetStatus(CopyTextToClipboard(hwnd_, RowsAsTsv(*state_, false)) ? L"已复制行。" : L"复制行失败。");
     } else if (command == kHandleMenuCopyVisible) {
         SetStatus(CopyTextToClipboard(hwnd_, RowsAsTsv(*state_, true)) ? L"已复制可见结果。" : L"复制可见结果失败。");
+    } else if (command == kHandleMenuOpenProcessDetails) {
+        // Revalidate after the popup closes so an intervening refresh cannot
+        // turn an older PID into a navigation target.
+        if (!HasAuditedProcessIdentity(*state_)) {
+            SetStatus(L"没有可验证的进程身份，无法安全打开进程详细信息。");
+            return;
+        }
+        Ksword::Core::NavigationRequest request{};
+        request.target = Ksword::Core::NavigationTarget::ProcessDetails;
+        request.entity.kind = Ksword::Core::EntityKind::Process;
+        request.entity.id = state_->snapshotProcessId;
+        request.entity.creationTime100ns = state_->snapshotProcessCreationTime100ns;
+        const bool routed = Ksword::Ui::RequestEntityNavigation(hwnd_, request);
+        SetStatus(routed
+            ? L"已请求打开已审计 PID " + std::to_wstring(state_->snapshotProcessId) + L" 的进程详细信息。"
+            : L"进程详细信息页未能接收该已审计进程身份。");
     }
 }
 
