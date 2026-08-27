@@ -2,8 +2,11 @@
 
 #include "NetToolsEnumerator.h"
 #include "NetToolsModel.h"
+#include "../File/PathNavigator.h"
+#include "../../Core/EntityRef.h"
 #include "../../Ui/AsyncTask.h"
 #include "../../Ui/Controls.h"
+#include "../../Ui/EntityNavigation.h"
 #include "../../Ui/ExportUtil.h"
 #include "../../Ui/FilterBar.h"
 #include "../../Ui/ListViewUtil.h"
@@ -40,6 +43,7 @@ constexpr UINT kMenuCopyRow = 66351;
 constexpr UINT kMenuCopyVisible = 66352;
 constexpr UINT kMenuCopyDetail = 66353;
 constexpr UINT kMenuRefresh = 66354;
+constexpr UINT kMenuOpenApplicationDirectory = 66355;
 
 constexpr UINT kMsgRefreshCompleted = WM_APP + 678;
 constexpr UINT kMsgFilterCompleted = WM_APP + 679;
@@ -433,8 +437,57 @@ std::wstring DetailAsText(const FirewallViewState& state) {
     return text;
 }
 
-void ShowFirewallContextMenu(FirewallViewState& state, POINT screenPoint) {
+// SelectRowAtPoint keeps row-scoped context commands tied to the rule the user
+// right-clicked. Empty-space clicks clear a prior selection, so no operation
+// silently acts on an unrelated firewall rule.
+void SelectRowAtPoint(FirewallViewState& state, const POINT screenPoint) {
+    const HWND list = state.ruleList.hwnd();
+    if (!list) {
+        return;
+    }
+    POINT clientPoint = screenPoint;
+    ::ScreenToClient(list, &clientPoint);
+    LVHITTESTINFO hit{};
+    hit.pt = clientPoint;
+    const int clickedItem = ListView_SubItemHitTest(list, &hit);
+    ListView_SetItemState(list, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
+    const auto& visible = state.ruleList.visibleIndexes();
+    if (clickedItem >= 0 && static_cast<std::size_t>(clickedItem) < visible.size()) {
+        ListView_SetItemState(list, clickedItem, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+    }
+    ShowDetail(state, SelectedModelIndex(state));
+}
+
+// OpenSelectedApplicationDirectory accepts only an already explicit DOS or UNC
+// application file path from the current firewall rule. It does not expand
+// variables, split command lines, or translate device paths into a guessed file
+// system target.
+void OpenSelectedApplicationDirectory(FirewallViewState& state) {
     const FirewallRuleEntry* entry = SelectedEntry(state);
+    const std::wstring directory = entry
+        ? Ksword::Features::File::PathNavigator::parentDirectoryForKnownFilePath(entry->applicationName)
+        : std::wstring{};
+    if (directory.empty()) {
+        state.statusText = L"所选规则未提供可安全定位的程序文件路径。";
+        ::InvalidateRect(state.hwnd, nullptr, TRUE);
+        return;
+    }
+
+    Ksword::Core::NavigationRequest request{};
+    request.target = Ksword::Core::NavigationTarget::FileBrowser;
+    request.entity.kind = Ksword::Core::EntityKind::File;
+    request.entity.text = directory;
+    state.statusText = Ksword::Ui::RequestEntityNavigation(state.hwnd, request)
+        ? L"已在文件模块打开防火墙规则程序所在目录。"
+        : L"文件模块当前无法接收防火墙规则程序所在目录。";
+    ::InvalidateRect(state.hwnd, nullptr, TRUE);
+}
+
+void ShowFirewallContextMenu(FirewallViewState& state, POINT screenPoint) {
+    SelectRowAtPoint(state, screenPoint);
+    const FirewallRuleEntry* entry = SelectedEntry(state);
+    const bool hasApplicationDirectory = entry &&
+        !Ksword::Features::File::PathNavigator::parentDirectoryForKnownFilePath(entry->applicationName).empty();
     HMENU menu = ::CreatePopupMenu();
     if (!menu) {
         return;
@@ -444,6 +497,9 @@ void ShowFirewallContextMenu(FirewallViewState& state, POINT screenPoint) {
     ::AppendMenuW(menu, MF_STRING | (entry ? MF_ENABLED : MF_GRAYED), kMenuCopyRow, L"复制选中行");
     ::AppendMenuW(menu, MF_STRING, kMenuCopyVisible, L"复制可见行");
     ::AppendMenuW(menu, MF_STRING | (entry ? MF_ENABLED : MF_GRAYED), kMenuCopyDetail, L"复制详情");
+    ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    ::AppendMenuW(menu, MF_STRING | (hasApplicationDirectory ? MF_ENABLED : MF_GRAYED),
+        kMenuOpenApplicationDirectory, L"打开规则程序所在目录");
     ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     ::AppendMenuW(menu, MF_STRING, kMenuRefresh, L"刷新");
 
@@ -463,6 +519,9 @@ void ShowFirewallContextMenu(FirewallViewState& state, POINT screenPoint) {
     case kMenuCopyDetail:
         state.statusText = CopyText(state.hwnd, DetailAsText(state)) ? L"已复制详情。" : L"复制失败。";
         ::InvalidateRect(state.hwnd, nullptr, TRUE);
+        break;
+    case kMenuOpenApplicationDirectory:
+        OpenSelectedApplicationDirectory(state);
         break;
     case kMenuRefresh:
         BeginFirewallRefresh(state);
