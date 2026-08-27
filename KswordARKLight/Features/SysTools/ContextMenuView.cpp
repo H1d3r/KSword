@@ -2,6 +2,7 @@
 
 #include "ContextMenuScanner.h"
 #include "../../Core/EntityRef.h"
+#include "../File/PathNavigator.h"
 #include "../../Ui/AsyncTask.h"
 #include "../../Ui/Controls.h"
 #include "../../Ui/EntityNavigation.h"
@@ -44,6 +45,7 @@ constexpr UINT kMenuCopyRow = 67623;
 constexpr UINT kMenuCopyVisible = 67624;
 constexpr UINT kMenuRefresh = 67625;
 constexpr UINT kMenuOpenRegistry = 67626;
+constexpr UINT kMenuOpenModuleDirectory = 67627;
 
 constexpr UINT kMsgScanCompleted = WM_APP + 710;
 constexpr UINT kMsgFilterCompleted = WM_APP + 711;
@@ -471,9 +473,38 @@ void OpenSelectedRegistryKey(ContextMenuViewState& state) {
     ::InvalidateRect(state.hwnd, nullptr, TRUE);
 }
 
+std::wstring ModuleDirectoryForEntry(const ContextMenuEntry& entry) {
+    if (!entry.moduleExists) {
+        return {};
+    }
+    return Ksword::Features::File::PathNavigator::parentDirectoryForKnownFilePath(entry.moduleFile);
+}
+
+// OpenSelectedModuleDirectory accepts only a file the scanner explicitly
+// checked, then applies the strict known DOS/UNC path gate before routing.
+void OpenSelectedModuleDirectory(ContextMenuViewState& state) {
+    const ContextMenuEntry* entry = SelectedEntry(state);
+    const std::wstring directory = entry ? ModuleDirectoryForEntry(*entry) : std::wstring{};
+    if (directory.empty()) {
+        state.statusText = L"当前项没有已验证的可导航模块文件路径。";
+        ::InvalidateRect(state.hwnd, nullptr, TRUE);
+        return;
+    }
+
+    Ksword::Core::NavigationRequest request{};
+    request.target = Ksword::Core::NavigationTarget::FileBrowser;
+    request.entity.kind = Ksword::Core::EntityKind::File;
+    request.entity.text = directory;
+    state.statusText = Ksword::Ui::RequestEntityNavigation(state.hwnd, request)
+        ? L"已在文件模块打开模块所在目录。"
+        : L"文件模块当前无法接收模块所在目录。";
+    ::InvalidateRect(state.hwnd, nullptr, TRUE);
+}
+
 void ShowContextMenu(ContextMenuViewState& state, POINT screenPoint) {
     SelectRowAtPoint(state, screenPoint);
     const ContextMenuEntry* entry = SelectedEntry(state);
+    const std::wstring moduleDirectory = entry ? ModuleDirectoryForEntry(*entry) : std::wstring{};
     HMENU menu = ::CreatePopupMenu();
     if (!menu) {
         return;
@@ -486,6 +517,8 @@ void ShowContextMenu(ContextMenuViewState& state, POINT screenPoint) {
     ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     ::AppendMenuW(menu, MF_STRING | ((entry && entry->enabled && !entry->registrationPath.empty() && !busy) ? MF_ENABLED : MF_GRAYED),
         kMenuOpenRegistry, L"在注册表中打开");
+    ::AppendMenuW(menu, MF_STRING | ((!moduleDirectory.empty() && !busy) ? MF_ENABLED : MF_GRAYED),
+        kMenuOpenModuleDirectory, L"打开模块所在目录");
     ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     ::AppendMenuW(menu, MF_STRING | (entry ? MF_ENABLED : MF_GRAYED), kMenuCopyRow, L"复制选中行");
     ::AppendMenuW(menu, MF_STRING, kMenuCopyVisible, L"复制可见行");
@@ -505,6 +538,9 @@ void ShowContextMenu(ContextMenuViewState& state, POINT screenPoint) {
         break;
     case kMenuOpenRegistry:
         OpenSelectedRegistryKey(state);
+        break;
+    case kMenuOpenModuleDirectory:
+        OpenSelectedModuleDirectory(state);
         break;
     case kMenuCopyRow:
         state.statusText = CopyText(state.hwnd, RowsAsText(state, false)) ? L"已复制选中行。" : L"复制失败。";
