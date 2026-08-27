@@ -101,6 +101,13 @@ public:
     // - 返回当前是否只读。
     bool isReadOnly() const;
 
+    // setStructuredReportViewEnabled：
+    // - 关闭内置的“结构视图 / 原始文本”切换入口；
+    // - 只用于页面已经自备结构化视图的场合（例如从 R0 结构体逐字段搭出来的属性树），
+    //   否则同一页会出现两套结构视图，用户还得分辨哪套更准；
+    // - 默认开启，普通只读报告框不需要调用。
+    void setStructuredReportViewEnabled(bool enabled);
+
     // currentEncodingDisplayText：
     // - 返回当前文件编码展示文本（如 "UTF-8 BOM"）；
     // - 若当前内容不是来自文件加载，则返回 "未知"。
@@ -355,6 +362,9 @@ private:
 
     // m_readOnlyMode：标记当前是否只读模式。
     bool m_readOnlyMode = false;
+
+    // m_structuredViewEnabled：是否允许出现内置结构视图切换入口。
+    bool m_structuredViewEnabled = true;
 
     // m_destroying：标记组件正在析构。
     // - 输入/处理：析构函数置 true，所有延迟信号回调在刷新 UI 前检查；

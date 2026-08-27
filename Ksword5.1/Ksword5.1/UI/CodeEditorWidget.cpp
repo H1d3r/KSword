@@ -1094,6 +1094,17 @@ bool CodeEditorWidget::isReadOnly() const
     return m_readOnlyMode;
 }
 
+void CodeEditorWidget::setStructuredReportViewEnabled(const bool enabled)
+{
+    if (m_structuredViewEnabled == enabled)
+    {
+        return;
+    }
+
+    m_structuredViewEnabled = enabled;
+    updateStructuredReportView();
+}
+
 QString CodeEditorWidget::currentEncodingDisplayText() const
 {
     return m_fileSessionAvailable
@@ -1518,7 +1529,8 @@ void CodeEditorWidget::updateStructuredReportView()
 
     // 只有只读报告才解析：用户正在编辑的文件、原始日志和字节视图一律保持纯文本。
     const QString currentText = m_editor->toPlainText();
-    const bool eligible = m_readOnlyMode && !currentText.trimmed().isEmpty();
+    const bool eligible =
+        m_structuredViewEnabled && m_readOnlyMode && !currentText.trimmed().isEmpty();
     const bool structured = eligible && m_structuredView->setReportText(currentText);
 
     m_structuredButton->setVisible(structured);
