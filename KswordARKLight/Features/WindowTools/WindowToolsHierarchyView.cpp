@@ -1,8 +1,10 @@
 #include "WindowToolsHierarchyView.h"
 
 #include "WindowToolsCommon.h"
+#include "../../Core/EntityRef.h"
 #include "../../Ui/AsyncTask.h"
 #include "../../Ui/Controls.h"
+#include "../../Ui/EntityNavigation.h"
 #include "../../Ui/ExportUtil.h"
 #include "../../Ui/FilterBar.h"
 #include "../../Ui/ListViewUtil.h"
@@ -37,6 +39,7 @@ constexpr UINT kMenuCopyReport = 67641;
 constexpr UINT kMenuCopyRow = 67642;
 constexpr UINT kMenuCopyVisible = 67643;
 constexpr UINT kMenuRefresh = 67644;
+constexpr UINT kMenuOpenProcess = 67645;
 
 constexpr UINT kMsgRefreshCompleted = WM_APP + 675;
 constexpr UINT kMsgFilterCompleted = WM_APP + 676;
@@ -427,6 +430,36 @@ void ShowReportForSelection(HierarchyViewState& state) {
     ::SetWindowTextW(state.reportEdit, report.c_str());
 }
 
+// SelectRowAtPoint makes row commands act on the window under the pointer,
+// instead of retaining a selection that belongs to a different HWND.
+void SelectRowAtPoint(HierarchyViewState& state, const POINT screenPoint) {
+    const HWND list = state.windowList.hwnd();
+    if (!list) {
+        return;
+    }
+    POINT clientPoint = screenPoint;
+    ::ScreenToClient(list, &clientPoint);
+    LVHITTESTINFO hit{};
+    hit.pt = clientPoint;
+    const int clickedItem = ListView_SubItemHitTest(list, &hit);
+    ListView_SetItemState(list, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
+    if (clickedItem >= 0 && static_cast<std::size_t>(clickedItem) < state.windowList.visibleIndexes().size()) {
+        ListView_SetItemState(list, clickedItem, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+    }
+    ShowReportForSelection(state);
+}
+
+// CurrentProcessIdForWindow re-reads the owner from the live HWND. A snapshot
+// PID is deliberately not used because a window can close or be recycled while
+// the diagnostics page is open.
+DWORD CurrentProcessIdForWindow(const HWND hwnd) {
+    if (!hwnd || !::IsWindow(hwnd)) {
+        return 0;
+    }
+    DWORD processId = 0;
+    return ::GetWindowThreadProcessId(hwnd, &processId) != 0U ? processId : 0U;
+}
+
 std::wstring StableKeyFromListItem(const HierarchyViewState& state, const int item) {
     const auto& visible = state.windowList.visibleIndexes();
     const auto& rows = state.windowList.rows();
@@ -590,15 +623,43 @@ void ExportVisibleRows(HierarchyViewState& state) {
     ::InvalidateRect(state.hwnd, nullptr, TRUE);
 }
 
+// OpenSelectedWindowProcess routes only the current owner PID observed from a
+// live HWND. The process page resolves that PID again before it opens details.
+void OpenSelectedWindowProcess(HierarchyViewState& state) {
+    const HWND hwnd = SelectedWindowHandle(state);
+    const DWORD processId = CurrentProcessIdForWindow(hwnd);
+    if (processId == 0U) {
+        state.statusText = L"所选窗口已关闭或无法读取当前所属 PID。";
+        ::InvalidateRect(state.hwnd, nullptr, TRUE);
+        return;
+    }
+
+    Ksword::Core::NavigationRequest request{};
+    request.target = Ksword::Core::NavigationTarget::ProcessDetails;
+    request.entity.kind = Ksword::Core::EntityKind::Process;
+    request.entity.id = processId;
+    state.statusText = Ksword::Ui::RequestEntityNavigation(state.hwnd, request)
+        ? L"已请求打开当前窗口所属 PID " + std::to_wstring(processId) +
+            L" 的进程详细信息；目标页会重新确认当前进程实例。"
+        : L"无法导航到当前窗口所属的进程实例。";
+    ::InvalidateRect(state.hwnd, nullptr, TRUE);
+}
+
 void ShowContextMenu(HierarchyViewState& state, const POINT screenPoint) {
+    SelectRowAtPoint(state, screenPoint);
     HMENU menu = ::CreatePopupMenu();
     if (!menu) {
         return;
     }
-    const bool hasSelection = SelectedWindowHandle(state) != nullptr;
+    const HWND selectedWindow = SelectedWindowHandle(state);
+    const bool hasSelection = selectedWindow != nullptr;
+    const bool hasCurrentProcess = CurrentProcessIdForWindow(selectedWindow) != 0U;
     ::AppendMenuW(menu, MF_STRING | (hasSelection ? MF_ENABLED : MF_GRAYED), kMenuCopyReport, L"复制诊断报告");
     ::AppendMenuW(menu, MF_STRING | (hasSelection ? MF_ENABLED : MF_GRAYED), kMenuCopyRow, L"复制选中行");
     ::AppendMenuW(menu, MF_STRING, kMenuCopyVisible, L"复制可见行");
+    ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    ::AppendMenuW(menu, MF_STRING | (hasCurrentProcess ? MF_ENABLED : MF_GRAYED),
+        kMenuOpenProcess, L"查看当前窗口所属进程的详细信息");
     ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     ::AppendMenuW(menu, MF_STRING, kMenuRefresh, L"刷新");
 
@@ -618,6 +679,9 @@ void ShowContextMenu(HierarchyViewState& state, const POINT screenPoint) {
         state.statusText = CopyTextToClipboard(state.hwnd, RowsAsTsv(state.windowList, true, kColumnCount))
             ? L"已复制可见行。" : L"复制失败。";
         break;
+    case kMenuOpenProcess:
+        OpenSelectedWindowProcess(state);
+        return;
     case kMenuRefresh:
         BeginRefresh(state);
         return;
