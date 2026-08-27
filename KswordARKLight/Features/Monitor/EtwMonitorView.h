@@ -81,6 +81,7 @@ private:
     int iconIndexForProcessId(std::uint32_t processId);
     std::wstring processImagePath(std::uint32_t processId) const;
     void openSelectedEventDetail();
+    void openSelectedEventProcess();
     void showEventDetail(const EtwEvent& eventRow);
     int selectedEventIndex() const;
     bool selectedEvent(EtwEvent* eventRow) const;

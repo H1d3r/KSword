@@ -1,6 +1,7 @@
 #include "EtwMonitorView.h"
 
 #include "../../Ui/Controls.h"
+#include "../../Ui/EntityNavigation.h"
 #include "../../Ui/FilterBar.h"
 #include "../../Ui/ExportUtil.h"
 #include "../../Ui/TextFindSupport.h"
@@ -47,6 +48,7 @@ constexpr UINT kEtwMenuStop = 52606;
 constexpr UINT kEtwMenuFilter = 52607;
 constexpr UINT kEtwMenuCopyCell = 52608;
 constexpr UINT kEtwMenuCopyVisible = 52609;
+constexpr UINT kEtwMenuOpenProcess = 52610;
 
 void EnsureViewClass() {
     static bool registered = false;
@@ -698,6 +700,30 @@ void EtwMonitorView::openSelectedEventDetail() {
     showEventDetail(eventRow);
 }
 
+// openSelectedEventProcess routes only the numeric PID captured by ETW. ETW
+// rows do not carry a stable process creation-time identity, so the receiving
+// process page deliberately resolves the PID again and may reject an exited or
+// recycled instance rather than claiming it is the historical event owner.
+void EtwMonitorView::openSelectedEventProcess() {
+    EtwEvent eventRow;
+    if (!selectedEvent(&eventRow)) {
+        return;
+    }
+    if (eventRow.processId == 0U) {
+        updateStatusText(L"该 ETW 事件没有可导航的进程 PID。");
+        return;
+    }
+
+    Ksword::Core::NavigationRequest request{};
+    request.target = Ksword::Core::NavigationTarget::ProcessDetails;
+    request.entity.kind = Ksword::Core::EntityKind::Process;
+    request.entity.id = eventRow.processId;
+    const bool routed = Ksword::Ui::RequestEntityNavigation(hwnd_, request);
+    updateStatusText(routed
+        ? L"已请求打开当前 PID " + std::to_wstring(eventRow.processId) + L" 的进程详细信息；历史 ETW 归属会重新校验。"
+        : L"无法导航到该 ETW 事件的当前进程实例。");
+}
+
 void EtwMonitorView::showEventDetail(const EtwEvent& eventRow) {
     EnsureDetailWindowClass();
 
@@ -851,6 +877,8 @@ void EtwMonitorView::showEventContextMenu(POINT screenPoint) {
     }
 
     const bool hasSelection = selectedEventIndex() >= 0;
+    EtwEvent selectedRow{};
+    const bool canOpenProcess = hasSelection && selectedEvent(&selectedRow) && selectedRow.processId != 0U;
     HMENU menu = ::CreatePopupMenu();
     if (!menu) {
         return;
@@ -859,6 +887,12 @@ void EtwMonitorView::showEventContextMenu(POINT screenPoint) {
     if (eventMenu) {
         ::AppendMenuW(eventMenu, MF_STRING | (hasSelection ? 0U : MF_GRAYED), kEtwMenuDetail, L"详细信息");
         ::AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(eventMenu), L"事件");
+    }
+    HMENU investigationMenu = ::CreatePopupMenu();
+    if (investigationMenu) {
+        ::AppendMenuW(investigationMenu, MF_STRING | (canOpenProcess ? 0U : MF_GRAYED),
+            kEtwMenuOpenProcess, L"打开所属进程详细信息");
+        ::AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(investigationMenu), L"关联调查");
     }
     HMENU copyMenu = ::CreatePopupMenu();
     if (copyMenu) {
@@ -890,6 +924,9 @@ void EtwMonitorView::showEventContextMenu(POINT screenPoint) {
     switch (command) {
     case kEtwMenuDetail:
         openSelectedEventDetail();
+        break;
+    case kEtwMenuOpenProcess:
+        openSelectedEventProcess();
         break;
     case kEtwMenuCopyRow:
         copySelectedEventRow();
