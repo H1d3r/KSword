@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cerrno>
 #include <cstdint>
+#include <cwctype>
 #include <cwchar>
 #include <iomanip>
 #include <iostream>
@@ -225,6 +226,74 @@ namespace
         throw std::runtime_error("invalid --source, expected mm, piddb, or hash");
     }
 
+    // trimWhitespace removes category-list separators' surrounding whitespace
+    // without changing the category token itself.
+    std::wstring trimWhitespace(std::wstring value)
+    {
+        std::size_t first = 0U;
+        while (first < value.size() && std::iswspace(value[first]) != 0)
+        {
+            ++first;
+        }
+        std::size_t last = value.size();
+        while (last > first && std::iswspace(value[last - 1U]) != 0)
+        {
+            --last;
+        }
+        return value.substr(first, last - first);
+    }
+
+    // parseCallbackMonitorCategories maps a readable comma-separated category
+    // list to the shared protocol mask and rejects ambiguous empty entries.
+    std::uint32_t parseCallbackMonitorCategories(const ExtendedArgs& args)
+    {
+        if (!hasOption(args, L"--categories"))
+        {
+            return KSWORD_ARK_CALLBACK_MONITOR_CATEGORY_CORE;
+        }
+
+        const std::wstring categoryList = optionValue(args, L"--categories");
+        if (categoryList.empty())
+        {
+            throw std::runtime_error("--categories requires a comma-separated category list");
+        }
+
+        std::uint32_t categoryMask = 0U;
+        std::size_t tokenStart = 0U;
+        while (tokenStart <= categoryList.size())
+        {
+            const std::size_t delimiter = categoryList.find(L',', tokenStart);
+            const std::size_t tokenLength = delimiter == std::wstring::npos
+                ? categoryList.size() - tokenStart
+                : delimiter - tokenStart;
+            const std::wstring token = trimWhitespace(categoryList.substr(tokenStart, tokenLength));
+            if (token.empty())
+            {
+                throw std::runtime_error("--categories contains an empty category name");
+            }
+            if (token == L"process") categoryMask |= KSWORD_ARK_CALLBACK_MONITOR_CATEGORY_PROCESS;
+            else if (token == L"thread") categoryMask |= KSWORD_ARK_CALLBACK_MONITOR_CATEGORY_THREAD;
+            else if (token == L"image") categoryMask |= KSWORD_ARK_CALLBACK_MONITOR_CATEGORY_IMAGE;
+            else if (token == L"registry") categoryMask |= KSWORD_ARK_CALLBACK_MONITOR_CATEGORY_REGISTRY;
+            else if (token == L"object") categoryMask |= KSWORD_ARK_CALLBACK_MONITOR_CATEGORY_OBJECT;
+            else if (token == L"minifilter") categoryMask |= KSWORD_ARK_CALLBACK_MONITOR_CATEGORY_MINIFILTER;
+            else if (token == L"core") categoryMask |= KSWORD_ARK_CALLBACK_MONITOR_CATEGORY_CORE;
+            else if (token == L"all") categoryMask |= KSWORD_ARK_CALLBACK_MONITOR_CATEGORY_ALL;
+            else throw std::runtime_error("--categories contains an unknown category name");
+
+            if (delimiter == std::wstring::npos)
+            {
+                break;
+            }
+            tokenStart = delimiter + 1U;
+        }
+        if (categoryMask == 0U)
+        {
+            throw std::runtime_error("--categories resolved to an empty category mask");
+        }
+        return categoryMask;
+    }
+
     // printCallbackMonitorStatus emits the fixed monitor state response in the
     // same key=value shape used by the other ArkDriverClient-backed commands.
     void printCallbackMonitorStatus(const ksword::ark::CallbackMonitorStatusResult& result)
@@ -434,6 +503,24 @@ int commandArkDriverCallbackMonitor(const int argc, wchar_t* argv[])
     const std::wstring subcommand = argv[2];
     const ExtendedArgs args = parseExtendedArgs(argc, argv, 3);
     const ksword::ark::DriverClient client{};
+    if (subcommand == L"monitor-start")
+    {
+        const auto result = client.controlCallbackMonitor(
+            KSWORD_ARK_CALLBACK_MONITOR_ACTION_START,
+            parseCallbackMonitorCategories(args));
+        const int rc = finishResult(L"monitor-start", result);
+        if (rc == 0) printCallbackMonitorStatus(result);
+        return rc;
+    }
+    if (subcommand == L"monitor-stop")
+    {
+        const auto result = client.controlCallbackMonitor(
+            KSWORD_ARK_CALLBACK_MONITOR_ACTION_STOP,
+            0UL);
+        const int rc = finishResult(L"monitor-stop", result);
+        if (rc == 0) printCallbackMonitorStatus(result);
+        return rc;
+    }
     if (subcommand == L"monitor-status")
     {
         const auto result = client.queryCallbackMonitorStatus();
