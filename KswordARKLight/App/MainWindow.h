@@ -74,6 +74,15 @@ private:
     void rebuildNavigationPalette();
     void activateNavigationPaletteSelection();
     void createModuleDocks();
+    // captureNormalWindowRect records the top-level outer rectangle only while
+    // the shell is neither minimized nor maximized, so workspace persistence
+    // never treats an iconified/maximized rectangle as normal placement.
+    void captureNormalWindowRect();
+    // persistWorkspaceState saves only the validated normal outer rectangle,
+    // maximized state, and stable active module command id. Dock visibility and
+    // layout remain intentionally transient.
+    void persistWorkspaceState();
+    int activeModuleCommandId() const;
     // createModulePlaceholderPage creates a lightweight tab body used during
     // startup. Inputs are a module descriptor and initial bounds; processing
     // avoids touching feature code/enumerators; output is a child HWND.
@@ -161,6 +170,11 @@ private:
     std::wstring startupPrivilegeSummary_;
     Ksword::Core::DriverLease driverLease_;
     Ksword::Core::DriverRuntimeStatus driverStatus_;
+    RECT lastNormalScreenRect_{};
+    int restoredModuleCommandId_ = 0;
+    bool hasLastNormalScreenRect_ = false;
+    bool wasMaximized_ = false;
+    bool restoreMaximized_ = false;
     bool driverStatusKnown_ = false;
 };
 

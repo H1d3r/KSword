@@ -3,6 +3,7 @@
 #include "../Core/Common.h"
 #include "../Core/DriverService.h"
 #include "../Core/Privilege.h"
+#include "../Core/WorkspaceConfig.h"
 #include "../Features/FeatureRegistry.h"
 #include "../Features/File/FileFeature.h"
 #include "../Features/Handle/HandleFeature.h"
@@ -22,6 +23,7 @@
 
 #include <algorithm>
 #include <commctrl.h>
+#include <cstdint>
 #include <tlhelp32.h>
 #include <cwctype>
 #include <limits>
@@ -62,6 +64,8 @@ constexpr int kHandleModuleCommandId = 40012;
 constexpr UINT kMsgQueryDriverStatus = WM_APP + 101;
 constexpr UINT kMsgDockActivated = WM_APP + 102;
 constexpr UINT kMsgMaterializeDock = WM_APP + 103;
+constexpr wchar_t kWorkspaceRegistryPath[] = L"Software\\KSwordDEV\\KswordARKLight\\Workspace";
+constexpr wchar_t kWorkspaceRegistryValue[] = L"State";
 
 // RegisterMainWindowClass registers the top-level shell class. Input is the
 // module instance; processing installs icon/cursor/background metadata; output
@@ -110,6 +114,96 @@ std::wstring LowerText(std::wstring value) {
         character = static_cast<wchar_t>(std::towlower(character));
     }
     return value;
+}
+
+// ClampWorkspaceNormalRect keeps a persisted outer screen rectangle on an
+// available monitor. It deliberately operates on GetWindowRect coordinates,
+// never WINDOWPLACEMENT::rcNormalPosition work-area coordinates.
+bool ClampWorkspaceNormalRect(const Ksword::Core::WorkspaceNormalRect& saved, RECT* rectOut) {
+    if (!rectOut || !Ksword::Core::IsWorkspaceNormalRectValid(saved)) {
+        return false;
+    }
+
+    RECT candidate{
+        static_cast<LONG>(saved.left),
+        static_cast<LONG>(saved.top),
+        static_cast<LONG>(saved.right),
+        static_cast<LONG>(saved.bottom)
+    };
+    const HMONITOR monitor = ::MonitorFromRect(&candidate, MONITOR_DEFAULTTONEAREST);
+    MONITORINFO monitorInfo{};
+    monitorInfo.cbSize = sizeof(monitorInfo);
+    if (!monitor || !::GetMonitorInfoW(monitor, &monitorInfo)) {
+        return false;
+    }
+
+    const std::int64_t workWidth = static_cast<std::int64_t>(monitorInfo.rcWork.right) - monitorInfo.rcWork.left;
+    const std::int64_t workHeight = static_cast<std::int64_t>(monitorInfo.rcWork.bottom) - monitorInfo.rcWork.top;
+    const std::int64_t savedWidth = static_cast<std::int64_t>(saved.right) - saved.left;
+    const std::int64_t savedHeight = static_cast<std::int64_t>(saved.bottom) - saved.top;
+    if (workWidth <= 0 || workHeight <= 0 || savedWidth <= 0 || savedHeight <= 0) {
+        return false;
+    }
+
+    const std::int64_t width = (std::min)(savedWidth, workWidth);
+    const std::int64_t height = (std::min)(savedHeight, workHeight);
+    const std::int64_t left = (std::clamp)(
+        static_cast<std::int64_t>(saved.left),
+        static_cast<std::int64_t>(monitorInfo.rcWork.left),
+        static_cast<std::int64_t>(monitorInfo.rcWork.right) - width);
+    const std::int64_t top = (std::clamp)(
+        static_cast<std::int64_t>(saved.top),
+        static_cast<std::int64_t>(monitorInfo.rcWork.top),
+        static_cast<std::int64_t>(monitorInfo.rcWork.bottom) - height);
+    *rectOut = {
+        static_cast<LONG>(left),
+        static_cast<LONG>(top),
+        static_cast<LONG>(left + width),
+        static_cast<LONG>(top + height)
+    };
+    return rectOut->right > rectOut->left && rectOut->bottom > rectOut->top;
+}
+
+Ksword::Core::WorkspaceConfig LoadWorkspaceConfig() {
+    HKEY key = nullptr;
+    if (::RegOpenKeyExW(HKEY_CURRENT_USER, kWorkspaceRegistryPath, 0, KEY_QUERY_VALUE, &key) != ERROR_SUCCESS) {
+        return {};
+    }
+
+    DWORD type = 0;
+    DWORD byteCount = 0;
+    LONG status = ::RegQueryValueExW(key, kWorkspaceRegistryValue, nullptr, &type, nullptr, &byteCount);
+    if (status != ERROR_SUCCESS || type != REG_BINARY || byteCount != Ksword::Core::kWorkspaceConfigBinarySize) {
+        ::RegCloseKey(key);
+        return {};
+    }
+
+    Ksword::Core::WorkspaceConfigBinary bytes{};
+    byteCount = static_cast<DWORD>(bytes.size());
+    status = ::RegQueryValueExW(key, kWorkspaceRegistryValue, nullptr, &type, bytes.data(), &byteCount);
+    ::RegCloseKey(key);
+    if (status != ERROR_SUCCESS || type != REG_BINARY || byteCount != bytes.size()) {
+        return {};
+    }
+
+    const Ksword::Core::WorkspaceConfigDecodeResult decoded = Ksword::Core::DeserializeWorkspaceConfig(bytes);
+    return decoded.valid() ? decoded.config : Ksword::Core::WorkspaceConfig{};
+}
+
+void StoreWorkspaceConfig(const Ksword::Core::WorkspaceConfig& config) {
+    HKEY key = nullptr;
+    if (::RegCreateKeyExW(HKEY_CURRENT_USER, kWorkspaceRegistryPath, 0, nullptr, REG_OPTION_NON_VOLATILE,
+            KEY_SET_VALUE, nullptr, &key, nullptr) != ERROR_SUCCESS) {
+        return;
+    }
+
+    const Ksword::Core::WorkspaceConfigBinary bytes = Ksword::Core::SerializeWorkspaceConfig(config);
+    ::RegSetValueExW(key, kWorkspaceRegistryValue, 0, REG_BINARY, bytes.data(), static_cast<DWORD>(bytes.size()));
+    ::RegCloseKey(key);
+}
+
+bool AllowsPersistedMaximize(const int showCommand) noexcept {
+    return showCommand == SW_SHOWNORMAL || showCommand == SW_SHOW || showCommand == SW_SHOWDEFAULT;
 }
 
 bool IsEditableTextControl(const HWND hwnd) {
@@ -173,7 +267,19 @@ bool MainWindow::create(HINSTANCE instance, int showCommand) {
         return false;
     }
 
+    const Ksword::Core::WorkspaceConfig restoredWorkspace = LoadWorkspaceConfig();
     RECT rect = CenterWindowRect(1240, 780);
+    if (restoredWorkspace.hasNormalRect) {
+        RECT restoredRect{};
+        if (ClampWorkspaceNormalRect(restoredWorkspace.normalRect, &restoredRect)) {
+            rect = restoredRect;
+        }
+    }
+    lastNormalScreenRect_ = rect;
+    hasLastNormalScreenRect_ = true;
+    restoredModuleCommandId_ = restoredWorkspace.activeCommandId;
+    restoreMaximized_ = restoredWorkspace.maximized;
+    wasMaximized_ = restoreMaximized_;
     hwnd_ = ::CreateWindowExW(0, kMainWindowClass, L"KswordARKLight", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
         rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top,
         nullptr, nullptr, instance, this);
@@ -181,7 +287,10 @@ bool MainWindow::create(HINSTANCE instance, int showCommand) {
         return false;
     }
 
-    ::ShowWindow(hwnd_, showCommand);
+    const int effectiveShowCommand = restoreMaximized_ && AllowsPersistedMaximize(showCommand)
+        ? SW_SHOWMAXIMIZED
+        : showCommand;
+    ::ShowWindow(hwnd_, effectiveShowCommand);
     ::UpdateWindow(hwnd_);
     return true;
 }
@@ -338,10 +447,17 @@ LRESULT MainWindow::handleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
         }
         return 0;
     case WM_SIZE:
+        if (wParam == SIZE_MAXIMIZED) {
+            wasMaximized_ = true;
+        } else if (wParam == SIZE_RESTORED) {
+            wasMaximized_ = false;
+            captureNormalWindowRect();
+        }
         positionCommandInput();
         layout();
         return 0;
     case WM_MOVE:
+        captureNormalWindowRect();
         positionCommandInput();
         return 0;
     case WM_SETTINGCHANGE:
@@ -428,6 +544,7 @@ LRESULT MainWindow::handleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
     case WM_ERASEBKGND:
         return 1;
     case WM_DESTROY:
+        persistWorkspaceState();
         stopDriverOnExit();
         if (navigationPalette_) {
             ::DestroyWindow(navigationPalette_);
@@ -699,9 +816,54 @@ void MainWindow::createModuleDocks() {
         dockSlots_[moduleIndex].materializing = false;
     }
     if (!dockSlots_.empty()) {
-        dockManager_->activateDock(dockSlots_[0].dockIndex);
+        int initialModuleIndex = moduleIndexForCommandId(restoredModuleCommandId_);
+        if (initialModuleIndex < 0) {
+            initialModuleIndex = 0;
+        }
+        dockManager_->activateDock(dockSlots_[initialModuleIndex].dockIndex);
     }
     rebuildWindowMenuChecks();
+}
+
+void MainWindow::captureNormalWindowRect() {
+    if (!hwnd_ || ::IsIconic(hwnd_) || ::IsZoomed(hwnd_)) {
+        return;
+    }
+    RECT rect{};
+    if (::GetWindowRect(hwnd_, &rect) && rect.right > rect.left && rect.bottom > rect.top) {
+        lastNormalScreenRect_ = rect;
+        hasLastNormalScreenRect_ = true;
+    }
+}
+
+int MainWindow::activeModuleCommandId() const {
+    if (!dockManager_) {
+        return 0;
+    }
+    const int activeDockIndex = dockManager_->activeDockIndex();
+    for (int moduleIndex = 0; moduleIndex < static_cast<int>(dockSlots_.size()) && moduleIndex < static_cast<int>(modules_.size()); ++moduleIndex) {
+        if (dockSlots_[moduleIndex].dockIndex == activeDockIndex) {
+            return modules_[moduleIndex].commandId;
+        }
+    }
+    return 0;
+}
+
+void MainWindow::persistWorkspaceState() {
+    Ksword::Core::WorkspaceConfig config{};
+    config.maximized = wasMaximized_;
+    config.activeCommandId = activeModuleCommandId();
+    if (hasLastNormalScreenRect_ && lastNormalScreenRect_.right > lastNormalScreenRect_.left &&
+        lastNormalScreenRect_.bottom > lastNormalScreenRect_.top) {
+        config.hasNormalRect = true;
+        config.normalRect = {
+            static_cast<std::int32_t>(lastNormalScreenRect_.left),
+            static_cast<std::int32_t>(lastNormalScreenRect_.top),
+            static_cast<std::int32_t>(lastNormalScreenRect_.right),
+            static_cast<std::int32_t>(lastNormalScreenRect_.bottom)
+        };
+    }
+    StoreWorkspaceConfig(config);
 }
 
 HWND MainWindow::createModulePlaceholderPage(const Ksword::Ui::ModuleDescriptor& module, const RECT& bounds) const {
