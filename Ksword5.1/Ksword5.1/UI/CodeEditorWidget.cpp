@@ -7,10 +7,14 @@
 // - 提供行号、括号高亮、查找替换、跳转行、文本文件读写。
 // ============================================================
 
+#include "ReportStructuredView.h"
+
 #include "../theme.h"
 #include "../Internationalization/LanguageManager.h"
 
 #include <QBuffer>
+#include <QSignalBlocker>
+#include <QStackedWidget>
 #include <QEvent>
 #include <QFile>
 #include <QFileDialog>
@@ -44,6 +48,12 @@
 
 namespace
 {
+    // g_preferStructuredReportView 作用：
+    // - 记住用户最近一次在“结构视图 / 原始文本”之间的选择，之后新出现的报告沿用同一选择；
+    // - 只在进程内有效、不落盘：这是“这次排查我想怎么看”，不是需要长期保存的偏好；
+    // - 默认结构视图：详情报告本来就是字段清单，逐条看比读整段文本快。
+    bool g_preferStructuredReportView = true;
+
     // localizeReportValueCore：翻译报告字段值；复合权限/标志按竖线逐项翻译。
     QString localizeReportValueCore(const QString& valueCore)
     {
@@ -1152,6 +1162,12 @@ void CodeEditorWidget::initializeUi()
     m_replaceButton = buildButton(QStringLiteral(":/Icon/codeeditor_replace.svg"), QStringLiteral("替换 Ctrl+H"));
     m_gotoButton = buildButton(QStringLiteral(":/Icon/codeeditor_goto.svg"), QStringLiteral("跳转行 Ctrl+G"));
     m_wrapButton = buildButton(QStringLiteral(":/Icon/codeeditor_wrap.svg"), QStringLiteral("切换自动换行"));
+    m_structuredButton = buildButton(
+        QStringLiteral(":/Icon/codeeditor_structured.svg"),
+        QStringLiteral("结构视图：按字段/表格解析当前报告；再点一次回到原始文本"));
+    m_structuredButton->setCheckable(true);
+    // 入口默认隐藏：只有内容确实是可解析的只读报告时才由 updateStructuredReportView 放出来。
+    m_structuredButton->setVisible(false);
 
     m_toolbarLayout->addWidget(m_newButton);
     m_toolbarLayout->addWidget(m_openButton);
@@ -1168,6 +1184,7 @@ void CodeEditorWidget::initializeUi()
     m_toolbarLayout->addWidget(m_replaceButton);
     m_toolbarLayout->addWidget(m_gotoButton);
     m_toolbarLayout->addWidget(m_wrapButton);
+    m_toolbarLayout->addWidget(m_structuredButton);
     m_toolbarLayout->addStretch(1);
     m_rootLayout->addWidget(m_toolbarWidget);
 
@@ -1228,7 +1245,14 @@ void CodeEditorWidget::initializeUi()
 
     m_editor = new CodeTextEdit(this);
     m_editor->setPlaceholderText(QStringLiteral("即时窗口：支持行号、括号匹配、查找替换、跳转行。"));
-    m_rootLayout->addWidget(m_editor, 1);
+
+    // 纯文本与结构视图叠在同一位置：切换只换页，不改变外层布局和分隔器比例。
+    m_viewStack = new QStackedWidget(this);
+    m_structuredView = new ks::ui::ReportStructuredView(m_viewStack);
+    m_viewStack->addWidget(m_editor);
+    m_viewStack->addWidget(m_structuredView);
+    m_viewStack->setCurrentWidget(m_editor);
+    m_rootLayout->addWidget(m_viewStack, 1);
 
     m_statusLabel = new QLabel(QStringLiteral("就绪。"), this);
     m_rootLayout->addWidget(m_statusLabel);
@@ -1344,7 +1368,20 @@ void CodeEditorWidget::initializeConnections()
     connect(m_editor, &QPlainTextEdit::textChanged, this, [this]()
         {
             updateStatusText();
+            updateStructuredReportView();
             emit contentChanged(text());
+        });
+
+    connect(m_structuredButton, &QToolButton::toggled, this, [this](const bool structuredChecked)
+        {
+            if (m_destroying || m_viewStack == nullptr || m_structuredView == nullptr)
+            {
+                return;
+            }
+            // 选择记在进程内：这是“这次排查我想怎么看”，不是需要长期保存的偏好。
+            g_preferStructuredReportView = structuredChecked;
+            m_viewStack->setCurrentWidget(
+                structuredChecked ? static_cast<QWidget*>(m_structuredView) : static_cast<QWidget*>(m_editor));
         });
 
     new QShortcut(QKeySequence::Find, this, [this]()
@@ -1438,6 +1475,40 @@ void CodeEditorWidget::refreshReadOnlyUiState()
         m_replaceOneButton->setVisible(false);
         m_replaceAllButton->setVisible(false);
     }
+
+    // 页面常在写完文本之后才置只读，这里补一次判定，避免结构视图入口被漏掉。
+    updateStructuredReportView();
+}
+
+void CodeEditorWidget::updateStructuredReportView()
+{
+    if (m_destroying ||
+        m_editor == nullptr ||
+        m_viewStack == nullptr ||
+        m_structuredView == nullptr ||
+        m_structuredButton == nullptr)
+    {
+        return;
+    }
+
+    // 只有只读报告才解析：用户正在编辑的文件、原始日志和字节视图一律保持纯文本。
+    const QString currentText = m_editor->toPlainText();
+    const bool eligible = m_readOnlyMode && !currentText.trimmed().isEmpty();
+    const bool structured = eligible && m_structuredView->setReportText(currentText);
+
+    m_structuredButton->setVisible(structured);
+    if (!structured)
+    {
+        m_viewStack->setCurrentWidget(m_editor);
+        return;
+    }
+
+    // 这里是程序按记忆恢复视图，不是用户点击；阻断信号避免把状态又写回全局偏好。
+    const QSignalBlocker buttonSignalBlocker(m_structuredButton);
+    m_structuredButton->setChecked(g_preferStructuredReportView);
+    m_viewStack->setCurrentWidget(g_preferStructuredReportView
+        ? static_cast<QWidget*>(m_structuredView)
+        : static_cast<QWidget*>(m_editor));
 }
 
 void CodeEditorWidget::openFindReplacePanel(const bool replaceEnabled)

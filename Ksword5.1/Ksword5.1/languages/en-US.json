@@ -5632,6 +5632,12 @@
     "settings.background.translucency_material.acrylic": "Frosted glass"
   },
   "source_translations": {
+    "ReportStructuredView.h": "ReportStructuredView.h",
+    "复制该值": "Copy Value",
+    "复制该行": "Copy Row",
+    "未签名": "Unsigned",
+    "篡改": "Tampered",
+    "结构视图：按字段/表格解析当前报告；再点一次回到原始文本": "Structured view: parse the current report into fields and tables; click again to return to raw text",
     "蓝屏诊断": "Blue-screen diagnostics",
     "仅在自动安装已配置或明确点击“本次安装”后，R0 才会扫描 BGP 私有函数、准备蓝屏绘制资源并注册转储回调。此操作曾在不兼容系统上造成异常，安装失败时会保留 Windows 原生蓝屏和转储路径。": "R0 scans BGP private functions, prepares blue-screen drawing resources, and registers dump callbacks only after automatic installation is configured or you explicitly select Install for this driver session. This operation previously caused failures on incompatible systems. A failed installation keeps the native Windows blue screen and dump path unchanged.",
     "驱动安装时自动安装蓝屏诊断": "Automatically install blue-screen diagnostics when the driver starts",

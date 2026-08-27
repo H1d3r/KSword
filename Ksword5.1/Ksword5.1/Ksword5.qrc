@@ -122,5 +122,6 @@
         <file alias="codeeditor_replace.svg">Resource/Icon/system/refresh_2_line.svg</file>
         <file alias="codeeditor_goto.svg">Resource/Icon/arrow/arrow_down_line.svg</file>
         <file alias="codeeditor_wrap.svg">Resource/Icon/editor/text_area_line.svg</file>
+        <file alias="codeeditor_structured.svg">Resource/Icon/design/layout_grid_line.svg</file>
     </qresource>
 </RCC>

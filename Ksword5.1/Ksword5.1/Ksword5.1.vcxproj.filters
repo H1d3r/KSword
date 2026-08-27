@@ -799,6 +799,9 @@
     <ClCompile Include="UI\DetailLayoutRegistry.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="UI\ReportStructuredView.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="UI\KernelDisassemblyDialog.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -1506,6 +1509,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="UI\DetailLayoutRegistry.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="UI\ReportStructuredView.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="UI\SmoothScrollSupport.h">

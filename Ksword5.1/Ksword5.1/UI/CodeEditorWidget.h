@@ -15,6 +15,7 @@
 class QLabel;
 class QLineEdit;
 class QEvent;
+class QStackedWidget;
 class QToolButton;
 class QVBoxLayout;
 class QHBoxLayout;
@@ -24,6 +25,8 @@ class CodeTextEdit;
 
 namespace ks::ui
 {
+    class ReportStructuredView;
+
     // LocalizeGeneratedReport 作用：
     // - 按行翻译“本程序自己生成的审计报告文本”，规则与 CodeEditorWidget 只读页完全一致：
     //   整行命中语言包时直接替换，未命中时再尝试翻译“标签: 值”里冒号后的状态值；
@@ -206,6 +209,12 @@ private:
     // - 返回格式化后的文本，无法识别或解析失败时原样返回。
     QString applyStructuredAutoFormatIfNeeded(const QString& inputText, QString* detectedKindOut = nullptr) const;
 
+    // updateStructuredReportView：
+    // - 当前内容为只读报告且能解析出结构时，显示结构视图切换按钮并按用户上次选择切页；
+    // - 内容没有结构（日志、原始数据、用户文件）时隐藏入口并强制回到纯文本；
+    // - 由文本变化统一驱动，覆盖 setText / setRawText / setLocalizedText 与语言切换重绘。
+    void updateStructuredReportView();
+
 private:
     // m_rootLayout：根布局。
     QVBoxLayout* m_rootLayout = nullptr;
@@ -296,6 +305,15 @@ private:
 
     // m_gotoCloseButton：关闭跳转面板按钮。
     QToolButton* m_gotoCloseButton = nullptr;
+
+    // m_structuredButton：结构视图 / 原始文本切换按钮（仅只读报告可解析时可见）。
+    QToolButton* m_structuredButton = nullptr;
+
+    // m_viewStack：纯文本编辑器与结构视图的切换容器。
+    QStackedWidget* m_viewStack = nullptr;
+
+    // m_structuredView：当前内容的结构化呈现。
+    ks::ui::ReportStructuredView* m_structuredView = nullptr;
 
     // m_editor：核心代码编辑器（行号 + 括号高亮）。
     CodeTextEdit* m_editor = nullptr;
