@@ -20,6 +20,7 @@ enum class EntityKind {
 enum class NavigationTarget {
     Default,
     ProcessDetails,
+    MemoryOperations,
     FileBrowser,
     RegistryBrowser,
     NetworkConnections,

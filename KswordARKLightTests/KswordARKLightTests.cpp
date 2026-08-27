@@ -44,6 +44,16 @@ int wmain() {
     Expect(process.navigation.entity.kind == EntityKind::Process && process.navigation.entity.id == 1234,
         L"pid entity identity");
 
+    const auto memory = ParseCommandInput(L"mem 4321");
+    Expect(memory.kind == CommandInputKind::Navigation &&
+            memory.navigation.target == NavigationTarget::MemoryOperations &&
+            memory.navigation.entity.kind == EntityKind::Process && memory.navigation.entity.id == 4321U,
+        L"memory command targets explicit process operations");
+    const auto memoryModule = ParseCommandInput(L"内存");
+    Expect(memoryModule.kind == CommandInputKind::Navigation && memoryModule.navigation.target == NavigationTarget::Default &&
+            memoryModule.navigation.entity.kind == EntityKind::Module,
+        L"plain memory title still opens the module without a target");
+
     const auto window = ParseCommandInput(L"hwnd 0xABC");
     Expect(window.navigation.target == NavigationTarget::WindowManager && window.navigation.entity.id == 0xABCU,
         L"hex HWND command");

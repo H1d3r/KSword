@@ -2293,7 +2293,8 @@ void ExecuteMenuItem(ProcessViewState& state, ProcessActionId actionId) {
         return;
     }
 
-    if (actionId == ProcessActionId::OpenImageInFileModule ||
+    if (actionId == ProcessActionId::OpenMemoryOperation ||
+        actionId == ProcessActionId::OpenImageInFileModule ||
         actionId == ProcessActionId::OpenNetworkForProcess ||
         actionId == ProcessActionId::OpenHandlesForProcess ||
         actionId == ProcessActionId::OpenEtwForProcess ||
@@ -2311,6 +2312,9 @@ void ExecuteMenuItem(ProcessViewState& state, ProcessActionId actionId) {
         request.entity.id = selectedRow.processId;
         request.entity.creationTime100ns = selectedRow.creationTime100ns;
         switch (actionId) {
+        case ProcessActionId::OpenMemoryOperation:
+            request.target = Ksword::Core::NavigationTarget::MemoryOperations;
+            break;
         case ProcessActionId::OpenImageInFileModule:
             if (selectedRow.iconPath.empty()) {
                 SetStatus(state, L"该进程没有可用的映像路径。");
@@ -2397,6 +2401,7 @@ void ShowContextMenu(ProcessViewState& state, POINT screenPoint) {
             id == ProcessActionId::CopyRow ||
             id == ProcessActionId::CopyVisibleResults ||
             id == ProcessActionId::OpenDetails ||
+            id == ProcessActionId::OpenMemoryOperation ||
             id == ProcessActionId::OpenImageInFileModule ||
             id == ProcessActionId::OpenNetworkForProcess ||
             id == ProcessActionId::OpenHandlesForProcess ||
@@ -2421,7 +2426,7 @@ void ShowContextMenu(ProcessViewState& state, POINT screenPoint) {
     appendAction(processMenu, ProcessActionId::SuspendProcess, L"挂起进程", hasProcessSelection);
     appendAction(processMenu, ProcessActionId::ResumeProcess, L"恢复进程", hasProcessSelection);
     appendAction(processMenu, ProcessActionId::OpenFolder, L"打开所在目录", singleProcess);
-    appendAction(processMenu, ProcessActionId::OpenMemoryOperation, L"跳转到内存操作", hasProcessSelection);
+    appendAction(processMenu, ProcessActionId::OpenMemoryOperation, L"跳转到内存操作", singleProcess);
     appendAction(processMenu, ProcessActionId::ScanHotkeys, L"扫描进程热键", singleProcess);
 
     HMENU efficiencyMenu = ::CreatePopupMenu();

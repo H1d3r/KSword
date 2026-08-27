@@ -106,7 +106,7 @@ CommandInputResult ParseCommandInput(const std::wstring& input) {
     const std::wstring argument = separator == std::wstring::npos ? std::wstring{} : Trim(trimmed.substr(separator + 1));
 
     if (argument.empty() &&
-        (verb == L"进程" || verb == L"窗口" || verb == L"网络" || verb == L"句柄" || verb == L"监控")) {
+        (verb == L"进程" || verb == L"内存" || verb == L"memory" || verb == L"窗口" || verb == L"网络" || verb == L"句柄" || verb == L"监控")) {
         result.kind = CommandInputKind::Navigation;
         result.navigation.entity.kind = EntityKind::Module;
         result.navigation.entity.text = trimmed;
@@ -118,6 +118,9 @@ CommandInputResult ParseCommandInput(const std::wstring& input) {
     }
     if (verb == L"tid" || verb == L"thread" || verb == L"线程") {
         return NumericRequest(argument, EntityKind::Thread, NavigationTarget::ProcessDetails, L"TID");
+    }
+    if (verb == L"mem" || verb == L"memory" || verb == L"内存") {
+        return NumericRequest(argument, EntityKind::Process, NavigationTarget::MemoryOperations, L"PID");
     }
     if (verb == L"hwnd" || verb == L"window" || verb == L"窗口") {
         return NumericRequest(argument, EntityKind::Window, NavigationTarget::WindowManager, L"HWND");

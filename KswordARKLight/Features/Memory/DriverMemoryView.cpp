@@ -62,6 +62,7 @@ constexpr UINT kMemoryMenuPreviewDiff = 51517;
 constexpr UINT kMemoryMenuApplyDiff = 51518;
 constexpr UINT kMsgMemoryOperationCompleted = WM_APP + 598;
 constexpr UINT kMsgMemoryHistoryFilterCompleted = WM_APP + 599;
+constexpr UINT kMsgMemorySelectProcess = WM_APP + 600;
 
 enum class SnapshotPresentation {
     EditableHex,
@@ -510,6 +511,47 @@ DriverMemoryViewState* CurrentLiveState(HWND hwnd, const std::shared_ptr<MemoryV
         return nullptr;
     }
     return state;
+}
+
+// SelectProcessForMemoryOperations prepares only local input controls for a
+// process-navigation request. It never sends a driver request: the address is
+// deliberately reset and the old editable bytes are cleared so a user must
+// choose a range and explicitly start a new read before any write is possible.
+bool SelectProcessForMemoryOperations(DriverMemoryViewState& state, const DWORD processId) {
+    if (processId == 0U) {
+        SetStatus(state, L"内存操作目标 PID 必须非零。");
+        return false;
+    }
+    if (state.operationInProgress) {
+        SetStatus(state, L"内存操作正在执行，完成后再切换目标进程。");
+        return false;
+    }
+
+    InvalidatePreparedWritePlan(state);
+    state.snapshotPresentation = SnapshotPresentation::EditableHex;
+    state.editableHexText.clear();
+    state.hasEditableHexText = false;
+    if (state.pidEdit) {
+        ::SetWindowTextW(state.pidEdit, std::to_wstring(processId).c_str());
+    }
+    if (state.addressEdit) {
+        ::SetWindowTextW(state.addressEdit, L"0x0");
+    }
+    if (state.lengthEdit) {
+        ::SetWindowTextW(state.lengthEdit, L"16");
+    }
+    if (state.hexEdit) {
+        ::SendMessageW(state.hexEdit, EM_SETREADONLY, FALSE, 0);
+        ::SetWindowTextW(state.hexEdit, L"");
+    }
+    UpdateSnapshotButtons(state);
+    SetStatus(state, L"已选择 PID " + std::to_wstring(processId) +
+        L" 作为下一次内存读取目标；已清空旧编辑缓冲，尚未发送读取或写入请求。请输入地址后显式读取。");
+    if (state.addressEdit) {
+        ::SetFocus(state.addressEdit);
+        ::SendMessageW(state.addressEdit, EM_SETSEL, 0, -1);
+    }
+    return true;
 }
 
 // HandleRead validates read fields and invokes the driver facade. Input is page
@@ -1357,6 +1399,8 @@ LRESULT CALLBACK DriverMemoryViewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
             return 0;
         }
         break;
+    case kMsgMemorySelectProcess:
+        return state && SelectProcessForMemoryOperations(*state, static_cast<DWORD>(wParam)) ? TRUE : FALSE;
     case WM_NOTIFY: {
         const auto* notify = reinterpret_cast<const NMHDR*>(lParam);
         if (state && notify && notify->idFrom == kHistoryListId) {
@@ -1465,6 +1509,11 @@ HWND CreateDriverMemoryView(HWND parent, const RECT& bounds) {
         nullptr,
         ::GetModuleHandleW(nullptr),
         nullptr);
+}
+
+bool RequestDriverMemoryViewProcess(HWND page, const DWORD processId) {
+    return page != nullptr && processId != 0U &&
+        ::SendMessageW(page, kMsgMemorySelectProcess, static_cast<WPARAM>(processId), 0) == TRUE;
 }
 
 } // namespace Ksword::Features::Memory

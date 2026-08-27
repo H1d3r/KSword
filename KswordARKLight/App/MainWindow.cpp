@@ -6,6 +6,7 @@
 #include "../Features/FeatureRegistry.h"
 #include "../Features/File/FileFeature.h"
 #include "../Features/Handle/HandleFeature.h"
+#include "../Features/Memory/MemoryFeature.h"
 #include "../Features/Monitor/MonitorFeature.h"
 #include "../Features/Network/NetworkFeature.h"
 #include "../Features/Process/ProcessFeature.h"
@@ -21,6 +22,7 @@
 #include <commctrl.h>
 #include <tlhelp32.h>
 #include <cwctype>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -44,6 +46,7 @@ constexpr int kCommandEditMenuGap = 8;
 constexpr int kStatusHeight = 18;
 constexpr int kWindowMenuDockBaseId = 42000;
 constexpr int kProcessModuleCommandId = 40001;
+constexpr int kMemoryModuleCommandId = 40002;
 constexpr int kFileModuleCommandId = 40003;
 constexpr int kMonitorModuleCommandId = 40006;
 constexpr int kWindowModuleCommandId = 40008;
@@ -793,6 +796,7 @@ bool MainWindow::routeNavigation(const Ksword::Core::NavigationRequest& request)
         }
         return false;
     case Ksword::Core::NavigationTarget::ProcessDetails: commandId = kProcessModuleCommandId; break;
+    case Ksword::Core::NavigationTarget::MemoryOperations: commandId = kMemoryModuleCommandId; break;
     case Ksword::Core::NavigationTarget::FileBrowser: commandId = kFileModuleCommandId; break;
     case Ksword::Core::NavigationTarget::RegistryBrowser: commandId = kRegistryModuleCommandId; break;
     case Ksword::Core::NavigationTarget::NetworkConnections: commandId = kNetworkModuleCommandId; break;
@@ -840,6 +844,10 @@ bool MainWindow::applyNavigationToModule(
         return processId != 0 && Ksword::Features::Process::RequestProcessFeatureOpenDetails(
             page, processId, request.entity.creationTime100ns);
     }
+    case Ksword::Core::NavigationTarget::MemoryOperations:
+        return request.entity.kind == Ksword::Core::EntityKind::Process && request.entity.id != 0U &&
+            request.entity.id <= static_cast<std::uint64_t>((std::numeric_limits<DWORD>::max)()) &&
+            Ksword::Features::Memory::RequestMemoryFeatureProcess(page, static_cast<DWORD>(request.entity.id));
     case Ksword::Core::NavigationTarget::FileBrowser:
         return Ksword::Features::File::RequestFileFeatureNavigate(page, request.entity.text);
     case Ksword::Core::NavigationTarget::RegistryBrowser:
