@@ -1,9 +1,12 @@
 #include "ExportUtil.h"
 
+#include "EvidenceSession.h"
+
 #include <commdlg.h>
 
 #include <algorithm>
 #include <array>
+#include <cstring>
 #include <limits>
 #include <string>
 #include <vector>
@@ -96,6 +99,38 @@ std::wstring BuildVisibleVirtualListTsv(
     return output;
 }
 
+bool CopyTextToClipboard(HWND owner, const std::wstring& text, const std::wstring& source) {
+    if (text.empty() || !::OpenClipboard(owner)) {
+        return false;
+    }
+    if (!::EmptyClipboard()) {
+        ::CloseClipboard();
+        return false;
+    }
+    const SIZE_T bytes = (text.size() + 1U) * sizeof(wchar_t);
+    HGLOBAL memory = ::GlobalAlloc(GMEM_MOVEABLE, bytes);
+    if (!memory) {
+        ::CloseClipboard();
+        return false;
+    }
+    void* target = ::GlobalLock(memory);
+    if (!target) {
+        ::GlobalFree(memory);
+        ::CloseClipboard();
+        return false;
+    }
+    std::memcpy(target, text.c_str(), bytes);
+    ::GlobalUnlock(memory);
+    if (!::SetClipboardData(CF_UNICODETEXT, memory)) {
+        ::GlobalFree(memory);
+        ::CloseClipboard();
+        return false;
+    }
+    ::CloseClipboard();
+    GlobalEvidenceSession().record(source.empty() ? L"剪贴板导出" : source, L"text", text);
+    return true;
+}
+
 SaveTextFileResult SaveUtf8TextFileWithDialog(
     HWND owner,
     const wchar_t* suggestedFileName,
@@ -152,6 +187,10 @@ SaveTextFileResult SaveUtf8TextFileWithDialog(
         }
         return SaveTextFileResult::Failed;
     }
+    GlobalEvidenceSession().record(
+        dialogTitle ? dialogTitle : L"文件导出",
+        defaultExtension ? defaultExtension : L"text",
+        text);
     return SaveTextFileResult::Saved;
 }
 

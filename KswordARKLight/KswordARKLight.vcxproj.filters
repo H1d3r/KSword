@@ -116,7 +116,13 @@
     <ClCompile Include="Core\Common.cpp">
       <Filter>Core</Filter>
     </ClCompile>
+    <ClCompile Include="Core\DriverLease.cpp">
+      <Filter>Core</Filter>
+    </ClCompile>
     <ClCompile Include="Core\DriverService.cpp">
+      <Filter>Core</Filter>
+    </ClCompile>
+    <ClCompile Include="Core\EntityRef.cpp">
       <Filter>Core</Filter>
     </ClCompile>
     <ClCompile Include="Core\NtApi.cpp">
@@ -528,6 +534,12 @@
     <ClCompile Include="Ui\Controls.cpp">
       <Filter>Ui</Filter>
     </ClCompile>
+    <ClCompile Include="Ui\EntityNavigation.cpp">
+      <Filter>Ui</Filter>
+    </ClCompile>
+    <ClCompile Include="Ui\EvidenceSession.cpp">
+      <Filter>Ui</Filter>
+    </ClCompile>
     <ClCompile Include="Ui\ExportUtil.cpp">
       <Filter>Ui</Filter>
     </ClCompile>
@@ -568,6 +580,9 @@
       <Filter>Ui</Filter>
     </ClCompile>
     <ClCompile Include="Ui\VirtualListView.cpp">
+      <Filter>Ui</Filter>
+    </ClCompile>
+    <ClCompile Include="Ui\WorkspaceHost.cpp">
       <Filter>Ui</Filter>
     </ClCompile>
     <ClCompile Include="..\Ksword5.1\Ksword5.1\ArkDriverClient\ArkDriverAlpc.cpp">
@@ -686,7 +701,16 @@
     <ClInclude Include="Core\Common.h">
       <Filter>Core</Filter>
     </ClInclude>
+    <ClInclude Include="Core\DriverLease.h">
+      <Filter>Core</Filter>
+    </ClInclude>
+    <ClInclude Include="Core\DriverLeasePolicy.h">
+      <Filter>Core</Filter>
+    </ClInclude>
     <ClInclude Include="Core\DriverService.h">
+      <Filter>Core</Filter>
+    </ClInclude>
+    <ClInclude Include="Core\EntityRef.h">
       <Filter>Core</Filter>
     </ClInclude>
     <ClInclude Include="Core\NtApi.h">
@@ -1103,6 +1127,12 @@
     <ClInclude Include="Ui\Controls.h">
       <Filter>Ui</Filter>
     </ClInclude>
+    <ClInclude Include="Ui\EntityNavigation.h">
+      <Filter>Ui</Filter>
+    </ClInclude>
+    <ClInclude Include="Ui\EvidenceSession.h">
+      <Filter>Ui</Filter>
+    </ClInclude>
     <ClInclude Include="Ui\ExportUtil.h">
       <Filter>Ui</Filter>
     </ClInclude>
@@ -1149,6 +1179,9 @@
       <Filter>Ui</Filter>
     </ClInclude>
     <ClInclude Include="Ui\VirtualListView.h">
+      <Filter>Ui</Filter>
+    </ClInclude>
+    <ClInclude Include="Ui\WorkspaceHost.h">
       <Filter>Ui</Filter>
     </ClInclude>
     <ClInclude Include="..\Ksword5.1\Ksword5.1\ArkDriverClient\ArkDriverCapabilities.h">

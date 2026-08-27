@@ -23,6 +23,13 @@ std::wstring BuildVisibleVirtualListTsv(
     const std::vector<std::wstring>& columnTitles,
     const VirtualListView& list);
 
+// CopyTextToClipboard centralizes CF_UNICODETEXT export and records the exact
+// text in the current evidence session when the clipboard transfer succeeds.
+bool CopyTextToClipboard(
+    HWND owner,
+    const std::wstring& text,
+    const std::wstring& source = L"剪贴板导出");
+
 // SaveUtf8TextFileWithDialog asks for a destination and writes text as UTF-8
 // with a BOM. The suggested name, file filter and default extension describe
 // the caller's page-specific export. errorOut is filled only for Failed.

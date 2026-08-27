@@ -50,7 +50,7 @@
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <WarningLevel>Level3</WarningLevel>
+      <WarningLevel>Level4</WarningLevel>
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>WIN32_LEAN_AND_MEAN;NOMINMAX;UNICODE;_UNICODE;_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
@@ -67,7 +67,7 @@
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <WarningLevel>Level3</WarningLevel>
+      <WarningLevel>Level4</WarningLevel>
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
@@ -93,7 +93,9 @@
     <ClCompile Include="App\Main.cpp" />
     <ClCompile Include="App\MainWindow.cpp" />
     <ClCompile Include="Core\Common.cpp" />
+    <ClCompile Include="Core\DriverLease.cpp" />
     <ClCompile Include="Core\DriverService.cpp" />
+    <ClCompile Include="Core\EntityRef.cpp" />
     <ClCompile Include="Core\NtApi.cpp" />
     <ClCompile Include="Core\PathUtils.cpp" />
     <ClCompile Include="Core\Privilege.cpp" />
@@ -235,6 +237,8 @@
     <ClCompile Include="Features\Window\WindowModel.cpp" />
     <ClCompile Include="Features\Window\WindowView.cpp" />
     <ClCompile Include="Ui\Controls.cpp" />
+    <ClCompile Include="Ui\EntityNavigation.cpp" />
+    <ClCompile Include="Ui\EvidenceSession.cpp" />
     <ClCompile Include="Ui\ExportUtil.cpp" />
     <ClCompile Include="Ui\FilterBar.cpp" />
     <ClCompile Include="Ui\IconUtil.cpp" />
@@ -249,6 +253,7 @@
     <ClCompile Include="Ui\Theme.cpp" />
     <ClCompile Include="Ui\TreeViewUtil.cpp" />
     <ClCompile Include="Ui\VirtualListView.cpp" />
+    <ClCompile Include="Ui\WorkspaceHost.cpp" />
     <ClCompile Include="..\Ksword5.1\Ksword5.1\ArkDriverClient\ArkDriverAlpc.cpp" />
     <ClCompile Include="..\Ksword5.1\Ksword5.1\ArkDriverClient\ArkDriverBlind.cpp" />
     <ClCompile Include="..\Ksword5.1\Ksword5.1\ArkDriverClient\ArkDriverDispatch.cpp" />
@@ -290,7 +295,10 @@
   <ItemGroup>
     <ClInclude Include="App\MainWindow.h" />
     <ClInclude Include="Core\Common.h" />
+    <ClInclude Include="Core\DriverLease.h" />
+    <ClInclude Include="Core\DriverLeasePolicy.h" />
     <ClInclude Include="Core\DriverService.h" />
+    <ClInclude Include="Core\EntityRef.h" />
     <ClInclude Include="Core\NtApi.h" />
     <ClInclude Include="Core\PathUtils.h" />
     <ClInclude Include="Core\Privilege.h" />
@@ -429,6 +437,8 @@
     <ClInclude Include="Features\Window\WindowView.h" />
     <ClInclude Include="resource.h" />
     <ClInclude Include="Ui\Controls.h" />
+    <ClInclude Include="Ui\EntityNavigation.h" />
+    <ClInclude Include="Ui\EvidenceSession.h" />
     <ClInclude Include="Ui\ExportUtil.h" />
     <ClInclude Include="Ui\AsyncTask.h" />
     <ClInclude Include="Ui\FilterBar.h" />
@@ -445,6 +455,7 @@
     <ClInclude Include="Ui\Theme.h" />
     <ClInclude Include="Ui\TreeViewUtil.h" />
     <ClInclude Include="Ui\VirtualListView.h" />
+    <ClInclude Include="Ui\WorkspaceHost.h" />
     <ClInclude Include="..\Ksword5.1\Ksword5.1\ArkDriverClient\ArkDriverCapabilities.h" />
     <ClInclude Include="..\Ksword5.1\Ksword5.1\ArkDriverClient\ArkDriverClient.h" />
     <ClInclude Include="..\Ksword5.1\Ksword5.1\ArkDriverClient\ArkDriverError.h" />
