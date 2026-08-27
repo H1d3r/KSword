@@ -387,9 +387,6 @@
     <ClCompile Include="Features\HardwareStats\DiskActivityView.cpp">
       <Filter>Features\HardwareStats</Filter>
     </ClCompile>
-    <ClCompile Include="Features\HardwareStats\HardwareStatsFeature.cpp">
-      <Filter>Features\HardwareStats</Filter>
-    </ClCompile>
     <ClCompile Include="Features\HardwareStats\HardwareStatsModel.cpp">
       <Filter>Features\HardwareStats</Filter>
     </ClCompile>
@@ -957,9 +954,6 @@
       <Filter>Features\HardwareStats</Filter>
     </ClInclude>
     <ClInclude Include="Features\HardwareStats\DiskActivityView.h">
-      <Filter>Features\HardwareStats</Filter>
-    </ClInclude>
-    <ClInclude Include="Features\HardwareStats\HardwareStatsFeature.h">
       <Filter>Features\HardwareStats</Filter>
     </ClInclude>
     <ClInclude Include="Features\HardwareStats\HardwareStatsModel.h">

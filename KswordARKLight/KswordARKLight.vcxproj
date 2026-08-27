@@ -195,7 +195,6 @@
     <ClCompile Include="Features\HardwareStats\BusDeviceView.cpp" />
     <ClCompile Include="Features\HardwareStats\DeviceTopologyEnumerator.cpp" />
     <ClCompile Include="Features\HardwareStats\DiskActivityView.cpp" />
-    <ClCompile Include="Features\HardwareStats\HardwareStatsFeature.cpp" />
     <ClCompile Include="Features\HardwareStats\HardwareStatsModel.cpp" />
     <ClCompile Include="Features\HardwareStats\PerformanceSampler.cpp" />
     <ClCompile Include="Features\HardwareStats\PerformanceView.cpp" />
@@ -388,7 +387,6 @@
     <ClInclude Include="Features\HardwareStats\BusDeviceView.h" />
     <ClInclude Include="Features\HardwareStats\DeviceTopologyEnumerator.h" />
     <ClInclude Include="Features\HardwareStats\DiskActivityView.h" />
-    <ClInclude Include="Features\HardwareStats\HardwareStatsFeature.h" />
     <ClInclude Include="Features\HardwareStats\HardwareStatsModel.h" />
     <ClInclude Include="Features\HardwareStats\PerformanceSampler.h" />
     <ClInclude Include="Features\HardwareStats\PerformanceView.h" />

@@ -3,6 +3,10 @@
 #include "HardwareHwidDispatchView.h"
 #include "HardwareView.h"
 #include "../Kernel/KernelFeature.h"
+#include "../HardwareStats/BusDeviceView.h"
+#include "../HardwareStats/DiskActivityView.h"
+#include "../HardwareStats/PerformanceView.h"
+#include "../HardwareStats/UsbTopologyView.h"
 #include "../../Ui/Controls.h"
 #include "../../Ui/TabUtil.h"
 #include "../../Ui/Theme.h"
@@ -18,6 +22,10 @@ constexpr int kDeviceManagerTabIndex = 0;
 constexpr int kCpuIntegrityTabIndex = 1;
 constexpr int kCpuSnapshotTabIndex = 2;
 constexpr int kHwidDispatchTabIndex = 3;
+constexpr int kPerformanceTabIndex = 4;
+constexpr int kDiskActivityTabIndex = 5;
+constexpr int kUsbTopologyTabIndex = 6;
+constexpr int kBusDeviceTabIndex = 7;
 constexpr int kEmbeddedKernelPrimaryTabId = 51001;
 constexpr int kEmbeddedKernelSecondaryTabId = 51002;
 
@@ -31,6 +39,10 @@ struct HardwareFeaturePageState {
     HWND cpuIntegrityView = nullptr;
     HWND cpuSnapshotView = nullptr;
     HWND hwidDispatchView = nullptr;
+    HWND performanceView = nullptr;
+    HWND diskActivityView = nullptr;
+    HWND usbTopologyView = nullptr;
+    HWND busDeviceView = nullptr;
     int currentTab = kDeviceManagerTabIndex;
 };
 
@@ -59,6 +71,10 @@ void ShowPages(HardwareFeaturePageState& state) {
     const bool cpuIntegrityVisible = state.currentTab == kCpuIntegrityTabIndex;
     const bool cpuVisible = state.currentTab == kCpuSnapshotTabIndex;
     const bool hwidVisible = state.currentTab == kHwidDispatchTabIndex;
+    const bool performanceVisible = state.currentTab == kPerformanceTabIndex;
+    const bool diskActivityVisible = state.currentTab == kDiskActivityTabIndex;
+    const bool usbTopologyVisible = state.currentTab == kUsbTopologyTabIndex;
+    const bool busDeviceVisible = state.currentTab == kBusDeviceTabIndex;
     if (state.deviceManagerView) {
         ::ShowWindow(state.deviceManagerView, deviceVisible ? SW_SHOW : SW_HIDE);
     }
@@ -70,6 +86,18 @@ void ShowPages(HardwareFeaturePageState& state) {
     }
     if (state.hwidDispatchView) {
         ::ShowWindow(state.hwidDispatchView, hwidVisible ? SW_SHOW : SW_HIDE);
+    }
+    if (state.performanceView) {
+        ::ShowWindow(state.performanceView, performanceVisible ? SW_SHOW : SW_HIDE);
+    }
+    if (state.diskActivityView) {
+        ::ShowWindow(state.diskActivityView, diskActivityVisible ? SW_SHOW : SW_HIDE);
+    }
+    if (state.usbTopologyView) {
+        ::ShowWindow(state.usbTopologyView, usbTopologyVisible ? SW_SHOW : SW_HIDE);
+    }
+    if (state.busDeviceView) {
+        ::ShowWindow(state.busDeviceView, busDeviceVisible ? SW_SHOW : SW_HIDE);
     }
 }
 
@@ -122,6 +150,18 @@ void LayoutChildren(HardwareFeaturePageState& state) {
     if (state.hwidDispatchView) {
         ::MoveWindow(state.hwidDispatchView, display.left, display.top, pageWidth, pageHeight, TRUE);
     }
+    if (state.performanceView) {
+        ::MoveWindow(state.performanceView, display.left, display.top, pageWidth, pageHeight, TRUE);
+    }
+    if (state.diskActivityView) {
+        ::MoveWindow(state.diskActivityView, display.left, display.top, pageWidth, pageHeight, TRUE);
+    }
+    if (state.usbTopologyView) {
+        ::MoveWindow(state.usbTopologyView, display.left, display.top, pageWidth, pageHeight, TRUE);
+    }
+    if (state.busDeviceView) {
+        ::MoveWindow(state.busDeviceView, display.left, display.top, pageWidth, pageHeight, TRUE);
+    }
     ShowPages(state);
 }
 
@@ -138,6 +178,10 @@ bool CreateChildControls(HardwareFeaturePageState& state) {
     Ksword::Ui::AddTabPage(state.tab, kCpuIntegrityTabIndex, { L"CPU/IDT 完整性" });
     Ksword::Ui::AddTabPage(state.tab, kCpuSnapshotTabIndex, { L"CPU 硬件快照" });
     Ksword::Ui::AddTabPage(state.tab, kHwidDispatchTabIndex, { L"HWID Dispatch" });
+    Ksword::Ui::AddTabPage(state.tab, kPerformanceTabIndex, { L"性能监控" });
+    Ksword::Ui::AddTabPage(state.tab, kDiskActivityTabIndex, { L"磁盘活动" });
+    Ksword::Ui::AddTabPage(state.tab, kUsbTopologyTabIndex, { L"USB 拓扑" });
+    Ksword::Ui::AddTabPage(state.tab, kBusDeviceTabIndex, { L"系统总线" });
     ::SendMessageW(state.tab, TCM_SETCURSEL, static_cast<WPARAM>(kDeviceManagerTabIndex), 0);
 
     RECT display = Ksword::Ui::GetTabDisplayRect(state.tab);
@@ -154,12 +198,20 @@ bool CreateChildControls(HardwareFeaturePageState& state) {
         childBounds,
         Ksword::Features::Kernel::KernelFeatureId::CpuHardwareSnapshot);
     state.hwidDispatchView = CreateHardwareHwidDispatchView(state.tab, childBounds);
+    state.performanceView = HardwareStats::CreatePerformanceView(state.tab, childBounds);
+    state.diskActivityView = HardwareStats::CreateDiskActivityView(state.tab, childBounds);
+    state.usbTopologyView = HardwareStats::CreateUsbTopologyView(state.tab, childBounds);
+    state.busDeviceView = HardwareStats::CreateBusDeviceView(state.tab, childBounds);
     HideEmbeddedKernelNavigationTabs(state.cpuIntegrityView);
     HideEmbeddedKernelNavigationTabs(state.cpuSnapshotView);
     return state.deviceManagerView != nullptr &&
         state.cpuIntegrityView != nullptr &&
         state.cpuSnapshotView != nullptr &&
-        state.hwidDispatchView != nullptr;
+        state.hwidDispatchView != nullptr &&
+        state.performanceView != nullptr &&
+        state.diskActivityView != nullptr &&
+        state.usbTopologyView != nullptr &&
+        state.busDeviceView != nullptr;
 }
 
 // RegisterHardwareFeatureClass registers the host window class once. There is
