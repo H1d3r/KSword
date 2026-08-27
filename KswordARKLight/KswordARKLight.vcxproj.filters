@@ -543,6 +543,9 @@
     <ClCompile Include="Features\Window\WindowModel.cpp">
       <Filter>Features\Window</Filter>
     </ClCompile>
+    <ClCompile Include="Features\Window\Win32kTimerEvidenceModel.cpp">
+      <Filter>Features\Window</Filter>
+    </ClCompile>
     <ClCompile Include="Features\Window\WindowView.cpp">
       <Filter>Features\Window</Filter>
     </ClCompile>
@@ -1149,6 +1152,9 @@
       <Filter>Features\Window</Filter>
     </ClInclude>
     <ClInclude Include="Features\Window\WindowModel.h">
+      <Filter>Features\Window</Filter>
+    </ClInclude>
+    <ClInclude Include="Features\Window\Win32kTimerEvidenceModel.h">
       <Filter>Features\Window</Filter>
     </ClInclude>
     <ClInclude Include="Features\Window\WindowView.h">

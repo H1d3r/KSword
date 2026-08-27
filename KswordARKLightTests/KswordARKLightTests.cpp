@@ -3,12 +3,15 @@
 #include "../KswordARKLight/Features/File/PathNavigator.h"
 #include "../KswordARKLight/Features/Monitor/EtwEventModel.h"
 #include "../KswordARKLight/Features/SysTools/IoctlDecoder.h"
+#include "../KswordARKLight/Features/Window/Win32kTimerEvidenceModel.h"
 #include "../KswordARKLight/Features/Memory/MemorySnapshot.h"
 #include "../KswordARKLight/Features/Memory/MemoryInspection.h"
 #include "../KswordARKLight/Features/Memory/MemoryWritePlan.h"
 #include "../KswordARKLight/Ui/EvidenceSession.h"
+#include "../Ksword5.1/Ksword5.1/ArkDriverClient/ArkDriverTypes.h"
 
 #include <iostream>
+#include <cwchar>
 #include <limits>
 #include <string>
 #include <vector>
@@ -151,6 +154,100 @@ int wmain() {
     Expect(Ksword::Features::SysTools::BuildIoctlDecodedReport(ioctl).find(L"FILE_ANY_ACCESS") != std::wstring::npos &&
             Ksword::Features::SysTools::BuildIoctlDecodedReport(ioctlBoundary).find(L"METHOD_NEITHER") != std::wstring::npos,
         L"IOCTL decoder report includes standard access and method names");
+
+    ksword::ark::Win32kTimersResult timerEvidence{};
+    timerEvidence.io.ok = true;
+    timerEvidence.io.message = "timer snapshot ok";
+    timerEvidence.version = 2U;
+    timerEvidence.status = KSWORD_ARK_WIN32K_STATUS_OK;
+    timerEvidence.totalCount = 3U;
+    timerEvidence.returnedCount = 1U;
+    timerEvidence.entrySize = sizeof(KSWORD_ARK_WIN32K_TIMER_ENTRY);
+    timerEvidence.flags = 0x17U;
+    timerEvidence.lastStatus = -1073741823L;
+    timerEvidence.capabilityMask = 0x1122334455667788ULL;
+    timerEvidence.missingCapabilityMask = 0x10ULL;
+    timerEvidence.timerHashTable = 0xFFFFF80012340000ULL;
+    timerEvidence.visitedNodeCount = 8U;
+    timerEvidence.readFailureCount = 1U;
+    timerEvidence.corruptBucketCount = 2U;
+    timerEvidence.duplicateCount = 3U;
+    timerEvidence.win32kbaseTimeDateStamp = 0x11223344U;
+    timerEvidence.win32kbaseImageSize = 0x55667788U;
+    timerEvidence.win32kfullTimeDateStamp = 0x99AABBCCU;
+    timerEvidence.win32kfullImageSize = 0xDDEEFF00U;
+    timerEvidence.layout.source = KSWORD_ARK_WIN32K_TIMER_LAYOUT_SOURCE_VALIDATED_DISASSEMBLY;
+    timerEvidence.layout.objectSize = 0x88U;
+    timerEvidence.layout.bucketCount = 64U;
+    timerEvidence.layout.bucketStride = 16U;
+    KSWORD_ARK_WIN32K_TIMER_ENTRY timerEntry{};
+    timerEntry.fieldFlags = KSWORD_ARK_WIN32K_TIMER_FIELD_OBJECT |
+        KSWORD_ARK_WIN32K_TIMER_FIELD_THREAD |
+        KSWORD_ARK_WIN32K_TIMER_FIELD_CALLBACK |
+        KSWORD_ARK_WIN32K_TIMER_FIELD_INTERVAL |
+        KSWORD_ARK_WIN32K_TIMER_FIELD_FLAGS |
+        KSWORD_ARK_WIN32K_TIMER_FIELD_WINDOW |
+        KSWORD_ARK_WIN32K_TIMER_FIELD_ID |
+        KSWORD_ARK_WIN32K_TIMER_FIELD_ALTERNATE_THREAD |
+        KSWORD_ARK_WIN32K_TIMER_FIELD_HASH_LINK;
+    timerEntry.status = KSWORD_ARK_WIN32K_STATUS_PARTIAL;
+    timerEntry.processId = 321U;
+    timerEntry.threadId = 654U;
+    timerEntry.sessionId = 2U;
+    timerEntry.flags = 0xA5U;
+    timerEntry.intervalMs = 1000U;
+    timerEntry.countdownMs = 500U;
+    timerEntry.toleranceMs = 25U;
+    timerEntry.lastStatus = -1073741823L;
+    timerEntry.timerObject = 0xFFFFF80000001000ULL;
+    timerEntry.callbackAddress = 0xFFFFF80000002000ULL;
+    timerEntry.primaryThreadInfo = 0xFFFFF80000003000ULL;
+    timerEntry.alternateThreadInfo = 0xFFFFF80000004000ULL;
+    timerEntry.windowObject = 0xFFFFF80000005000ULL;
+    timerEntry.timerId = 0x1234ULL;
+    timerEntry.hashLink = 0xFFFFF80000006000ULL;
+    std::wmemcpy(timerEntry.detail, L"timer\tpartial", 13U);
+    timerEvidence.entries.push_back(timerEntry);
+    const auto timerRows = Ksword::Features::Window::BuildWin32kTimerEvidenceRows(timerEvidence);
+    Expect(timerRows.size() == 3U && timerRows[0].status == L"OK" && timerRows[1].status == L"Exact" &&
+            timerRows[2].status == L"Partial" && timerRows[2].relatedProcessId == 321U,
+        L"Win32k timer evidence projects snapshot layout and owner identity");
+    Expect(timerRows[0].detail.find(L"gTimerHashTable=0xFFFFF80012340000") != std::wstring::npos &&
+            timerRows[1].detail.find(L"source=ValidatedDisassembly") != std::wstring::npos &&
+            timerRows[2].detail.find(L"timerObject=0xFFFFF80000001000") != std::wstring::npos &&
+            timerRows[2].detail.find(L"lastStatus=0xC0000001") != std::wstring::npos &&
+            timerRows[2].detail.find(L"timer partial") != std::wstring::npos,
+        L"Win32k timer evidence preserves raw addresses status and sanitized detail");
+
+    ksword::ark::Win32kTimersResult incompleteTimerEvidence{};
+    incompleteTimerEvidence.io.ok = true;
+    incompleteTimerEvidence.status = KSWORD_ARK_WIN32K_STATUS_BUFFER_TRUNCATED;
+    incompleteTimerEvidence.layout.source = KSWORD_ARK_WIN32K_TIMER_LAYOUT_SOURCE_NEAREST_PREVIOUS;
+    KSWORD_ARK_WIN32K_TIMER_ENTRY incompleteTimerEntry{};
+    incompleteTimerEntry.fieldFlags = KSWORD_ARK_WIN32K_TIMER_FIELD_OBJECT;
+    incompleteTimerEntry.status = KSWORD_ARK_WIN32K_STATUS_PARTIAL;
+    incompleteTimerEntry.processId = 999U;
+    incompleteTimerEntry.threadId = 888U;
+    incompleteTimerEntry.timerObject = 0x12345678ULL;
+    incompleteTimerEvidence.entries.push_back(incompleteTimerEntry);
+    const auto incompleteTimerRows = Ksword::Features::Window::BuildWin32kTimerEvidenceRows(incompleteTimerEvidence);
+    Expect(incompleteTimerRows.size() == 3U && incompleteTimerRows[1].status == L"NearestPrevious" &&
+            incompleteTimerRows[2].relatedProcessId == 0U &&
+            incompleteTimerRows[2].detail.find(L"processId=<absent; raw=999>") != std::wstring::npos &&
+            incompleteTimerRows[2].detail.find(L"callbackAddress=<absent; raw=0x0000000000000000>") != std::wstring::npos,
+        L"Win32k timer evidence keeps missing driver fields explicit and non-navigable");
+
+    ksword::ark::Win32kTimersResult unsupportedTimerEvidence{};
+    unsupportedTimerEvidence.io.ok = false;
+    unsupportedTimerEvidence.unsupported = true;
+    unsupportedTimerEvidence.io.message = "legacy driver";
+    const auto unsupportedTimerRows = Ksword::Features::Window::BuildWin32kTimerEvidenceRows(unsupportedTimerEvidence);
+    Expect(unsupportedTimerRows.size() == 1U && unsupportedTimerRows.front().status == L"Unsupported" &&
+            unsupportedTimerRows.front().detail.find(L"legacy driver") != std::wstring::npos,
+        L"Win32k timer evidence degrades old drivers to one explicit summary row");
+    Expect(Ksword::Features::Window::Win32kTimerEvidenceStatusText(KSWORD_ARK_WIN32K_STATUS_READ_FAILED) == L"ReadFailed" &&
+            Ksword::Features::Window::Win32kTimerEvidenceStatusText(0xA5A5A5A5U).find(L"0xA5A5A5A5") != std::wstring::npos,
+        L"Win32k timer evidence preserves known and unknown protocol status codes");
 
     MemorySnapshotHistory snapshots(2U);
     Expect(!snapshots.record(0U, 0x1000U, 4U, { 1U }, L"bad"), L"snapshot rejects missing pid");

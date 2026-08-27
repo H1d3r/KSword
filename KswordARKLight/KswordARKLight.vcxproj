@@ -240,6 +240,7 @@
     <ClCompile Include="Features\Window\WindowEnumerator.cpp" />
     <ClCompile Include="Features\Window\WindowFeature.cpp" />
     <ClCompile Include="Features\Window\WindowModel.cpp" />
+    <ClCompile Include="Features\Window\Win32kTimerEvidenceModel.cpp" />
     <ClCompile Include="Features\Window\WindowView.cpp" />
     <ClCompile Include="Ui\Controls.cpp" />
     <ClCompile Include="Ui\EntityNavigation.cpp" />
@@ -445,6 +446,7 @@
     <ClInclude Include="Features\Window\WindowEnumerator.h" />
     <ClInclude Include="Features\Window\WindowFeature.h" />
     <ClInclude Include="Features\Window\WindowModel.h" />
+    <ClInclude Include="Features\Window\Win32kTimerEvidenceModel.h" />
     <ClInclude Include="Features\Window\WindowView.h" />
     <ClInclude Include="resource.h" />
     <ClInclude Include="Ui\Controls.h" />
