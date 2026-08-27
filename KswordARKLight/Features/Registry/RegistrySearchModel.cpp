@@ -115,9 +115,17 @@ void AppendTsvHit(std::wstring& output, const RegistrySearchHit& hit) {
 }
 
 std::wstring CountText(const RegistrySearchSnapshot& snapshot) {
-    return L"已扫描 " + std::to_wstring(snapshot.counters.visitedKeyCount) +
+    std::wstring text = L"已扫描 " + std::to_wstring(snapshot.counters.visitedKeyCount) +
         L" 个键、" + std::to_wstring(snapshot.counters.visitedValueCount) +
-        L" 个值；命中 " + std::to_wstring(snapshot.hits.size()) + L" 项";
+        L" 个值；检查 " + std::to_wstring(snapshot.counters.inspectedSubKeyCount) +
+        L" 个子键条目；命中 " + std::to_wstring(snapshot.hits.size()) + L" 项";
+    if (snapshot.counters.readFailureCount != 0U) {
+        text += L"；跳过 " + std::to_wstring(snapshot.counters.readFailureCount) + L" 个不可读项";
+    }
+    if (snapshot.counters.truncatedPreviewCount != 0U) {
+        text += L"；截断 " + std::to_wstring(snapshot.counters.truncatedPreviewCount) + L" 个预览";
+    }
+    return text;
 }
 
 } // namespace
@@ -129,6 +137,7 @@ RegistrySearchValidation ValidateRegistrySearchRequest(const RegistrySearchReque
     validation.normalizedQuery = TrimCopy(request.query);
     validation.request.query = validation.normalizedQuery;
     validation.request.maxKeys = ClampBudget(request.maxKeys, kRegistrySearchMaxKeys);
+    validation.request.maxValues = ClampBudget(request.maxValues, kRegistrySearchMaxValues);
     validation.request.maxResults = ClampBudget(request.maxResults, kRegistrySearchMaxResults);
     validation.request.maxDepth = ClampBudget(request.maxDepth, kRegistrySearchMaxDepth);
     validation.request.maxValuePreviewBytes = ClampBudget(request.maxValuePreviewBytes, kRegistrySearchMaxValuePreviewBytes);
@@ -187,6 +196,12 @@ std::wstring BuildRegistrySearchStatusText(const RegistrySearchSnapshot& snapsho
     case RegistrySearchStopReason::KeyLimitReached:
         return L"注册表搜索已达到 " + std::to_wstring(snapshot.request.maxKeys) +
             L" 个键的上限：" + counts + L"。";
+    case RegistrySearchStopReason::SubKeyEnumerationLimitReached:
+        return L"注册表搜索已达到 " + std::to_wstring(snapshot.request.maxKeys) +
+            L" 次子键枚举工作上限：" + counts + L"。";
+    case RegistrySearchStopReason::ValueLimitReached:
+        return L"注册表搜索已达到 " + std::to_wstring(snapshot.request.maxValues) +
+            L" 个值的上限：" + counts + L"。";
     case RegistrySearchStopReason::ResultLimitReached:
         return L"注册表搜索已达到 " + std::to_wstring(snapshot.request.maxResults) +
             L" 项结果上限：" + counts + L"。";

@@ -3,7 +3,9 @@
 #include "../../../Ksword5.1/Ksword5.1/ArkDriverClient/ArkDriverClient.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstring>
+#include <memory>
 #include <sstream>
 
 namespace Ksword::Features::Registry {
@@ -31,6 +33,74 @@ public:
 private:
     HKEY key_ = nullptr;
 };
+
+// A registry name is documented as substantially smaller than this bound.  A
+// hard local ceiling prevents a malformed/racing enumeration response from
+// requesting an unbounded allocation in the background search worker.
+constexpr DWORD kRegistrySearchMaxNameChars = 32767U;
+
+struct PendingRegistrySearchKey final {
+    RegistryPathInfo path;
+    std::size_t depth = 0U;
+};
+
+bool IsRegistrySearchCancelled(const std::shared_ptr<std::atomic_bool>& cancelToken) {
+    return cancelToken && cancelToken->load(std::memory_order_relaxed);
+}
+
+bool StopRegistrySearchIfCancelled(
+    RegistrySearchSnapshot& snapshot,
+    const std::shared_ptr<std::atomic_bool>& cancelToken) {
+    if (!IsRegistrySearchCancelled(cancelToken)) {
+        return false;
+    }
+    snapshot.stopReason = RegistrySearchStopReason::Cancelled;
+    return true;
+}
+
+void RecordRegistrySearchReadFailure(RegistrySearchSnapshot& snapshot, const std::wstring& detail) {
+    ++snapshot.counters.readFailureCount;
+    if (snapshot.errorText.empty()) {
+        snapshot.errorText = detail;
+    }
+}
+
+bool AppendRegistrySearchCandidate(
+    RegistrySearchSnapshot& snapshot,
+    const RegistrySearchCandidate& candidate) {
+    RegistrySearchHit hit = ProjectRegistrySearchHit(candidate, snapshot.request.maxValuePreviewBytes);
+    if (hit.dataPreviewTruncated) {
+        ++snapshot.counters.truncatedPreviewCount;
+    }
+    if (!hit.valid || !RegistrySearchHitMatches(hit, snapshot.normalizedQuery)) {
+        return true;
+    }
+
+    if (hit.kind == RegistrySearchEntryKind::Key) {
+        ++snapshot.counters.matchedKeyCount;
+    } else {
+        ++snapshot.counters.matchedValueCount;
+    }
+    snapshot.hits.push_back(std::move(hit));
+    if (snapshot.hits.size() < snapshot.request.maxResults) {
+        return true;
+    }
+
+    snapshot.stopReason = RegistrySearchStopReason::ResultLimitReached;
+    return false;
+}
+
+RegistryPathInfo MakeRegistrySearchChildPath(
+    const RegistryPathInfo& parent,
+    const std::wstring& childName) {
+    RegistryPathInfo child = parent;
+    child.subKey = parent.subKey.empty() ? childName : parent.subKey + L"\\" + childName;
+    child.displayPath = child.rootText + L"\\" + child.subKey;
+    if (!child.kernelPath.empty()) {
+        child.kernelPath += L"\\" + childName;
+    }
+    return child;
+}
 
 // NarrowToWide converts ArkDriverClient ASCII diagnostics to UTF-16. Input is
 // client message text; output is displayable wide text.
@@ -216,6 +286,309 @@ RegistrySnapshot EnumerateRegistryKey(const std::wstring& path, const RegistryVi
     AppendWinApiValues(key.get(), snapshot);
     snapshot.success = true;
     snapshot.statusText = L"WinAPI registry enum OK; rows=" + std::to_wstring(snapshot.rows.size());
+    return snapshot;
+}
+
+RegistrySearchSnapshot SearchRegistryWinApi(
+    const RegistrySearchRequest& request,
+    const std::shared_ptr<std::atomic_bool>& cancelToken) {
+    // Inputs:
+    // - request: a user-provided path, keyword, and caller-reduced budgets.
+    // - cancelToken: a shared worker/UI cancellation signal, or null.
+    // Processing:
+    // - validates and clamps the request through the pure model;
+    // - walks only the WinAPI registry view with an iterative DFS worklist;
+    // - accepts no more keys/values than the fixed budgets and reads no value
+    //   payload larger than the fixed preview bound.
+    // Output:
+    // - one immutable complete or partial snapshot; this function never calls
+    //   the driver and never changes the existing R0/WinAPI browser mode.
+    RegistrySearchSnapshot snapshot;
+    const RegistrySearchValidation validation = ValidateRegistrySearchRequest(request);
+    snapshot.request = validation.request;
+    snapshot.normalizedQuery = validation.normalizedQuery;
+    if (!validation.valid) {
+        snapshot.stopReason = RegistrySearchStopReason::InvalidRequest;
+        snapshot.errorText = validation.errorText;
+        snapshot.statusText = BuildRegistrySearchStatusText(snapshot);
+        return snapshot;
+    }
+
+    const RegistryPathInfo startPath = ParseRegistryPath(snapshot.request.startPath);
+    if (!startPath.valid) {
+        snapshot.stopReason = RegistrySearchStopReason::InvalidRequest;
+        snapshot.errorText = startPath.errorText;
+        snapshot.statusText = BuildRegistrySearchStatusText(snapshot);
+        return snapshot;
+    }
+    snapshot.request.startPath = startPath.displayPath;
+    if (StopRegistrySearchIfCancelled(snapshot, cancelToken)) {
+        snapshot.statusText = BuildRegistrySearchStatusText(snapshot);
+        return snapshot;
+    }
+
+    std::vector<PendingRegistrySearchKey> pendingKeys;
+    pendingKeys.reserve(snapshot.request.maxKeys);
+    pendingKeys.push_back({ startPath, 0U });
+    bool enumeratedAnyKey = false;
+    bool keyWorkLimitReached = false;
+    bool subKeyEnumerationLimitReached = false;
+
+    while (!pendingKeys.empty()) {
+        if (StopRegistrySearchIfCancelled(snapshot, cancelToken)) {
+            break;
+        }
+        if (snapshot.counters.visitedKeyCount >= snapshot.request.maxKeys) {
+            snapshot.stopReason = RegistrySearchStopReason::KeyLimitReached;
+            break;
+        }
+
+        PendingRegistrySearchKey current = std::move(pendingKeys.back());
+        pendingKeys.pop_back();
+        ++snapshot.counters.visitedKeyCount;
+
+        LONG openStatus = ERROR_SUCCESS;
+        UniqueRegKey key = OpenKey(
+            current.path,
+            KEY_QUERY_VALUE | KEY_ENUMERATE_SUB_KEYS,
+            &openStatus);
+        if (!key.valid()) {
+            RecordRegistrySearchReadFailure(
+                snapshot,
+                L"RegOpenKeyExW failed for " + current.path.displayPath + L": " + std::to_wstring(openStatus));
+            continue;
+        }
+
+        RegistrySearchCandidate keyCandidate;
+        keyCandidate.kind = RegistrySearchEntryKind::Key;
+        keyCandidate.keyPath = current.path.displayPath;
+        keyCandidate.valueTypeText = L"键";
+        keyCandidate.depth = current.depth;
+        if (!AppendRegistrySearchCandidate(snapshot, keyCandidate)) {
+            break;
+        }
+        if (StopRegistrySearchIfCancelled(snapshot, cancelToken)) {
+            break;
+        }
+
+        DWORD subKeyCount = 0;
+        DWORD maxSubKeyName = 0;
+        DWORD valueCount = 0;
+        DWORD maxValueName = 0;
+        const LONG infoStatus = ::RegQueryInfoKeyW(
+            key.get(),
+            nullptr,
+            nullptr,
+            nullptr,
+            &subKeyCount,
+            &maxSubKeyName,
+            nullptr,
+            &valueCount,
+            &maxValueName,
+            nullptr,
+            nullptr,
+            nullptr);
+        if (infoStatus != ERROR_SUCCESS) {
+            RecordRegistrySearchReadFailure(
+                snapshot,
+                L"RegQueryInfoKeyW failed for " + current.path.displayPath + L": " + std::to_wstring(infoStatus));
+            continue;
+        }
+        enumeratedAnyKey = true;
+
+        if (maxValueName > kRegistrySearchMaxNameChars) {
+            RecordRegistrySearchReadFailure(
+                snapshot,
+                L"RegQueryInfoKeyW returned an oversized value-name bound for " + current.path.displayPath + L".");
+        } else {
+            std::vector<wchar_t> valueName(static_cast<std::size_t>(maxValueName) + 2U);
+            for (DWORD index = 0; index < valueCount; ++index) {
+                if (StopRegistrySearchIfCancelled(snapshot, cancelToken)) {
+                    break;
+                }
+                if (snapshot.counters.visitedValueCount >= snapshot.request.maxValues) {
+                    snapshot.stopReason = RegistrySearchStopReason::ValueLimitReached;
+                    break;
+                }
+                ++snapshot.counters.visitedValueCount;
+
+                DWORD valueNameChars = static_cast<DWORD>(valueName.size());
+                DWORD enumeratedDataBytes = 0;
+                DWORD type = REG_NONE;
+                const LONG enumStatus = ::RegEnumValueW(
+                    key.get(),
+                    index,
+                    valueName.data(),
+                    &valueNameChars,
+                    nullptr,
+                    &type,
+                    nullptr,
+                    &enumeratedDataBytes);
+                if (enumStatus == ERROR_NO_MORE_ITEMS) {
+                    break;
+                }
+                if (enumStatus != ERROR_SUCCESS) {
+                    RecordRegistrySearchReadFailure(
+                        snapshot,
+                        L"RegEnumValueW failed for " + current.path.displayPath + L": " + std::to_wstring(enumStatus));
+                    continue;
+                }
+
+                RegistrySearchCandidate valueCandidate;
+                valueCandidate.kind = RegistrySearchEntryKind::Value;
+                valueCandidate.keyPath = current.path.displayPath;
+                valueCandidate.valueName.assign(valueName.data(), valueName.data() + valueNameChars);
+                valueCandidate.valueTypeText = RegistryTypeText(type);
+                valueCandidate.dataByteCount = enumeratedDataBytes;
+                valueCandidate.depth = current.depth;
+
+                DWORD queriedType = type;
+                DWORD fullDataBytes = 0;
+                const wchar_t* valueNamePtr = valueCandidate.valueName.empty()
+                    ? nullptr
+                    : valueCandidate.valueName.c_str();
+                const LONG sizeStatus = ::RegQueryValueExW(
+                    key.get(),
+                    valueNamePtr,
+                    nullptr,
+                    &queriedType,
+                    nullptr,
+                    &fullDataBytes);
+                if (sizeStatus != ERROR_SUCCESS) {
+                    RecordRegistrySearchReadFailure(
+                        snapshot,
+                        L"RegQueryValueExW(size) failed for " + current.path.displayPath + L": " + std::to_wstring(sizeStatus));
+                    valueCandidate.dataPreview = L"<数据预览不可读取>";
+                } else {
+                    valueCandidate.valueTypeText = RegistryTypeText(queriedType);
+                    valueCandidate.dataByteCount = fullDataBytes;
+                    if (fullDataBytes > snapshot.request.maxValuePreviewBytes) {
+                        valueCandidate.dataPreview = L"<数据预览超过上限，未读取>";
+                    } else if (fullDataBytes != 0U) {
+                        std::vector<std::uint8_t> data(static_cast<std::size_t>(fullDataBytes));
+                        DWORD readDataBytes = fullDataBytes;
+                        const LONG dataStatus = ::RegQueryValueExW(
+                            key.get(),
+                            valueNamePtr,
+                            nullptr,
+                            &queriedType,
+                            data.data(),
+                            &readDataBytes);
+                        if (dataStatus != ERROR_SUCCESS) {
+                            RecordRegistrySearchReadFailure(
+                                snapshot,
+                                L"RegQueryValueExW(data) failed for " + current.path.displayPath + L": " + std::to_wstring(dataStatus));
+                            if (dataStatus == ERROR_MORE_DATA && readDataBytes > valueCandidate.dataByteCount) {
+                                valueCandidate.dataByteCount = readDataBytes;
+                            }
+                            valueCandidate.dataPreview = dataStatus == ERROR_MORE_DATA
+                                ? L"<数据读取期间变化，预览跳过>"
+                                : L"<数据预览不可读取>";
+                        } else {
+                            data.resize(readDataBytes);
+                            valueCandidate.valueTypeText = RegistryTypeText(queriedType);
+                            valueCandidate.dataByteCount = readDataBytes;
+                            valueCandidate.dataPreview = FormatRegistryData(queriedType, data);
+                        }
+                    }
+                }
+
+                if (!AppendRegistrySearchCandidate(snapshot, valueCandidate)) {
+                    break;
+                }
+            }
+        }
+        if (snapshot.stopReason == RegistrySearchStopReason::Cancelled ||
+            snapshot.stopReason == RegistrySearchStopReason::ValueLimitReached ||
+            snapshot.stopReason == RegistrySearchStopReason::ResultLimitReached) {
+            break;
+        }
+
+        // RegQueryInfoKeyW already tells us how many direct children would be
+        // beyond the caller's depth bound.  Do not enumerate every name only
+        // to discard it: a very wide key at the limit must remain bounded too.
+        if (current.depth >= snapshot.request.maxDepth) {
+            snapshot.counters.skippedDepthCount += static_cast<std::size_t>(subKeyCount);
+            continue;
+        }
+
+        if (maxSubKeyName > kRegistrySearchMaxNameChars) {
+            RecordRegistrySearchReadFailure(
+                snapshot,
+                L"RegQueryInfoKeyW returned an oversized subkey-name bound for " + current.path.displayPath + L".");
+            continue;
+        }
+        std::vector<wchar_t> subKeyName(static_cast<std::size_t>(maxSubKeyName) + 2U);
+        for (DWORD index = 0; index < subKeyCount; ++index) {
+            if (StopRegistrySearchIfCancelled(snapshot, cancelToken)) {
+                break;
+            }
+            // The worklist itself is bounded as well as processed keys.  This
+            // prevents one key with a huge child count from consuming memory or
+            // bypassing the key budget before its children are visited.
+            if (snapshot.counters.inspectedSubKeyCount >= snapshot.request.maxKeys) {
+                subKeyEnumerationLimitReached = true;
+                break;
+            }
+            if (snapshot.counters.visitedKeyCount + pendingKeys.size() >= snapshot.request.maxKeys) {
+                keyWorkLimitReached = true;
+                break;
+            }
+            ++snapshot.counters.inspectedSubKeyCount;
+
+            DWORD subKeyNameChars = static_cast<DWORD>(subKeyName.size());
+            const LONG enumStatus = ::RegEnumKeyExW(
+                key.get(),
+                index,
+                subKeyName.data(),
+                &subKeyNameChars,
+                nullptr,
+                nullptr,
+                nullptr,
+                nullptr);
+            if (enumStatus == ERROR_NO_MORE_ITEMS) {
+                break;
+            }
+            if (enumStatus != ERROR_SUCCESS) {
+                RecordRegistrySearchReadFailure(
+                    snapshot,
+                    L"RegEnumKeyExW failed for " + current.path.displayPath + L": " + std::to_wstring(enumStatus));
+                continue;
+            }
+
+            const std::size_t childDepth = current.depth + 1U;
+            if (childDepth > snapshot.request.maxDepth) {
+                ++snapshot.counters.skippedDepthCount;
+                continue;
+            }
+            pendingKeys.push_back({
+                MakeRegistrySearchChildPath(
+                    current.path,
+                    std::wstring(subKeyName.data(), subKeyName.data() + subKeyNameChars)),
+                childDepth
+            });
+        }
+        if (snapshot.stopReason == RegistrySearchStopReason::Cancelled) {
+            break;
+        }
+    }
+
+    if (snapshot.stopReason == RegistrySearchStopReason::NotStarted) {
+        if (IsRegistrySearchCancelled(cancelToken)) {
+            snapshot.stopReason = RegistrySearchStopReason::Cancelled;
+        } else if (keyWorkLimitReached) {
+            snapshot.stopReason = RegistrySearchStopReason::KeyLimitReached;
+        } else if (subKeyEnumerationLimitReached) {
+            snapshot.stopReason = RegistrySearchStopReason::SubKeyEnumerationLimitReached;
+        } else if (snapshot.counters.skippedDepthCount != 0U) {
+            snapshot.stopReason = RegistrySearchStopReason::DepthLimitReached;
+        } else if (!enumeratedAnyKey && snapshot.counters.readFailureCount != 0U) {
+            snapshot.stopReason = RegistrySearchStopReason::ReadFailure;
+        } else {
+            snapshot.stopReason = RegistrySearchStopReason::Completed;
+        }
+    }
+    snapshot.statusText = BuildRegistrySearchStatusText(snapshot);
     return snapshot;
 }
 

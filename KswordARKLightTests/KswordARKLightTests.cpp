@@ -141,6 +141,7 @@ int wmain() {
     registrySearchRequest.startPath = L"  HKLM\\Software\\KSword  ";
     registrySearchRequest.query = L"  Needle  ";
     registrySearchRequest.maxKeys = 999999U;
+    registrySearchRequest.maxValues = 999999U;
     registrySearchRequest.maxResults = 999999U;
     registrySearchRequest.maxDepth = 999999U;
     registrySearchRequest.maxValuePreviewBytes = 999999U;
@@ -148,6 +149,7 @@ int wmain() {
     Expect(registrySearchValidation.valid && registrySearchValidation.request.startPath == L"HKLM\\Software\\KSword" &&
             registrySearchValidation.normalizedQuery == L"Needle" &&
             registrySearchValidation.request.maxKeys == Ksword::Features::Registry::kRegistrySearchMaxKeys &&
+            registrySearchValidation.request.maxValues == Ksword::Features::Registry::kRegistrySearchMaxValues &&
             registrySearchValidation.request.maxResults == Ksword::Features::Registry::kRegistrySearchMaxResults &&
             registrySearchValidation.request.maxDepth == Ksword::Features::Registry::kRegistrySearchMaxDepth &&
             registrySearchValidation.request.maxValuePreviewBytes == Ksword::Features::Registry::kRegistrySearchMaxValuePreviewBytes,
@@ -155,6 +157,22 @@ int wmain() {
     Expect(!Ksword::Features::Registry::ValidateRegistrySearchRequest({ L"HKLM", L"" }).valid &&
             !Ksword::Features::Registry::ValidateRegistrySearchRequest({ L"", L"needle" }).valid,
         L"registry search rejects empty path and keyword");
+    Ksword::Features::Registry::RegistrySearchRequest zeroBudgetSearchRequest{};
+    zeroBudgetSearchRequest.startPath = L"HKLM";
+    zeroBudgetSearchRequest.query = L"needle";
+    zeroBudgetSearchRequest.maxKeys = 0U;
+    zeroBudgetSearchRequest.maxValues = 0U;
+    zeroBudgetSearchRequest.maxResults = 0U;
+    zeroBudgetSearchRequest.maxDepth = 0U;
+    zeroBudgetSearchRequest.maxValuePreviewBytes = 0U;
+    const auto zeroBudgetSearchValidation = Ksword::Features::Registry::ValidateRegistrySearchRequest(zeroBudgetSearchRequest);
+    Expect(zeroBudgetSearchValidation.valid &&
+            zeroBudgetSearchValidation.request.maxKeys == Ksword::Features::Registry::kRegistrySearchMaxKeys &&
+            zeroBudgetSearchValidation.request.maxValues == Ksword::Features::Registry::kRegistrySearchMaxValues &&
+            zeroBudgetSearchValidation.request.maxResults == Ksword::Features::Registry::kRegistrySearchMaxResults &&
+            zeroBudgetSearchValidation.request.maxDepth == Ksword::Features::Registry::kRegistrySearchMaxDepth &&
+            zeroBudgetSearchValidation.request.maxValuePreviewBytes == Ksword::Features::Registry::kRegistrySearchMaxValuePreviewBytes,
+        L"registry search normalizes omitted zero budgets to fixed bounds");
 
     Ksword::Features::Registry::RegistrySearchCandidate registryCandidate{};
     registryCandidate.kind = Ksword::Features::Registry::RegistrySearchEntryKind::Value;
@@ -180,6 +198,13 @@ int wmain() {
     registrySearchSnapshot.hits = { registryHit };
     Expect(Ksword::Features::Registry::BuildRegistrySearchStatusText(registrySearchSnapshot).find(L"深度") != std::wstring::npos,
         L"registry search status names explicit traversal stop reasons");
+    registrySearchSnapshot.stopReason = Ksword::Features::Registry::RegistrySearchStopReason::ValueLimitReached;
+    Expect(Ksword::Features::Registry::BuildRegistrySearchStatusText(registrySearchSnapshot).find(L"个值的上限") != std::wstring::npos,
+        L"registry search status names the value work bound");
+    registrySearchSnapshot.stopReason = Ksword::Features::Registry::RegistrySearchStopReason::SubKeyEnumerationLimitReached;
+    registrySearchSnapshot.counters.inspectedSubKeyCount = 12U;
+    Expect(Ksword::Features::Registry::BuildRegistrySearchStatusText(registrySearchSnapshot).find(L"子键枚举工作上限") != std::wstring::npos,
+        L"registry search status distinguishes child-enumeration work bounds");
     const std::wstring registrySearchTsv = Ksword::Features::Registry::BuildVisibleRegistrySearchTsv(
         { registryHit, {} }, { 0U, 1U, 9U });
     Expect(registrySearchTsv.find(L"类型\t键路径\t值名称") == 0U &&

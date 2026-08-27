@@ -12,6 +12,7 @@ namespace Ksword::Features::Registry {
 // the budgets in this Win32-free model makes the traversal policy testable
 // without opening a registry key.
 inline constexpr std::size_t kRegistrySearchMaxKeys = 2000U;
+inline constexpr std::size_t kRegistrySearchMaxValues = 2000U;
 inline constexpr std::size_t kRegistrySearchMaxResults = 2000U;
 inline constexpr std::size_t kRegistrySearchMaxDepth = 32U;
 inline constexpr std::size_t kRegistrySearchMaxValuePreviewBytes = 16U * 1024U;
@@ -22,7 +23,10 @@ inline constexpr std::size_t kRegistrySearchMaxValuePreviewBytes = 16U * 1024U;
 struct RegistrySearchRequest {
     std::wstring startPath;
     std::wstring query;
+    // maxKeys limits accepted key nodes and the bounded child-name enumeration
+    // work used to discover them; it never permits an unbounded wide key walk.
     std::size_t maxKeys = kRegistrySearchMaxKeys;
+    std::size_t maxValues = kRegistrySearchMaxValues;
     std::size_t maxResults = kRegistrySearchMaxResults;
     std::size_t maxDepth = kRegistrySearchMaxDepth;
     std::size_t maxValuePreviewBytes = kRegistrySearchMaxValuePreviewBytes;
@@ -70,6 +74,7 @@ struct RegistrySearchHit {
 struct RegistrySearchCounters {
     std::size_t visitedKeyCount = 0;
     std::size_t visitedValueCount = 0;
+    std::size_t inspectedSubKeyCount = 0;
     std::size_t matchedKeyCount = 0;
     std::size_t matchedValueCount = 0;
     std::size_t skippedDepthCount = 0;
@@ -84,6 +89,8 @@ enum class RegistrySearchStopReason {
     Completed,
     InvalidRequest,
     KeyLimitReached,
+    SubKeyEnumerationLimitReached,
+    ValueLimitReached,
     ResultLimitReached,
     DepthLimitReached,
     Cancelled,
