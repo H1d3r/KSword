@@ -66,10 +66,29 @@ int wmain() {
     const auto module = ParseCommandInput(L"网络");
     Expect(module.navigation.entity.kind == EntityKind::Module && module.navigation.entity.text == L"网络",
         L"plain module title");
+    const auto englishModule = ParseCommandInput(L"process");
+    Expect(englishModule.kind == CommandInputKind::Navigation &&
+            englishModule.navigation.entity.kind == EntityKind::Module &&
+            englishModule.navigation.entity.text == L"进程",
+        L"bare English module alias resolves to a registry title");
+    const auto fileModule = ParseCommandInput(L"file");
+    Expect(fileModule.kind == CommandInputKind::Navigation &&
+            fileModule.navigation.entity.kind == EntityKind::Module &&
+            fileModule.navigation.entity.text == L"文件",
+        L"bare file alias opens its module instead of requiring a path");
 
     const auto shell = ParseCommandInput(L"! whoami /all");
     Expect(shell.kind == CommandInputKind::Shell && shell.shellCommand == L"whoami /all", L"explicit shell escape");
     Expect(ParseCommandInput(L"pid zero").kind == CommandInputKind::Invalid, L"invalid pid rejected");
+    Expect(ParseCommandInput(L"pid 4294967296").kind == CommandInputKind::Invalid &&
+            ParseCommandInput(L"tid 0x100000000").kind == CommandInputKind::Invalid &&
+            ParseCommandInput(L"net 4294967296").kind == CommandInputKind::Invalid,
+        L"32-bit entity commands reject values that would truncate during routing");
+    const auto largeHwnd = ParseCommandInput(L"hwnd 0x100000000");
+    Expect(largeHwnd.kind == CommandInputKind::Navigation &&
+            largeHwnd.navigation.entity.kind == EntityKind::Window &&
+            largeHwnd.navigation.entity.id == 0x100000000ULL,
+        L"HWND command preserves a 64-bit native handle value");
 
     using Ksword::Features::File::PathNavigator;
     Expect(PathNavigator::normalizeKnownDirectoryPath(L" C:/Program Files/KSword/ ") == L"C:\\Program Files\\KSword",

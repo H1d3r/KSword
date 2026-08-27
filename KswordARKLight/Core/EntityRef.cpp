@@ -75,11 +75,35 @@ CommandInputResult NumericRequest(
         result.error = std::wstring(label) + L" 必须是非零十进制或 0x 十六进制数字。";
         return result;
     }
+    if (kind != EntityKind::Window && id > (std::numeric_limits<std::uint32_t>::max)()) {
+        result.error = std::wstring(label) + L" 超出 Windows 32 位标识符范围。";
+        return result;
+    }
     result.kind = CommandInputKind::Navigation;
     result.navigation.target = target;
     result.navigation.entity.kind = kind;
     result.navigation.entity.id = id;
     return result;
+}
+
+const wchar_t* ModuleTitleForBareVerb(const std::wstring& verb) {
+    if (verb == L"process" || verb == L"进程") { return L"进程"; }
+    if (verb == L"memory" || verb == L"内存") { return L"内存"; }
+    if (verb == L"window" || verb == L"窗口") { return L"窗口"; }
+    if (verb == L"network" || verb == L"网络") { return L"网络"; }
+    if (verb == L"handle" || verb == L"handles" || verb == L"句柄") { return L"句柄"; }
+    if (verb == L"monitor" || verb == L"监控") { return L"监控"; }
+    if (verb == L"file" || verb == L"文件") { return L"文件"; }
+    if (verb == L"reg" || verb == L"registry" || verb == L"注册表") { return L"注册表"; }
+    if (verb == L"driver" || verb == L"驱动") { return L"驱动"; }
+    if (verb == L"kernel" || verb == L"内核") { return L"内核"; }
+    if (verb == L"hardware" || verb == L"硬件") { return L"硬件"; }
+    if (verb == L"startup" || verb == L"启动项") { return L"启动项"; }
+    if (verb == L"service" || verb == L"services" || verb == L"服务") { return L"服务"; }
+    if (verb == L"privilege" || verb == L"权限") { return L"权限"; }
+    if (verb == L"systools" || verb == L"系统工具") { return L"系统工具"; }
+    if (verb == L"misc" || verb == L"杂项安全") { return L"杂项安全"; }
+    return nullptr;
 }
 
 } // namespace
@@ -105,11 +129,10 @@ CommandInputResult ParseCommandInput(const std::wstring& input) {
     const std::wstring verb = Lower(trimmed.substr(0, separator));
     const std::wstring argument = separator == std::wstring::npos ? std::wstring{} : Trim(trimmed.substr(separator + 1));
 
-    if (argument.empty() &&
-        (verb == L"进程" || verb == L"内存" || verb == L"memory" || verb == L"窗口" || verb == L"网络" || verb == L"句柄" || verb == L"监控")) {
+    if (argument.empty() && ModuleTitleForBareVerb(verb) != nullptr) {
         result.kind = CommandInputKind::Navigation;
         result.navigation.entity.kind = EntityKind::Module;
-        result.navigation.entity.text = trimmed;
+        result.navigation.entity.text = ModuleTitleForBareVerb(verb);
         return result;
     }
 
