@@ -3,19 +3,25 @@
 #include "DriverMemoryModel.h"
 #include "MemoryWritePlan.h"
 
+#include <atomic>
+
 namespace Ksword::Features::Memory {
 
 // DriverMemoryWritebackResult describes a staged, verified plan application.
 // success means every block passed exact before/after reads and the full desired
-// snapshot was read back exactly. forceRequired is a non-mutating response that
-// the UI may present for a separate explicit confirmation.
+// snapshot was read back exactly. forceRequired identifies the first remaining
+// block that refused a non-FORCE write without reporting bytes written; the UI
+// may then ask for a separate explicit confirmation to continue from that block
+// only. cancelled always requires a fresh read before another attempt.
 struct DriverMemoryWritebackResult {
     bool success = false;
     bool forceRequired = false;
+    bool cancelled = false;
     std::size_t totalBlocks = 0;
     std::size_t verifiedBlocks = 0;
     std::size_t requestedBytes = 0;
     std::size_t bytesWritten = 0;
+    std::size_t forceRequiredBlockIndex = 0;
     std::uint64_t failedAddress = 0;
     std::wstring statusText;
     DriverMemoryReadResult finalReadResult;
@@ -49,7 +55,16 @@ public:
     // ApplyWritePlan freezes the supplied snapshot target, exact-preflights each
     // changed block, writes it, verifies it, then exactly re-reads the whole
     // desired snapshot. It never retries with FORCE unless forceWrite is true.
-    DriverMemoryWritebackResult ApplyWritePlan(const MemoryWritePlan& plan, bool forceWrite);
+    // firstPendingBlock permits a separately confirmed FORCE continuation after
+    // an older or policy-driven driver accepted a verified normal-write prefix.
+    // cancellation is cooperative and checked before and after every driver
+    // request; cancellation after a write always leaves the result requiring a
+    // fresh snapshot rather than making a safety claim about target memory.
+    DriverMemoryWritebackResult ApplyWritePlan(
+        const MemoryWritePlan& plan,
+        bool forceWrite,
+        const std::atomic_bool* cancellation = nullptr,
+        std::size_t firstPendingBlock = 0U);
 };
 
 } // namespace Ksword::Features::Memory

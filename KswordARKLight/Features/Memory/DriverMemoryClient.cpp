@@ -119,12 +119,24 @@ bool IsExactWrite(const DriverMemoryWriteResult& result, const std::size_t expec
         result.bytesWritten == expectedBytes;
 }
 
+bool IsCancellationRequested(const std::atomic_bool* cancellation) noexcept {
+    return cancellation != nullptr && cancellation->load(std::memory_order_acquire);
+}
+
 void SetWritebackFailure(DriverMemoryWritebackResult& result,
     const std::uint64_t address,
     const std::wstring& message) {
     result.success = false;
     result.failedAddress = address;
     result.statusText = message;
+}
+
+void SetWritebackCancelled(DriverMemoryWritebackResult& result,
+    const std::uint64_t address,
+    const std::wstring& detail) {
+    result.cancelled = true;
+    SetWritebackFailure(result, address,
+        L"差异写回已取消；目标内存可能已有已完成或未完全确认的写入，请重新读取后再预览。\r\n" + detail);
 }
 
 // MakeReadValidationError returns a failed local result before any IOCTL is
@@ -216,9 +228,18 @@ DriverMemoryWriteResult DriverMemoryClient::WriteMemory(const DriverMemoryWriteR
     return result;
 }
 
-DriverMemoryWritebackResult DriverMemoryClient::ApplyWritePlan(const MemoryWritePlan& plan, const bool forceWrite) {
+DriverMemoryWritebackResult DriverMemoryClient::ApplyWritePlan(
+    const MemoryWritePlan& plan,
+    const bool forceWrite,
+    const std::atomic_bool* cancellation,
+    const std::size_t firstPendingBlock) {
     DriverMemoryWritebackResult result{};
     result.totalBlocks = plan.blocks.size();
+    if (IsCancellationRequested(cancellation)) {
+        SetWritebackCancelled(result, plan.baseAddress, L"尚未开始发送驱动请求。");
+        return result;
+    }
+
     std::wstring validationError;
     if (!ValidateMemoryWritePlan(plan, validationError)) {
         SetWritebackFailure(result, plan.baseAddress, L"差异写回计划无效：" + validationError);
@@ -233,15 +254,29 @@ DriverMemoryWritebackResult DriverMemoryClient::ApplyWritePlan(const MemoryWrite
         result.statusText = L"差异计划没有变化字节，未发送写入请求。";
         return result;
     }
+    if (firstPendingBlock > plan.blocks.size()) {
+        SetWritebackFailure(result, plan.baseAddress, L"差异写回续写位置超出计划范围。");
+        return result;
+    }
 
-    for (const MemoryWriteBlock& block : plan.blocks) {
+    for (std::size_t blockIndex = firstPendingBlock; blockIndex < plan.blocks.size(); ++blockIndex) {
+        const MemoryWriteBlock& block = plan.blocks[blockIndex];
+        if (IsCancellationRequested(cancellation)) {
+            SetWritebackCancelled(result, block.address, L"未继续发送后续块请求。");
+            return result;
+        }
         if (block.desiredAfter.size() > KSWORD_ARK_MEMORY_WRITE_MAX_BYTES) {
             SetWritebackFailure(result, block.address, L"差异块超过共享写入上限。");
             return result;
         }
+
         const DriverMemoryReadRequest preflightRequest{
             static_cast<DWORD>(plan.processId), block.address, block.expectedBefore.size() };
         const DriverMemoryReadResult preflightResult = ReadMemory(preflightRequest);
+        if (IsCancellationRequested(cancellation)) {
+            SetWritebackCancelled(result, block.address, L"写前复读已返回，未继续发送写入请求。");
+            return result;
+        }
         if (!IsExactRead(preflightResult, block.expectedBefore)) {
             SetWritebackFailure(result, block.address,
                 L"差异写回已停止：写前读取与原始快照不一致，需重新读取并预览。\r\n" + preflightResult.statusText);
@@ -252,15 +287,27 @@ DriverMemoryWritebackResult DriverMemoryClient::ApplyWritePlan(const MemoryWrite
         writeRequest.processId = static_cast<DWORD>(plan.processId);
         writeRequest.address = block.address;
         writeRequest.bytes = block.desiredAfter;
+        if (IsCancellationRequested(cancellation)) {
+            SetWritebackCancelled(result, block.address, L"写前复读一致，但已取消，未继续发送写入请求。");
+            return result;
+        }
         const DriverMemoryWriteResult writeResult = WriteMemory(writeRequest, forceWrite);
         result.requestedBytes += block.desiredAfter.size();
         result.bytesWritten += writeResult.bytesWritten;
+        if (IsCancellationRequested(cancellation)) {
+            SetWritebackCancelled(result, block.address,
+                L"最后一个写入请求已返回，未继续验证或发送后续块请求。\r\n" + writeResult.statusText);
+            return result;
+        }
         if (!IsExactWrite(writeResult, block.desiredAfter.size())) {
             if (!forceWrite && writeResult.protocolStatus == KSWORD_ARK_MEMORY_WRITE_STATUS_FORCE_REQUIRED &&
-                result.verifiedBlocks == 0U) {
+                writeResult.bytesWritten == 0U) {
                 result.forceRequired = true;
+                result.forceRequiredBlockIndex = blockIndex;
                 SetWritebackFailure(result, block.address,
-                    L"驱动要求 FORCE 才能写入此快照；尚未写入任何差异块。\r\n" + writeResult.statusText);
+                    result.verifiedBlocks == 0U
+                        ? L"驱动要求 FORCE 才能写入此快照；本次和累计均未报告写入字节。\r\n" + writeResult.statusText
+                        : L"驱动要求 FORCE 才能继续剩余差异块；此前块已逐块验证，当前拒绝块未报告写入字节。\r\n" + writeResult.statusText);
             } else {
                 SetWritebackFailure(result, block.address,
                     L"差异写回已停止：写入未完整成功，未继续后续块。\r\n" + writeResult.statusText);
@@ -270,7 +317,15 @@ DriverMemoryWritebackResult DriverMemoryClient::ApplyWritePlan(const MemoryWrite
 
         const DriverMemoryReadRequest verificationRequest{
             static_cast<DWORD>(plan.processId), block.address, block.desiredAfter.size() };
+        if (IsCancellationRequested(cancellation)) {
+            SetWritebackCancelled(result, block.address, L"写入已成功返回，未继续发送写后验证请求。");
+            return result;
+        }
         const DriverMemoryReadResult verificationResult = ReadMemory(verificationRequest);
+        if (IsCancellationRequested(cancellation)) {
+            SetWritebackCancelled(result, block.address, L"写后验证已返回，未继续发送后续块请求。");
+            return result;
+        }
         if (!IsExactRead(verificationResult, block.desiredAfter)) {
             SetWritebackFailure(result, block.address,
                 L"差异写回已停止：写后读取未精确匹配目标字节，未继续后续块。\r\n" + verificationResult.statusText);
@@ -281,7 +336,15 @@ DriverMemoryWritebackResult DriverMemoryClient::ApplyWritePlan(const MemoryWrite
 
     const DriverMemoryReadRequest finalReadRequest{
         static_cast<DWORD>(plan.processId), plan.baseAddress, plan.desiredSnapshotBytes.size() };
+    if (IsCancellationRequested(cancellation)) {
+        SetWritebackCancelled(result, plan.baseAddress, L"未发送完整快照复读请求。");
+        return result;
+    }
     result.finalReadResult = ReadMemory(finalReadRequest);
+    if (IsCancellationRequested(cancellation)) {
+        SetWritebackCancelled(result, plan.baseAddress, L"完整快照复读已返回，未将结果作为新的快照基线。");
+        return result;
+    }
     if (!IsExactRead(result.finalReadResult, plan.desiredSnapshotBytes)) {
         SetWritebackFailure(result, plan.baseAddress,
             L"差异块均已验证，但完整快照复读未精确匹配；未更新快照基线。\r\n" + result.finalReadResult.statusText);

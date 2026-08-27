@@ -4,6 +4,7 @@
 #include "DriverMemoryModel.h"
 #include "MemoryInspection.h"
 #include "MemorySnapshot.h"
+#include "MemoryWritePlan.h"
 #include "../../Ui/AsyncTask.h"
 #include "../../Ui/Controls.h"
 #include "../../Ui/ExportUtil.h"
@@ -14,6 +15,7 @@
 #include "../../Ui/VirtualListView.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cwchar>
 #include <iomanip>
 #include <memory>
@@ -38,6 +40,8 @@ constexpr int kHistoryFilterId = 51008;
 constexpr int kHistoryListId = 51009;
 constexpr int kSnapshotPreviousButtonId = 51010;
 constexpr int kSnapshotNextButtonId = 51011;
+constexpr int kPreviewDiffButtonId = 51012;
+constexpr int kApplyDiffButtonId = 51013;
 constexpr UINT kMemoryMenuRead = 51501;
 constexpr UINT kMemoryMenuWrite = 51502;
 constexpr UINT kMemoryMenuCopyHex = 51503;
@@ -54,6 +58,8 @@ constexpr UINT kMemoryMenuShowHexAscii = 51513;
 constexpr UINT kMemoryMenuShowTextRuns = 51514;
 constexpr UINT kMemoryMenuExportSnapshotText = 51515;
 constexpr UINT kMemoryMenuExportSnapshotBinary = 51516;
+constexpr UINT kMemoryMenuPreviewDiff = 51517;
+constexpr UINT kMemoryMenuApplyDiff = 51518;
 constexpr UINT kMsgMemoryOperationCompleted = WM_APP + 598;
 constexpr UINT kMsgMemoryHistoryFilterCompleted = WM_APP + 599;
 
@@ -65,16 +71,21 @@ enum class SnapshotPresentation {
 
 struct MemoryOperationSnapshot {
     bool readOperation = false;
+    bool stagedWritebackOperation = false;
+    bool forceWriteback = false;
+    std::size_t writebackFirstPendingBlock = 0;
     DWORD processId = 0;
     std::uint64_t address = 0;
     std::size_t requestedBytes = 0;
     DriverMemoryReadResult readResult;
     DriverMemoryWriteResult writeResult;
+    MemoryWritePlan writebackPlan;
+    DriverMemoryWritebackResult writebackResult;
 };
 
 struct MemoryHistoryEntry {
     std::uint64_t sequence = 0;
-    bool readOperation = false;
+    std::wstring operation;
     DWORD processId = 0;
     std::uint64_t address = 0;
     std::size_t requestedBytes = 0;
@@ -90,6 +101,12 @@ struct MemoryHistoryFilterResult {
     std::vector<std::size_t> visibleIndexes;
 };
 
+// MemoryViewLifetime survives a nested modal message loop long enough for the
+// caller to prove the page still owns its state after MessageBoxW returns.
+struct MemoryViewLifetime final {
+    std::atomic_bool alive = true;
+};
+
 // DriverMemoryViewState owns child HWNDs and the driver facade for one page.
 // Inputs arrive through window messages; processing validates edit-control text
 // and calls DriverMemoryClient; return values are produced by WndProc message
@@ -103,6 +120,8 @@ struct DriverMemoryViewState {
     HWND statusEdit = nullptr;
     HWND readButton = nullptr;
     HWND writeButton = nullptr;
+    HWND previewDiffButton = nullptr;
+    HWND applyDiffButton = nullptr;
     HWND snapshotPreviousButton = nullptr;
     HWND snapshotNextButton = nullptr;
     HWND historyFilter = nullptr;
@@ -110,6 +129,10 @@ struct DriverMemoryViewState {
     std::vector<MemoryHistoryEntry> history;
     std::uint64_t nextHistorySequence = 1;
     MemorySnapshotHistory snapshots;
+    MemoryWritePlan preparedWritePlan;
+    bool hasPreparedWritePlan = false;
+    std::shared_ptr<MemoryViewLifetime> lifetime = std::make_shared<MemoryViewLifetime>();
+    std::shared_ptr<std::atomic_bool> writebackCancellation;
     SnapshotPresentation snapshotPresentation = SnapshotPresentation::EditableHex;
     std::wstring editableHexText;
     bool hasEditableHexText = false;
@@ -151,11 +174,20 @@ void SetStatus(DriverMemoryViewState& state, const std::wstring& text) {
     }
 }
 
+// InvalidatePreparedWritePlan makes any text, target, or snapshot transition
+// require a fresh local diff calculation before it can reach the driver.
+void InvalidatePreparedWritePlan(DriverMemoryViewState& state) {
+    state.preparedWritePlan = {};
+    state.hasPreparedWritePlan = false;
+}
+
 // UpdateSnapshotButtons makes snapshot navigation opt-in and prevents a stale
 // button click while an I/O request is running. A snapshot is local immutable
 // data, so moving through it never triggers a driver request.
 void UpdateSnapshotButtons(DriverMemoryViewState& state) {
     const bool enabled = !state.operationInProgress;
+    const bool editable = state.snapshotPresentation == SnapshotPresentation::EditableHex;
+    const bool canStageWriteback = enabled && editable && state.snapshots.current() != nullptr;
     if (state.snapshotPreviousButton) {
         ::EnableWindow(state.snapshotPreviousButton, enabled && state.snapshots.canMovePrevious());
     }
@@ -163,7 +195,13 @@ void UpdateSnapshotButtons(DriverMemoryViewState& state) {
         ::EnableWindow(state.snapshotNextButton, enabled && state.snapshots.canMoveNext());
     }
     if (state.writeButton) {
-        ::EnableWindow(state.writeButton, enabled && state.snapshotPresentation == SnapshotPresentation::EditableHex);
+        ::EnableWindow(state.writeButton, enabled && editable);
+    }
+    if (state.previewDiffButton) {
+        ::EnableWindow(state.previewDiffButton, canStageWriteback);
+    }
+    if (state.applyDiffButton) {
+        ::EnableWindow(state.applyDiffButton, canStageWriteback && state.hasPreparedWritePlan);
     }
     ::InvalidateRect(state.hwnd, nullptr, FALSE);
 }
@@ -176,6 +214,7 @@ bool ApplyCurrentSnapshot(DriverMemoryViewState& state) {
     if (!snapshot) {
         return false;
     }
+    InvalidatePreparedWritePlan(state);
     if (state.pidEdit) {
         ::SetWindowTextW(state.pidEdit, std::to_wstring(snapshot->processId).c_str());
     }
@@ -265,7 +304,7 @@ void RebuildMemoryHistory(DriverMemoryViewState& state) {
         row.stableKey = std::to_wstring(entry.sequence);
         row.cells = {
             std::to_wstring(entry.sequence),
-            entry.readOperation ? L"读取" : L"写入",
+            entry.operation,
             std::to_wstring(entry.processId),
             FormatHex64(entry.address),
             std::to_wstring(entry.requestedBytes),
@@ -287,13 +326,24 @@ void RebuildMemoryHistory(DriverMemoryViewState& state) {
 void AppendMemoryHistory(DriverMemoryViewState& state, const MemoryOperationSnapshot& snapshot) {
     MemoryHistoryEntry entry{};
     entry.sequence = state.nextHistorySequence++;
-    entry.readOperation = snapshot.readOperation;
+    entry.operation = snapshot.readOperation ? L"读取" :
+        (snapshot.stagedWritebackOperation ? (snapshot.forceWriteback ? L"差异写回 (FORCE)" : L"差异写回") : L"写入");
     entry.processId = snapshot.processId;
     entry.address = snapshot.address;
     entry.requestedBytes = snapshot.requestedBytes;
-    entry.success = snapshot.readOperation ? snapshot.readResult.success : snapshot.writeResult.success;
-    entry.completedBytes = snapshot.readOperation ? snapshot.readResult.bytes.size() : snapshot.writeResult.bytesWritten;
-    entry.status = snapshot.readOperation ? snapshot.readResult.statusText : snapshot.writeResult.statusText;
+    if (snapshot.readOperation) {
+        entry.success = snapshot.readResult.success;
+        entry.completedBytes = snapshot.readResult.bytes.size();
+        entry.status = snapshot.readResult.statusText;
+    } else if (snapshot.stagedWritebackOperation) {
+        entry.success = snapshot.writebackResult.success;
+        entry.completedBytes = snapshot.writebackResult.bytesWritten;
+        entry.status = snapshot.writebackResult.statusText;
+    } else {
+        entry.success = snapshot.writeResult.success;
+        entry.completedBytes = snapshot.writeResult.bytesWritten;
+        entry.status = snapshot.writeResult.statusText;
+    }
     if (entry.status.empty()) {
         entry.status = entry.success ? L"操作完成。" : L"操作失败。";
     }
@@ -394,8 +444,10 @@ void LayoutChildren(DriverMemoryViewState& state, const RECT& rc) {
     const int buttonTop = rowTop + editHeight + gap;
     ::MoveWindow(state.readButton, margin, buttonTop, buttonWidth, editHeight + 2, TRUE);
     ::MoveWindow(state.writeButton, margin + buttonWidth + gap, buttonTop, buttonWidth, editHeight + 2, TRUE);
-    ::MoveWindow(state.snapshotPreviousButton, margin + (buttonWidth + gap) * 2, buttonTop, snapshotButtonWidth, editHeight + 2, TRUE);
-    ::MoveWindow(state.snapshotNextButton, margin + (buttonWidth + gap) * 2 + snapshotButtonWidth + gap, buttonTop, snapshotButtonWidth, editHeight + 2, TRUE);
+    ::MoveWindow(state.previewDiffButton, margin + (buttonWidth + gap) * 2, buttonTop, buttonWidth, editHeight + 2, TRUE);
+    ::MoveWindow(state.applyDiffButton, margin + (buttonWidth + gap) * 3, buttonTop, buttonWidth, editHeight + 2, TRUE);
+    ::MoveWindow(state.snapshotPreviousButton, margin + (buttonWidth + gap) * 4, buttonTop, snapshotButtonWidth, editHeight + 2, TRUE);
+    ::MoveWindow(state.snapshotNextButton, margin + (buttonWidth + gap) * 4 + snapshotButtonWidth + gap, buttonTop, snapshotButtonWidth, editHeight + 2, TRUE);
 
     const int filterTop = buttonTop + editHeight + gap;
     const int hexTop = filterTop + editHeight + gap;
@@ -421,7 +473,7 @@ void PaintLabels(HWND hwnd, HDC dc) {
     const COLORREF text = Ksword::Ui::AppTheme().textColor;
     const COLORREF muted = Ksword::Ui::AppTheme().mutedTextColor;
     RECT title{ 12, 8, rc.right - 12, 28 };
-    Ksword::Ui::DrawTextLine(dc, L"Driver Memory Read / Write", title, text, Ksword::Ui::SystemUIFont(), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    Ksword::Ui::DrawTextLine(dc, L"Driver Memory Read / Write / Verify", title, text, Ksword::Ui::SystemUIFont(), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
     RECT pid{ 12, 38, 70, 62 };
     RECT address{ 200, 38, 272, 62 };
@@ -433,7 +485,7 @@ void PaintLabels(HWND hwnd, HDC dc) {
     Ksword::Ui::DrawTextLine(dc, L"操作历史筛选（匹配全部列和状态）", filter, muted, Ksword::Ui::SystemUIFont(), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     const DriverMemoryViewState* state = StateFromWindow(hwnd);
     const std::wstring snapshotText = state && state->snapshots.current()
-        ? L"读取快照 " + std::to_wstring(state->snapshots.currentPosition()) + L"/" + std::to_wstring(state->snapshots.size()) + L"（右键检视/导出）"
+        ? L"读取快照 " + std::to_wstring(state->snapshots.currentPosition()) + L"/" + std::to_wstring(state->snapshots.size()) + L"（右键检视/导出；差异写回已冻结目标）"
         : L"读取快照 0/0";
     RECT snapshot{ 372, 70, rc.right - 12, 94 };
     Ksword::Ui::DrawTextLine(dc, snapshotText, snapshot, muted, Ksword::Ui::SystemUIFont(), DT_LEFT | DT_VCENTER | DT_SINGLELINE);
@@ -444,6 +496,20 @@ void PaintLabels(HWND hwnd, HDC dc) {
 // finishes or after WM_NCDESTROY clears the pointer.
 DriverMemoryViewState* StateFromWindow(HWND hwnd) {
     return reinterpret_cast<DriverMemoryViewState*>(::GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+}
+
+// CurrentLiveState rejects a stale reference after a modal dialog has pumped
+// WM_NCDESTROY. The token is captured before the dialog and is cleared before
+// the owning state is released, so a recycled HWND cannot be mistaken for it.
+DriverMemoryViewState* CurrentLiveState(HWND hwnd, const std::shared_ptr<MemoryViewLifetime>& lifetime) {
+    if (!lifetime || !lifetime->alive.load(std::memory_order_acquire)) {
+        return nullptr;
+    }
+    DriverMemoryViewState* state = StateFromWindow(hwnd);
+    if (!state || state->lifetime.get() != lifetime.get()) {
+        return nullptr;
+    }
+    return state;
 }
 
 // HandleRead validates read fields and invokes the driver facade. Input is page
@@ -547,14 +613,282 @@ void HandleWrite(DriverMemoryViewState& state) {
             ::EnableWindow(state.readButton, TRUE);
             ::EnableWindow(state.writeButton, TRUE);
             if (error || !snapshot.has_value()) {
+                InvalidatePreparedWritePlan(state);
                 SetStatus(state, L"R0 内存写入异常结束。");
                 UpdateSnapshotButtons(state);
                 return;
             }
+            InvalidatePreparedWritePlan(state);
             SetStatus(state, snapshot->writeResult.statusText);
             AppendMemoryHistory(state, *snapshot);
             UpdateSnapshotButtons(state);
         });
+}
+
+// PrepareWritePlan turns only the local editable buffer into a frozen plan for
+// the current immutable read snapshot. PID/address edits are deliberately not
+// inputs here: writeback always targets the snapshot identity that supplied the
+// original bytes.
+void PrepareWritePlan(DriverMemoryViewState& state) {
+    if (state.operationInProgress || state.snapshotPresentation != SnapshotPresentation::EditableHex) {
+        SetStatus(state, L"请先结束当前操作并切回可编辑 Hex，再预览差异。");
+        return;
+    }
+    const MemoryReadSnapshot* snapshot = state.snapshots.current();
+    if (!snapshot) {
+        SetStatus(state, L"请先成功读取内存；差异写回只能基于不可变读取快照。");
+        return;
+    }
+
+    std::vector<std::uint8_t> editedBytes;
+    std::wstring error;
+    if (!ParseHexBytes(GetWindowTextString(state.hexEdit), editedBytes, error)) {
+        InvalidatePreparedWritePlan(state);
+        SetStatus(state, error);
+        UpdateSnapshotButtons(state);
+        return;
+    }
+
+    MemoryWritePlan plan{};
+    if (!BuildMemoryWritePlan(*snapshot, editedBytes, kMemoryWritePlanBlockBytes, plan, error)) {
+        InvalidatePreparedWritePlan(state);
+        SetStatus(state, L"无法预览差异：" + error);
+        UpdateSnapshotButtons(state);
+        return;
+    }
+    state.preparedWritePlan = std::move(plan);
+    state.hasPreparedWritePlan = !state.preparedWritePlan.blocks.empty();
+    if (!state.hasPreparedWritePlan) {
+        SetStatus(state, L"没有检测到差异；未发送写入请求。");
+    } else {
+        SetStatus(state, L"差异预览完成：" + std::to_wstring(state.preparedWritePlan.blocks.size()) + L" 个连续块、" +
+            std::to_wstring(state.preparedWritePlan.changedByteCount) + L" 字节。写回目标已冻结为快照 PID=" +
+            std::to_wstring(state.preparedWritePlan.processId) + L"，地址=" + FormatHex64(state.preparedWritePlan.baseAddress) + L"。");
+    }
+    UpdateSnapshotButtons(state);
+}
+
+bool PreparedPlanMatchesEditableBuffer(const DriverMemoryViewState& state, std::wstring& errorText) {
+    errorText.clear();
+    if (!state.hasPreparedWritePlan || state.snapshotPresentation != SnapshotPresentation::EditableHex) {
+        errorText = L"请先在可编辑 Hex 视图中预览差异。";
+        return false;
+    }
+    const MemoryReadSnapshot* snapshot = state.snapshots.current();
+    if (!snapshot || snapshot->sequence != state.preparedWritePlan.snapshotSequence ||
+        snapshot->processId != state.preparedWritePlan.processId || snapshot->address != state.preparedWritePlan.baseAddress) {
+        errorText = L"读取快照已变化，请重新预览差异。";
+        return false;
+    }
+    std::vector<std::uint8_t> editedBytes;
+    if (!ParseHexBytes(GetWindowTextString(state.hexEdit), editedBytes, errorText)) {
+        return false;
+    }
+    if (editedBytes != state.preparedWritePlan.desiredSnapshotBytes) {
+        errorText = L"Hex 缓冲在预览后已变化，请重新预览差异。";
+        return false;
+    }
+    return true;
+}
+
+bool ConfirmWritebackPlan(HWND owner, const MemoryWritePlan& plan) {
+    const std::wstring prompt = L"将对已读取的内存快照写入 " + std::to_wstring(plan.blocks.size()) + L" 个差异块（" +
+        std::to_wstring(plan.changedByteCount) + L" 字节）。\r\n\r\nPID=" + std::to_wstring(plan.processId) +
+        L"\r\n地址=" + FormatHex64(plan.baseAddress) +
+        L"\r\n\r\n每一块都会先精确复读原始字节，写入后再精确验证；不使用 FORCE。\r\n"
+        L"目标进程仍可能并发变化，操作不可回滚。是否开始？";
+    return ::MessageBoxW(owner, prompt.c_str(), L"应用内存差异", MB_ICONWARNING | MB_YESNO | MB_DEFBUTTON2) == IDYES;
+}
+
+std::size_t PendingWritePlanBytes(const MemoryWritePlan& plan, const std::size_t firstPendingBlock) {
+    if (firstPendingBlock > plan.blocks.size()) {
+        return 0U;
+    }
+    std::size_t bytes = 0U;
+    for (std::size_t index = firstPendingBlock; index < plan.blocks.size(); ++index) {
+        bytes += plan.blocks[index].desiredAfter.size();
+    }
+    return bytes;
+}
+
+bool ConfirmForceWritebackPlan(HWND owner,
+    const MemoryWritePlan& plan,
+    const std::size_t firstPendingBlock,
+    const std::size_t verifiedPrefixBlocks,
+    const std::size_t verifiedPrefixBytes) {
+    if (firstPendingBlock >= plan.blocks.size()) {
+        return false;
+    }
+    const std::size_t pendingBlocks = plan.blocks.size() - firstPendingBlock;
+    const std::size_t pendingBytes = PendingWritePlanBytes(plan, firstPendingBlock);
+    const std::wstring prefix = firstPendingBlock == 0U
+        ? L"本次普通尝试未报告写入任何差异字节。"
+        : L"普通路径已写入并逐块验证前 " + std::to_wstring(verifiedPrefixBlocks) + L" 个差异块（" +
+            std::to_wstring(verifiedPrefixBytes) + L" 字节）；当前拒绝块报告 0 字节写入。";
+    const std::wstring prompt = L"驱动拒绝了普通差异写回并要求 FORCE。\r\n" + prefix + L"\r\n\r\nPID=" +
+        std::to_wstring(plan.processId) + L"\r\n地址=" + FormatHex64(plan.baseAddress) + L"\r\n剩余差异块=" +
+        std::to_wstring(pendingBlocks) + L"，字节=" + std::to_wstring(pendingBytes) +
+        L"\r\n\r\n若继续，只会对上述剩余块重新逐块复读原始字节后以 FORCE 写入，并逐块复读验证；"
+        L"已验证的普通写入块不会被重写。FORCE 可能导致目标进程崩溃、数据损坏或系统不稳定。是否明确继续？";
+    return ::MessageBoxW(owner, prompt.c_str(), L"确认 FORCE 内存差异写回", MB_ICONWARNING | MB_YESNO | MB_DEFBUTTON2) == IDYES;
+}
+
+void BeginApplyWritePlan(DriverMemoryViewState& state, bool forceWrite, std::size_t firstPendingBlock);
+
+// CompleteWriteback applies the result only after a complete full-range read
+// matches the desired bytes. The only retained retry path is a separately
+// confirmed FORCE continuation whose preceding normal-write blocks were already
+// verified and whose current rejected block reported zero bytes written.
+void CompleteWriteback(DriverMemoryViewState& state,
+    const MemoryOperationSnapshot& snapshot,
+    const std::exception_ptr error) {
+    state.writebackCancellation.reset();
+    state.operationInProgress = false;
+    ::EnableWindow(state.readButton, TRUE);
+    ::EnableWindow(state.writeButton, TRUE);
+    if (error) {
+        InvalidatePreparedWritePlan(state);
+        SetStatus(state, L"差异写回异常结束；当前编辑未作为新快照保存，请重新读取目标进程。");
+        UpdateSnapshotButtons(state);
+        return;
+    }
+
+    AppendMemoryHistory(state, snapshot);
+    const DriverMemoryWritebackResult& result = snapshot.writebackResult;
+    if (result.success) {
+        if (state.snapshots.record(snapshot.writebackPlan.processId,
+                snapshot.writebackPlan.baseAddress,
+                snapshot.writebackPlan.desiredSnapshotBytes.size(),
+                result.finalReadResult.bytes,
+                result.statusText)) {
+            ApplyCurrentSnapshot(state);
+            return;
+        }
+        InvalidatePreparedWritePlan(state);
+        SetStatus(state, L"差异块已验证，但无法保存完整复读快照；请重新读取目标进程。");
+        UpdateSnapshotButtons(state);
+        return;
+    }
+
+    const bool canContinueWithForce = result.forceRequired && !snapshot.forceWriteback &&
+        result.forceRequiredBlockIndex < snapshot.writebackPlan.blocks.size() &&
+        result.forceRequiredBlockIndex >= snapshot.writebackFirstPendingBlock &&
+        result.verifiedBlocks == result.forceRequiredBlockIndex - snapshot.writebackFirstPendingBlock;
+    if (canContinueWithForce) {
+        const HWND owner = state.hwnd;
+        const std::shared_ptr<MemoryViewLifetime> lifetime = state.lifetime;
+        const MemoryWritePlan plan = snapshot.writebackPlan;
+        const std::size_t firstPendingBlock = result.forceRequiredBlockIndex;
+        const bool accepted = ConfirmForceWritebackPlan(owner,
+            plan,
+            firstPendingBlock,
+            result.forceRequiredBlockIndex,
+            result.bytesWritten);
+        DriverMemoryViewState* liveState = CurrentLiveState(owner, lifetime);
+        if (!liveState) {
+            return;
+        }
+        if (accepted) {
+            BeginApplyWritePlan(*liveState, true, firstPendingBlock);
+            return;
+        }
+        SetStatus(*liveState, result.statusText + L"\r\n已取消 FORCE 写回；当前编辑仍保留，未更新快照基线。");
+        UpdateSnapshotButtons(*liveState);
+        return;
+    }
+
+    InvalidatePreparedWritePlan(state);
+    SetStatus(state, result.statusText + L"\r\n当前编辑仍保留，但已失效；请重新读取并预览差异后再试。");
+    UpdateSnapshotButtons(state);
+}
+
+// BeginApplyWritePlan executes a previously confirmed plan asynchronously. The
+// worker owns a copy of the immutable plan and cancellation token and never
+// touches HWND state.
+void BeginApplyWritePlan(DriverMemoryViewState& state, const bool forceWrite, const std::size_t firstPendingBlock) {
+    if (state.operationInProgress || !state.operationTask || !state.hasPreparedWritePlan) {
+        SetStatus(state, L"没有可应用的差异计划。");
+        return;
+    }
+    if (firstPendingBlock > state.preparedWritePlan.blocks.size()) {
+        InvalidatePreparedWritePlan(state);
+        SetStatus(state, L"差异写回续写位置无效；请重新读取并预览差异。");
+        UpdateSnapshotButtons(state);
+        return;
+    }
+    std::wstring validationError;
+    if (!PreparedPlanMatchesEditableBuffer(state, validationError)) {
+        InvalidatePreparedWritePlan(state);
+        SetStatus(state, validationError);
+        UpdateSnapshotButtons(state);
+        return;
+    }
+
+    MemoryWritePlan plan = state.preparedWritePlan;
+    const std::shared_ptr<std::atomic_bool> cancellation = std::make_shared<std::atomic_bool>(false);
+    state.writebackCancellation = cancellation;
+    state.operationInProgress = true;
+    ::EnableWindow(state.readButton, FALSE);
+    ::EnableWindow(state.writeButton, FALSE);
+    UpdateSnapshotButtons(state);
+    SetStatus(state, forceWrite ? L"正在以已确认的 FORCE 后台应用剩余差异并逐块验证…" : L"正在后台应用差异并逐块验证…");
+    state.operationTask->request(
+        [plan = std::move(plan), forceWrite, firstPendingBlock, cancellation] () mutable {
+            MemoryOperationSnapshot operation{};
+            operation.stagedWritebackOperation = true;
+            operation.forceWriteback = forceWrite;
+            operation.writebackFirstPendingBlock = firstPendingBlock;
+            operation.processId = static_cast<DWORD>(plan.processId);
+            operation.address = plan.baseAddress;
+            operation.requestedBytes = PendingWritePlanBytes(plan, firstPendingBlock);
+            operation.writebackPlan = std::move(plan);
+            DriverMemoryClient client;
+            operation.writebackResult = client.ApplyWritePlan(
+                operation.writebackPlan,
+                forceWrite,
+                cancellation.get(),
+                firstPendingBlock);
+            return operation;
+        },
+        [&state](std::uint64_t, std::optional<MemoryOperationSnapshot>&& snapshot, std::exception_ptr error) {
+            if (!snapshot.has_value()) {
+                state.writebackCancellation.reset();
+                state.operationInProgress = false;
+                ::EnableWindow(state.readButton, TRUE);
+                ::EnableWindow(state.writeButton, TRUE);
+                InvalidatePreparedWritePlan(state);
+                SetStatus(state, L"差异写回未返回结果；请重新读取目标进程。");
+                UpdateSnapshotButtons(state);
+                return;
+            }
+            CompleteWriteback(state, *snapshot, error);
+        });
+}
+
+// HandleApplyWritePlan performs the first explicit confirmation. A second,
+// separate confirmation is shown only if the driver reports FORCE_REQUIRED.
+void HandleApplyWritePlan(DriverMemoryViewState& state) {
+    std::wstring validationError;
+    if (!PreparedPlanMatchesEditableBuffer(state, validationError)) {
+        InvalidatePreparedWritePlan(state);
+        SetStatus(state, validationError);
+        UpdateSnapshotButtons(state);
+        return;
+    }
+
+    const HWND owner = state.hwnd;
+    const std::shared_ptr<MemoryViewLifetime> lifetime = state.lifetime;
+    const MemoryWritePlan plan = state.preparedWritePlan;
+    const bool accepted = ConfirmWritebackPlan(owner, plan);
+    DriverMemoryViewState* liveState = CurrentLiveState(owner, lifetime);
+    if (!liveState) {
+        return;
+    }
+    if (!accepted) {
+        SetStatus(*liveState, L"已取消应用内存差异。");
+        return;
+    }
+    BeginApplyWritePlan(*liveState, false, 0U);
 }
 
 void MoveToPreviousSnapshot(DriverMemoryViewState& state) {
@@ -722,11 +1056,16 @@ void ShowMemoryContextMenu(DriverMemoryViewState& state, HWND target, POINT scre
     const bool canEditHex = hexTarget && !state.operationInProgress &&
         state.snapshotPresentation == SnapshotPresentation::EditableHex;
     const bool hasSnapshot = !state.operationInProgress && state.snapshots.current() != nullptr;
+    const bool canPreviewDiff = hasSnapshot && state.snapshotPresentation == SnapshotPresentation::EditableHex;
+    const bool canApplyDiff = canPreviewDiff && state.hasPreparedWritePlan;
     const UINT snapshotState = hasSnapshot ? 0U : MF_GRAYED;
     HMENU driverMenu = ::CreatePopupMenu();
     if (driverMenu) {
         ::AppendMenuW(driverMenu, MF_STRING | (canStartOperation ? 0U : MF_GRAYED), kMemoryMenuRead, L"读取");
         ::AppendMenuW(driverMenu, MF_STRING | (canStartOperation && canWritePayload ? 0U : MF_GRAYED), kMemoryMenuWrite, L"写入");
+        ::AppendMenuW(driverMenu, MF_SEPARATOR, 0, nullptr);
+        ::AppendMenuW(driverMenu, MF_STRING | (canPreviewDiff ? 0U : MF_GRAYED), kMemoryMenuPreviewDiff, L"预览快照差异");
+        ::AppendMenuW(driverMenu, MF_STRING | (canApplyDiff ? 0U : MF_GRAYED), kMemoryMenuApplyDiff, L"应用已预览差异");
         ::AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(driverMenu), L"驱动内存");
     }
     HMENU hexMenu = ::CreatePopupMenu();
@@ -777,6 +1116,12 @@ void ShowMemoryContextMenu(DriverMemoryViewState& state, HWND target, POINT scre
         break;
     case kMemoryMenuWrite:
         HandleWrite(state);
+        break;
+    case kMemoryMenuPreviewDiff:
+        PrepareWritePlan(state);
+        break;
+    case kMemoryMenuApplyDiff:
+        HandleApplyWritePlan(state);
         break;
     case kMemoryMenuSelectAll:
         SelectAllEditText(textTarget ? target : state.hexEdit);
@@ -901,6 +1246,8 @@ void CreateChildControls(DriverMemoryViewState& state) {
     state.lengthEdit = CreateEdit(state.hwnd, kLengthEditId, L"16", 0, 0, 0, 0, 0);
     state.readButton = Ksword::Ui::CreateButton(state.hwnd, kReadButtonId, L"Read", 0, 0, 0, 0);
     state.writeButton = Ksword::Ui::CreateButton(state.hwnd, kWriteButtonId, L"Write", 0, 0, 0, 0);
+    state.previewDiffButton = Ksword::Ui::CreateButton(state.hwnd, kPreviewDiffButtonId, L"预览差异", 0, 0, 0, 0);
+    state.applyDiffButton = Ksword::Ui::CreateButton(state.hwnd, kApplyDiffButtonId, L"应用差异", 0, 0, 0, 0);
     state.snapshotPreviousButton = Ksword::Ui::CreateButton(state.hwnd, kSnapshotPreviousButtonId, L"上一快照", 0, 0, 0, 0);
     state.snapshotNextButton = Ksword::Ui::CreateButton(state.hwnd, kSnapshotNextButtonId, L"下一快照", 0, 0, 0, 0);
     state.hexEdit = CreateEdit(state.hwnd,
@@ -963,6 +1310,14 @@ LRESULT CALLBACK DriverMemoryViewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
             RequestMemoryHistoryFilter(*state, Ksword::Ui::GetFilterBarText(state->historyFilter));
             return 0;
         }
+        if (state && HIWORD(wParam) == EN_CHANGE) {
+            const int id = LOWORD(wParam);
+            if (id == kPidEditId || id == kAddressEditId || id == kHexEditId) {
+                InvalidatePreparedWritePlan(*state);
+                UpdateSnapshotButtons(*state);
+                return 0;
+            }
+        }
         if (state && HIWORD(wParam) == BN_CLICKED) {
             const int id = LOWORD(wParam);
             if (id == kReadButtonId) {
@@ -971,6 +1326,14 @@ LRESULT CALLBACK DriverMemoryViewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
             }
             if (id == kWriteButtonId) {
                 HandleWrite(*state);
+                return 0;
+            }
+            if (id == kPreviewDiffButtonId) {
+                PrepareWritePlan(*state);
+                return 0;
+            }
+            if (id == kApplyDiffButtonId) {
+                HandleApplyWritePlan(*state);
                 return 0;
             }
             if (id == kSnapshotPreviousButtonId) {
@@ -1039,6 +1402,12 @@ LRESULT CALLBACK DriverMemoryViewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
     case WM_ERASEBKGND:
         return 1;
     case WM_NCDESTROY:
+        if (state && state->lifetime) {
+            state->lifetime->alive.store(false, std::memory_order_release);
+        }
+        if (state && state->writebackCancellation) {
+            state->writebackCancellation->store(true, std::memory_order_release);
+        }
         if (state && state->operationTask) {
             state->operationTask->cancel();
         }
