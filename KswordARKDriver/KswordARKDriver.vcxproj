@@ -23,6 +23,8 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\features\callback\callback_runtime.c" />
+    <ClCompile Include="src\features\callback\callback_monitor.c" />
+    <ClCompile Include="src\features\callback\callback_monitor_ioctl.c" />
     <ClCompile Include="src\features\callback\callback_rules.c" />
     <ClCompile Include="src\features\callback\callback_waiter.c" />
     <ClCompile Include="src\features\callback\callback_remove_external.c" />

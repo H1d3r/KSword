@@ -120,6 +120,8 @@ KswordArkObjectPreOperation(
     ACCESS_MASK strippedAccess = 0U;
     PEPROCESS targetProcess = NULL;
     BOOLEAN targetIsThreadObject = FALSE;
+    ULONG targetProcessId = 0UL;
+    ULONG targetThreadId = 0UL;
     NTSTATUS matchStatus = STATUS_SUCCESS;
 
     UNREFERENCED_PARAMETER(runtime);
@@ -155,6 +157,16 @@ KswordArkObjectPreOperation(
         callbackOperationMask = operationType | KSWORD_ARK_OBJECT_OP_TYPE_THREAD;
         targetIsThreadObject = TRUE;
         targetProcess = PsGetThreadProcess((PETHREAD)OperationInformation->Object);
+        targetThreadId = HandleToULong(PsGetThreadId((PETHREAD)OperationInformation->Object));
+    }
+
+    if (targetProcess != NULL) {
+        targetProcessId = HandleToULong(PsGetProcessId(targetProcess));
+    }
+
+    // 保存系统最初请求的权限，后续同时展示进程保护层处理后的权限。
+    if (desiredAccessPointer != NULL) {
+        originalDesiredAccess = *desiredAccessPointer;
     }
 
     if (targetProcess != NULL) {
@@ -192,6 +204,29 @@ KswordArkObjectPreOperation(
             (unsigned long)operationType);
     }
     RtlInitUnicodeString(&targetPath, targetPathBuffer);
+
+    // 对象遥测在通用规则前发布，记录请求权限及进程保护层已经削减后的权限。
+    if (KswordArkCallbackMonitorIsEnabled(KSWORD_ARK_CALLBACK_MONITOR_CATEGORY_OBJECT)) {
+        KSWORD_ARK_CALLBACK_MONITOR_EVENT_INPUT monitorInput;
+        RtlZeroMemory(&monitorInput, sizeof(monitorInput));
+        monitorInput.Category = KSWORD_ARK_CALLBACK_MONITOR_CATEGORY_OBJECT;
+        monitorInput.Operation = callbackOperationMask;
+        monitorInput.Flags = KSWORD_ARK_CALLBACK_MONITOR_EVENT_FLAG_ACCESS_PRESENT;
+        if (targetIsThreadObject) {
+            monitorInput.Flags |= KSWORD_ARK_CALLBACK_MONITOR_EVENT_FLAG_OBJECT_THREAD;
+        }
+        monitorInput.OriginatingProcessId = HandleToULong(PsGetCurrentProcessId());
+        monitorInput.OriginatingThreadId = HandleToULong(PsGetCurrentThreadId());
+        monitorInput.TargetProcessId = targetProcessId;
+        monitorInput.TargetThreadId = targetThreadId;
+        monitorInput.SessionId = KswordArkGetProcessSessionIdSafe(PsGetCurrentProcess());
+        monitorInput.OriginalAccess = (ULONG)originalDesiredAccess;
+        monitorInput.DesiredAccess = desiredAccessPointer != NULL ? (ULONG)(*desiredAccessPointer) : 0UL;
+        monitorInput.ObjectType = targetIsThreadObject ? 2UL : 1UL;
+        monitorInput.ProcessName = &initiatorPath;
+        monitorInput.Path = &targetPath;
+        KswordArkCallbackMonitorPublish(&monitorInput);
+    }
 
     matchStatus = KswordArkCallbackMatchRule(
         KSWORD_ARK_CALLBACK_TYPE_OBJECT,

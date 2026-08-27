@@ -11,6 +11,7 @@
 
 #include "../../../shared/KswordArkLogProtocol.h"
 #include "../../../shared/driver/KswordArkCallbackIoctl.h"
+#include "../../../shared/driver/KswordArkCallbackMonitorIoctl.h"
 #include "../../../shared/driver/KswordArkCapabilityIoctl.h"
 #include "../../../shared/driver/KswordArkDynDataIoctl.h"
 #include "../../../shared/driver/KswordArkFileIoctl.h"
@@ -831,6 +832,65 @@ namespace ksword::ark
         std::uint64_t droppedCount = 0;      // droppedCount：回调 try-lock 累计丢弃数。
         std::uint64_t lostBeforeFirst = 0;   // lostBeforeFirst：调用方游标落后导致的覆盖数。
         std::vector<DebugOutputRecord> records; // records：本次成功解析的升序记录。
+    };
+
+    // CallbackMonitorStatusResult 是内核回调遥测的固定状态快照。
+    struct CallbackMonitorStatusResult
+    {
+        IoResult io;                              // io：DeviceIoControl 与协议校验状态。
+        bool unsupported = false;                 // unsupported：旧驱动未注册监控 IOCTL。
+        std::uint32_t version = 0;                // version：共享协议版本。
+        std::uint32_t runtimeFlags = 0;           // runtimeFlags：CAPTURING/DROPPED/STOPPING。
+        std::uint32_t categoryMask = 0;           // categoryMask：当前实际采集类别。
+        std::uint32_t registeredCategoryMask = 0; // registeredCategoryMask：已注册回调能力。
+        std::uint32_t ringCapacity = 0;           // ringCapacity：固定 R0 环形容量。
+        std::uint32_t queuedCount = 0;            // queuedCount：当前仍可读取的记录数。
+        std::uint64_t latestSequence = 0;         // latestSequence：最近提交序号。
+        std::uint64_t droppedCount = 0;           // droppedCount：try-lock 争用累计丢弃数。
+        long lastStatus = 0;                      // lastStatus：最近控制动作 NTSTATUS。
+        long minifilterStartStatus = 0;           // minifilterStartStatus：FltStartFiltering 状态。
+    };
+
+    // CallbackMonitorEventRow 是已经从共享 ABI 安全复制出的单条回调事件。
+    struct CallbackMonitorEventRow
+    {
+        std::uint64_t sequence = 0;
+        std::int64_t timeUtc100ns = 0;
+        std::uint32_t category = 0;
+        std::uint32_t operation = 0;
+        std::uint32_t flags = 0;
+        long resultStatus = 0;
+        std::uint32_t originatingProcessId = 0;
+        std::uint32_t originatingThreadId = 0;
+        std::uint32_t targetProcessId = 0;
+        std::uint32_t targetThreadId = 0;
+        std::uint32_t parentProcessId = 0;
+        std::uint32_t sessionId = 0;
+        std::uint32_t originalAccess = 0;
+        std::uint32_t desiredAccess = 0;
+        std::uint32_t objectType = 0;
+        std::uint32_t detailCode = 0;
+        std::uint64_t address = 0;
+        std::uint64_t regionSize = 0;
+        std::wstring processName;
+        std::wstring path;
+    };
+
+    // CallbackMonitorReadResult 保存一次独立游标读取及覆盖/争用诊断。
+    struct CallbackMonitorReadResult
+    {
+        IoResult io;
+        bool unsupported = false;
+        std::uint32_t runtimeFlags = 0;
+        std::uint32_t categoryMask = 0;
+        std::uint32_t responseFlags = 0;
+        std::uint32_t ringCapacity = 0;
+        std::uint64_t firstAvailableSequence = 0;
+        std::uint64_t latestSequence = 0;
+        std::uint64_t nextSequence = 0;
+        std::uint64_t droppedCount = 0;
+        std::uint64_t lostBeforeFirst = 0;
+        std::vector<CallbackMonitorEventRow> records;
     };
 
     // RegistryReadResult 是 R0 注册表值读取响应的 R3 模型。

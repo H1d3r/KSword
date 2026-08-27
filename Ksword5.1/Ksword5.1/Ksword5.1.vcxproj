@@ -329,6 +329,7 @@
     <ClCompile Include="MonitorDock\MonitorPanelWidget.cpp" />
     <ClCompile Include="MonitorDock\MonitorTextViewer.cpp" />
     <ClCompile Include="MonitorDock\DirectKernelCallMonitorWidget.cpp" />
+    <ClCompile Include="MonitorDock\KernelCallbackMonitorWidget.cpp" />
     <ClCompile Include="MonitorDock\ProcessTraceMonitorWidget.cpp" />
     <ClCompile Include="MonitorDock\ProcessTraceMonitorWidget.Ui.cpp" />
     <ClCompile Include="MonitorDock\ProcessTraceMonitorWidget.Actions.cpp" />
@@ -515,6 +516,7 @@
     <ClCompile Include="ArkDriverClient\ArkDriverIoctlRegistry.cpp" />
     <ClCompile Include="ArkDriverClient\ArkDriverKeyboard.cpp" />
     <ClCompile Include="ArkDriverClient\ArkDriverCallback.cpp" />
+    <ClCompile Include="ArkDriverClient\ArkDriverCallbackMonitor.cpp" />
     <ClCompile Include="ArkDriverClient\ArkDriverMutation.cpp" />
     <ClCompile Include="ArkDriverClient\ArkDriverHwid.cpp" />
     <ClCompile Include="ArkDriverClient\ArkDriverPower.cpp" />
@@ -695,6 +697,7 @@
     <ClInclude Include="MonitorDock\EtwArchiveCompression.h" />
     <QtMoc Include="MonitorDock\MonitorDock.h" />
     <ClInclude Include="MonitorDock\DirectKernelCallMonitorWidget.h" />
+    <ClInclude Include="MonitorDock\KernelCallbackMonitorWidget.h" />
     <ClInclude Include="..\..\shared\ui\KsPainterChart.h" />
     <ClInclude Include="MonitorDock\MonitorPanelWidget.h" />
     <ClInclude Include="MonitorDock\MonitorTextViewer.h" />

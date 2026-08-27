@@ -273,6 +273,13 @@ namespace ksword::ark
         // drainDebugOutput：使用单调游标增量读取 R0 固定环形缓冲区。
         DebugOutputDrainResult drainDebugOutput(std::uint64_t afterSequence, unsigned long maxRecords = KSWORD_ARK_DEBUG_OUTPUT_DEFAULT_DRAIN_RECORDS) const;
         DebugOutputDrainResult drainDebugOutput(DriverHandle& handle, std::uint64_t afterSequence, unsigned long maxRecords = KSWORD_ARK_DEBUG_OUTPUT_DEFAULT_DRAIN_RECORDS) const;
+        // callback monitor：全局控制状态，读取端使用各自 afterSequence 游标。
+        CallbackMonitorStatusResult controlCallbackMonitor(unsigned long action, unsigned long categoryMask) const;
+        CallbackMonitorStatusResult controlCallbackMonitor(DriverHandle& handle, unsigned long action, unsigned long categoryMask) const;
+        CallbackMonitorStatusResult queryCallbackMonitorStatus() const;
+        CallbackMonitorStatusResult queryCallbackMonitorStatus(DriverHandle& handle) const;
+        CallbackMonitorReadResult readCallbackMonitor(std::uint64_t afterSequence, unsigned long maxRecords = KSWORD_ARK_CALLBACK_MONITOR_DEFAULT_READ_RECORDS) const;
+        CallbackMonitorReadResult readCallbackMonitor(DriverHandle& handle, std::uint64_t afterSequence, unsigned long maxRecords = KSWORD_ARK_CALLBACK_MONITOR_DEFAULT_READ_RECORDS) const;
         RegistryReadResult readRegistryValue(const std::wstring& kernelKeyPath, const std::wstring& valueName, unsigned long maxDataBytes = KSWORD_ARK_REGISTRY_DATA_MAX_BYTES) const;
         RegistryEnumResult enumerateRegistryKey(const std::wstring& kernelKeyPath, unsigned long flags = KSWORD_ARK_REGISTRY_ENUM_FLAG_INCLUDE_SUBKEYS | KSWORD_ARK_REGISTRY_ENUM_FLAG_INCLUDE_VALUES) const;
         RegistryOperationResult setRegistryValue(const std::wstring& kernelKeyPath, const std::wstring& valueName, std::uint32_t valueType, const std::vector<std::uint8_t>& data) const;

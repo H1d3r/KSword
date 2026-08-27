@@ -22,6 +22,7 @@ Environment:
 #include "driver/KswordArkI8042AuditIoctl.h"
 #include "driver/KswordArkHwidIoctl.h"
 #include "driver/KswordArkProcessProtectIoctl.h"
+#include "driver/KswordArkCallbackMonitorIoctl.h"
 
 // Feature handler declarations live here instead of in the central dispatch file.
 NTSTATUS KswordARKKernelIoctlControlDriverDispatch(_In_ WDFDEVICE Device, _In_ WDFREQUEST Request, _In_ size_t InputBufferLength, _In_ size_t OutputBufferLength, _Out_ size_t* BytesReturned);
@@ -96,6 +97,9 @@ NTSTATUS KswordARKCallbackIoctlRemoveExternalCallbackExHandler(_In_ WDFDEVICE De
 NTSTATUS KswordARKCallbackIoctlEnumCallbacksHandler(_In_ WDFDEVICE Device, _In_ WDFREQUEST Request, _In_ size_t InputBufferLength, _In_ size_t OutputBufferLength, _Out_ size_t* BytesReturned);
 NTSTATUS KswordARKCallbackIoctlSetMinifilterBypassPidsHandler(_In_ WDFDEVICE Device, _In_ WDFREQUEST Request, _In_ size_t InputBufferLength, _In_ size_t OutputBufferLength, _Out_ size_t* BytesReturned);
 NTSTATUS KswordARKCallbackIoctlQueryMinifilterBypassPidsHandler(_In_ WDFDEVICE Device, _In_ WDFREQUEST Request, _In_ size_t InputBufferLength, _In_ size_t OutputBufferLength, _Out_ size_t* BytesReturned);
+NTSTATUS KswordARKCallbackMonitorIoctlControl(_In_ WDFDEVICE Device, _In_ WDFREQUEST Request, _In_ size_t InputBufferLength, _In_ size_t OutputBufferLength, _Out_ size_t* BytesReturned);
+NTSTATUS KswordARKCallbackMonitorIoctlQuery(_In_ WDFDEVICE Device, _In_ WDFREQUEST Request, _In_ size_t InputBufferLength, _In_ size_t OutputBufferLength, _Out_ size_t* BytesReturned);
+NTSTATUS KswordARKCallbackMonitorIoctlRead(_In_ WDFDEVICE Device, _In_ WDFREQUEST Request, _In_ size_t InputBufferLength, _In_ size_t OutputBufferLength, _Out_ size_t* BytesReturned);
 NTSTATUS KswordARKProcessProtectIoctlSetConfigHandler(_In_ WDFDEVICE Device, _In_ WDFREQUEST Request, _In_ size_t InputBufferLength, _In_ size_t OutputBufferLength, _Out_ size_t* BytesReturned);
 NTSTATUS KswordARKProcessProtectIoctlQueryStateHandler(_In_ WDFDEVICE Device, _In_ WDFREQUEST Request, _In_ size_t InputBufferLength, _In_ size_t OutputBufferLength, _Out_ size_t* BytesReturned);
 NTSTATUS KswordARKDynDataIoctlQueryStatus(_In_ WDFDEVICE Device, _In_ WDFREQUEST Request, _In_ size_t InputBufferLength, _In_ size_t OutputBufferLength, _Out_ size_t* BytesReturned);
@@ -276,6 +280,9 @@ static const KSWORD_ARK_IOCTL_ENTRY g_KswordArkIoctlTable[] = {
     { IOCTL_KSWORD_ARK_ENUM_CALLBACKS, KswordARKCallbackIoctlEnumCallbacksHandler, "IOCTL_KSWORD_ARK_ENUM_CALLBACKS", KSWORD_ARK_IOCTL_CAPABILITY_NONE, KSWORD_ARK_IOCTL_FLAG_NONE },
     { IOCTL_KSWORD_ARK_SET_MINIFILTER_BYPASS_PIDS, KswordARKCallbackIoctlSetMinifilterBypassPidsHandler, "IOCTL_KSWORD_ARK_SET_MINIFILTER_BYPASS_PIDS", KSWORD_ARK_IOCTL_CAPABILITY_NONE, KSWORD_ARK_IOCTL_FLAG_NONE },
     { IOCTL_KSWORD_ARK_QUERY_MINIFILTER_BYPASS_PIDS, KswordARKCallbackIoctlQueryMinifilterBypassPidsHandler, "IOCTL_KSWORD_ARK_QUERY_MINIFILTER_BYPASS_PIDS", KSWORD_ARK_IOCTL_CAPABILITY_NONE, KSWORD_ARK_IOCTL_FLAG_NONE },
+    { IOCTL_KSWORD_ARK_CALLBACK_MONITOR_CONTROL, KswordARKCallbackMonitorIoctlControl, "IOCTL_KSWORD_ARK_CALLBACK_MONITOR_CONTROL", KSWORD_ARK_IOCTL_CAPABILITY_NONE, KSWORD_ARK_IOCTL_FLAG_NONE },
+    { IOCTL_KSWORD_ARK_CALLBACK_MONITOR_QUERY, KswordARKCallbackMonitorIoctlQuery, "IOCTL_KSWORD_ARK_CALLBACK_MONITOR_QUERY", KSWORD_ARK_IOCTL_CAPABILITY_NONE, KSWORD_ARK_IOCTL_FLAG_QUIET_SUCCESS },
+    { IOCTL_KSWORD_ARK_CALLBACK_MONITOR_READ, KswordARKCallbackMonitorIoctlRead, "IOCTL_KSWORD_ARK_CALLBACK_MONITOR_READ", KSWORD_ARK_IOCTL_CAPABILITY_NONE, KSWORD_ARK_IOCTL_FLAG_QUIET_SUCCESS },
     // 进程保护复用同一个对象回调，配置下发按"改变回调行为"处理，查询为只读。
     { IOCTL_KSWORD_ARK_SET_PROCESS_PROTECT_CONFIG, KswordARKProcessProtectIoctlSetConfigHandler, "IOCTL_KSWORD_ARK_SET_PROCESS_PROTECT_CONFIG", KSWORD_ARK_IOCTL_CAPABILITY_NONE, KSWORD_ARK_IOCTL_FLAG_NONE },
     { IOCTL_KSWORD_ARK_QUERY_PROCESS_PROTECT_STATE, KswordARKProcessProtectIoctlQueryStateHandler, "IOCTL_KSWORD_ARK_QUERY_PROCESS_PROTECT_STATE", KSWORD_ARK_IOCTL_CAPABILITY_NONE, KSWORD_ARK_IOCTL_FLAG_QUIET_SUCCESS },
