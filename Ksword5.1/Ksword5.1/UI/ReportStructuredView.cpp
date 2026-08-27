@@ -23,6 +23,7 @@
 #include <QClipboard>
 #include <QEvent>
 #include <QFontDatabase>
+#include <QFontMetrics>
 #include <QFrame>
 #include <QHeaderView>
 #include <QLabel>
@@ -692,11 +693,56 @@ namespace
             });
     }
 
+    // kPreserveCustomFontProperty：标记本控件字体由自己维护。
+    // MainWindow 在外观设置变更后会遍历所有 QAbstractItemView 强制刷成应用字体，
+    // 不打这个标记的话，用户一改字体设置，报告视图的放大字号就被刷回默认档。
+    constexpr const char* kPreserveCustomFontProperty = "ksword_preserve_custom_font";
+
+    // applyNameColumnWidth 作用：
+    // - 按真实属性名算名称列宽度，并夹到可用区间；
+    // - 不能用 resizeColumnToContents：它会把跨列说明行的整句长度也算进第 0 列，
+    //   一条长说明就能把名称列撑到上千像素，值列被挤出屏幕（GPU 页的 WMI 段就是这样）。
+    void applyNameColumnWidth(QTreeWidget* treeWidget)
+    {
+        constexpr int kMinNameColumnWidth = 140;
+        constexpr int kMaxNameColumnWidth = 360;
+
+        const QFontMetrics nameMetrics(treeWidget->font());
+        int widestNameWidth = 0;
+
+        // 报告树最多两层（分组 + 属性行），逐层遍历即可覆盖平表与分组树两种形态。
+        for (int topIndex = 0; topIndex < treeWidget->topLevelItemCount(); ++topIndex)
+        {
+            QTreeWidgetItem* topItem = treeWidget->topLevelItem(topIndex);
+            if (!topItem->isFirstColumnSpanned())
+            {
+                widestNameWidth = std::max(widestNameWidth, nameMetrics.horizontalAdvance(topItem->text(0)));
+            }
+            for (int childIndex = 0; childIndex < topItem->childCount(); ++childIndex)
+            {
+                QTreeWidgetItem* childItem = topItem->child(childIndex);
+                if (childItem->isFirstColumnSpanned())
+                {
+                    continue;
+                }
+                widestNameWidth = std::max(
+                    widestNameWidth,
+                    nameMetrics.horizontalAdvance(childItem->text(0)) + treeWidget->indentation());
+            }
+        }
+
+        // 额外留出展开箭头和左右内边距；超长字段名交给 ToolTip。
+        const int paddedWidth = widestNameWidth + treeWidget->indentation() + 16;
+        treeWidget->setColumnWidth(
+            0, std::clamp(paddedWidth, kMinNameColumnWidth, kMaxNameColumnWidth));
+    }
+
     // configurePropertyView 作用：
     // - 统一属性视图外观：两列、不可编辑、不排序、带复制菜单；
     // - 报告行的先后顺序本身有含义（按采集顺序写的），因此一律不开排序。
     void configurePropertyView(QTreeWidget* treeWidget, const bool showTreeBranches)
     {
+        treeWidget->setProperty(kPreserveCustomFontProperty, true);
         treeWidget->setColumnCount(2);
         treeWidget->setHeaderLabels(QStringList{
             ks::i18n::displayText(QStringLiteral("属性")),
@@ -781,7 +827,7 @@ namespace ks::ui
         // kReportFontScale：结构化报告相对界面默认字号的放大倍数。
         // 报告是要逐条读地址、哈希和路径的，沿用工具栏那一档小字号看着太吃力。
         // 全项目只有这一处定义：页面自建的属性树也走这里，字号才不会两套。
-        constexpr double kReportFontScale = 1.35;
+        constexpr double kReportFontScale = 1.6;
 
         QFont scaledFont = baseFont;
         if (scaledFont.pointSizeF() > 0.0)
@@ -970,12 +1016,7 @@ namespace ks::ui
             }
 
             propertyView->expandAll();
-            propertyView->resizeColumnToContents(0);
-            if (propertyView->columnWidth(0) > 320)
-            {
-                // 名称列过宽会把值挤没；超长字段名交给 ToolTip。
-                propertyView->setColumnWidth(0, 320);
-            }
+            applyNameColumnWidth(propertyView);
             m_blockLayout->addWidget(propertyView, 1);
             return;
         }
@@ -1003,11 +1044,7 @@ namespace ks::ui
                     QTreeWidget* propertyView = new QTreeWidget(m_blockHost);
                     configurePropertyView(propertyView, false);
                     appendFieldRows(propertyView, nullptr, block.fields);
-                    propertyView->resizeColumnToContents(0);
-                    if (propertyView->columnWidth(0) > 320)
-                    {
-                        propertyView->setColumnWidth(0, 320);
-                    }
+                    applyNameColumnWidth(propertyView);
                     propertyView->setFixedHeight(
                         propertyViewHeightFor(propertyView, static_cast<int>(block.fields.size())));
                     m_blockLayout->addWidget(propertyView);
@@ -1021,6 +1058,7 @@ namespace ks::ui
                     const int columnCount = static_cast<int>(block.tableRows.at(0).size());
 
                     QTableWidget* tableView = new QTableWidget(dataRowCount, columnCount, m_blockHost);
+                    tableView->setProperty(kPreserveCustomFontProperty, true);
                     tableView->setEditTriggers(QAbstractItemView::NoEditTriggers);
                     tableView->setSelectionBehavior(QAbstractItemView::SelectRows);
                     tableView->setAlternatingRowColors(true);

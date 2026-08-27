@@ -4063,6 +4063,9 @@ namespace
 
         treeWidget->setColumnCount(2);
         // 字号与统一报告控件里的结构视图同一档：同一个窗口里两种结构化视图不能有两种字号。
+        // 同时标记字体自管：MainWindow 在外观设置变更后会把所有 item view 刷成应用字体，
+        // 不打这个标记的话，用户一改字体设置这里就被刷回默认档。
+        treeWidget->setProperty("ksword_preserve_custom_font", true);
         treeWidget->setFont(ks::ui::ScaledReportFont(treeWidget->font()));
         treeWidget->setRootIsDecorated(true);
         treeWidget->setAlternatingRowColors(true);
