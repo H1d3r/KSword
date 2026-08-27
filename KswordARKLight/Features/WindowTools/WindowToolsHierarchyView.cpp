@@ -24,6 +24,7 @@ namespace Ksword::Features::WindowTools {
 namespace {
 
 constexpr wchar_t kHierarchyViewClass[] = L"KswordARKLight.WindowTools.HierarchyView";
+constexpr wchar_t kHierarchyReportViewClass[] = L"KswordARKLight.WindowTools.HierarchyReportView";
 
 constexpr int kRefreshButtonId = 67201;
 constexpr int kFilterBarId = 67202;
@@ -843,6 +844,110 @@ bool EnsureHierarchyViewClass() {
     return registered;
 }
 
+struct HierarchyReportViewState final {
+    HWND hwnd = nullptr;
+    HWND reportEdit = nullptr;
+};
+
+HierarchyReportViewState* ReportStateFromWindow(HWND hwnd) {
+    return reinterpret_cast<HierarchyReportViewState*>(::GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+}
+
+void LayoutHierarchyReportView(HierarchyReportViewState& state) {
+    RECT client{};
+    ::GetClientRect(state.hwnd, &client);
+    const int width = Width(client);
+    const int height = Height(client);
+    if (state.reportEdit) {
+        ::MoveWindow(state.reportEdit, kGap, 30, (std::max)(1, width - kGap * 2),
+            (std::max)(1, height - 30 - kGap), TRUE);
+    }
+}
+
+LRESULT CALLBACK HierarchyReportViewProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    HierarchyReportViewState* state = ReportStateFromWindow(hwnd);
+    if (msg == WM_NCCREATE) {
+        auto owned = std::make_unique<HierarchyReportViewState>();
+        owned->hwnd = hwnd;
+        state = owned.get();
+        ::SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(owned.release()));
+    }
+    switch (msg) {
+    case WM_NCCREATE:
+        return TRUE;
+    case WM_CREATE:
+        if (!state) {
+            return -1;
+        }
+        state->reportEdit = ::CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | WS_HSCROLL |
+                ES_MULTILINE | ES_AUTOVSCROLL | ES_AUTOHSCROLL | ES_READONLY,
+            0, 0, 1, 1, hwnd, nullptr, ::GetModuleHandleW(nullptr), nullptr);
+        if (!state->reportEdit) {
+            return -1;
+        }
+        Ksword::Ui::AttachTextFindSupport(state->reportEdit);
+        Ksword::Ui::SetWindowFontRecursive(hwnd);
+        ::SetWindowTextW(state->reportEdit, BuildHierarchyReport(nullptr).c_str());
+        LayoutHierarchyReportView(*state);
+        return 0;
+    case WM_SIZE:
+        if (state) {
+            LayoutHierarchyReportView(*state);
+        }
+        return 0;
+    case WM_CTLCOLORSTATIC: {
+        HDC dc = reinterpret_cast<HDC>(wParam);
+        ::SetTextColor(dc, Ksword::Ui::AppTheme().textColor);
+        if (state && reinterpret_cast<HWND>(lParam) == state->reportEdit) {
+            ::SetBkColor(dc, Ksword::Ui::AppTheme().panelColor);
+            return reinterpret_cast<LRESULT>(Ksword::Ui::AppTheme().panelBrush());
+        }
+        ::SetBkMode(dc, TRANSPARENT);
+        return reinterpret_cast<LRESULT>(Ksword::Ui::AppTheme().windowBrush());
+    }
+    case WM_ERASEBKGND:
+        return 1;
+    case WM_PAINT:
+        if (state) {
+            PAINTSTRUCT paint{};
+            HDC dc = ::BeginPaint(hwnd, &paint);
+            RECT client{};
+            ::GetClientRect(hwnd, &client);
+            ::FillRect(dc, &client, Ksword::Ui::AppTheme().windowBrush());
+            RECT titleRect{ kGap, 0, client.right - kGap, 30 };
+            Ksword::Ui::DrawTextLine(dc, L"窗口层级诊断（跟随左侧窗口选择）", titleRect,
+                Ksword::Ui::AppTheme().textColor, Ksword::Ui::SystemUIFont(),
+                DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+            ::EndPaint(hwnd, &paint);
+            return 0;
+        }
+        break;
+    case WM_NCDESTROY:
+        delete state;
+        ::SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+        return 0;
+    default:
+        break;
+    }
+    return ::DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+bool EnsureHierarchyReportViewClass() {
+    static bool registered = false;
+    if (registered) {
+        return true;
+    }
+    WNDCLASSW windowClass{};
+    windowClass.lpfnWndProc = HierarchyReportViewProc;
+    windowClass.hInstance = ::GetModuleHandleW(nullptr);
+    windowClass.hCursor = ::LoadCursorW(nullptr, IDC_ARROW);
+    windowClass.hbrBackground = Ksword::Ui::AppTheme().windowBrush();
+    windowClass.lpszClassName = kHierarchyReportViewClass;
+    registered = ::RegisterClassW(&windowClass) != 0 || ::GetLastError() == ERROR_CLASS_ALREADY_EXISTS;
+    return registered;
+}
+
 } // namespace
 
 HWND CreateWindowHierarchyView(HWND parent, const RECT& bounds) {
@@ -853,6 +958,25 @@ HWND CreateWindowHierarchyView(HWND parent, const RECT& bounds) {
         0, kHierarchyViewClass, L"", WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN,
         bounds.left, bounds.top, bounds.right - bounds.left, bounds.bottom - bounds.top,
         parent, nullptr, ::GetModuleHandleW(nullptr), nullptr);
+}
+
+HWND CreateWindowHierarchyReportView(HWND parent, const RECT& bounds) {
+    if (!parent || !EnsureHierarchyReportViewClass()) {
+        return nullptr;
+    }
+    return ::CreateWindowExW(
+        0, kHierarchyReportViewClass, L"", WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN,
+        bounds.left, bounds.top, bounds.right - bounds.left, bounds.bottom - bounds.top,
+        parent, nullptr, ::GetModuleHandleW(nullptr), nullptr);
+}
+
+void UpdateWindowHierarchyReportView(HWND reportView, HWND selectedWindow) {
+    HierarchyReportViewState* state = ReportStateFromWindow(reportView);
+    if (!state || !state->reportEdit) {
+        return;
+    }
+    const std::wstring report = BuildHierarchyReport(selectedWindow);
+    ::SetWindowTextW(state->reportEdit, report.c_str());
 }
 
 } // namespace Ksword::Features::WindowTools

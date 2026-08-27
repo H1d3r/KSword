@@ -3,6 +3,7 @@
 #include "WindowActions.h"
 #include "WindowEnumerator.h"
 #include "WindowModel.h"
+#include "../WindowTools/WindowToolsHierarchyView.h"
 #include "../../../Ksword5.1/Ksword5.1/ArkDriverClient/ArkDriverClient.h"
 #include "../../Ui/AsyncTask.h"
 #include "../../Ui/Controls.h"
@@ -58,9 +59,16 @@ constexpr UINT kWindowMenuCopyVisible = 62610;
 constexpr UINT kWindowMenuCopyDetailCell = 62611;
 constexpr UINT kWindowMenuCopyDetailRow = 62612;
 constexpr UINT kWindowMenuCopyDetailVisible = 62613;
+constexpr UINT kWindowMenuAllowCapture = 62614;
+constexpr UINT kWindowMenuBlockCapture = 62615;
+constexpr UINT kWindowMenuExcludeFromCapture = 62616;
 constexpr UINT kMsgWindowRefreshCompleted = WM_APP + 610;
 constexpr UINT kMsgWindowFilterCompleted = WM_APP + 611;
 constexpr UINT kMsgWindowDetailCompleted = WM_APP + 612;
+
+#ifndef WDA_EXCLUDEFROMCAPTURE
+#define WDA_EXCLUDEFROMCAPTURE 0x00000011
+#endif
 
 // WindowViewMode controls whether this retained page shows the existing R3
 // window list or a read-only audit entry matrix. Inputs come from the toolbar
@@ -213,6 +221,7 @@ struct WindowViewState {
     HWND loadingOverlay = nullptr;
     HWND windowList = nullptr;
     HWND detailList = nullptr;
+    HWND hierarchyReportView = nullptr;
     HIMAGELIST processImageList = nullptr;
     WindowModel model;
     std::vector<AuditEntry> auditRows;
@@ -496,6 +505,75 @@ HWND SelectedWindow(WindowViewState* state) {
     return row ? row->hwnd : nullptr;
 }
 
+void ShowDetail(WindowViewState* state, int modelIndex);
+
+std::wstring CaptureAffinityText(const DWORD affinity) {
+    switch (affinity) {
+    case WDA_NONE:
+        return L"允许窗口被捕获（WDA_NONE）";
+    case WDA_MONITOR:
+        return L"阻止屏幕捕获（WDA_MONITOR）";
+    case WDA_EXCLUDEFROMCAPTURE:
+        return L"从捕获中排除（WDA_EXCLUDEFROMCAPTURE）";
+    default:
+        return L"未知捕获保护值";
+    }
+}
+
+bool ConfirmCaptureProtection(HWND owner, const WindowSnapshotRow& row, const DWORD affinity) {
+    const std::wstring title = row.title.empty() ? L"(无标题)" : row.title;
+    const std::wstring process = row.processName.empty() ? L"(未知进程)" : row.processName;
+    const std::wstring text =
+        L"将修改其他窗口的捕获保护属性：\n\n"
+        L"窗口：" + title + L"\n"
+        L"句柄：" + HwndToText(row.hwnd) + L"    类名：" + row.className + L"\n"
+        L"进程：" + process + L"（PID " + std::to_wstring(row.processId) + L"）\n\n"
+        L"新的属性：" + CaptureAffinityText(affinity) + L"\n\n"
+        L"设置为非 WDA_NONE 后，该窗口在屏幕共享、录屏和远程会话中会变成黑块或直接消失，"
+        L"而本机屏幕上看不出任何变化。\n\n是否继续？";
+    return ::MessageBoxW(owner, text.c_str(), L"设置窗口捕获保护",
+        MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) == IDYES;
+}
+
+void SetCaptureProtection(WindowViewState* state, const DWORD affinity) {
+    if (!state || state->viewMode != WindowViewMode::WindowList) {
+        return;
+    }
+    const WindowSnapshotRow* selected = state->model.rowAt(SelectedModelIndex(state));
+    if (!selected) {
+        state->statusText = L"未选择窗口。";
+        ::InvalidateRect(state->hwnd, nullptr, TRUE);
+        return;
+    }
+    const WindowSnapshotRow row = *selected;
+    if (!::IsWindow(row.hwnd)) {
+        state->statusText = L"目标窗口已关闭，请刷新后重试。";
+        ::InvalidateRect(state->hwnd, nullptr, TRUE);
+        return;
+    }
+    if (!ConfirmCaptureProtection(state->hwnd, row, affinity)) {
+        state->statusText = L"已取消设置窗口捕获保护。";
+        ::InvalidateRect(state->hwnd, nullptr, TRUE);
+        return;
+    }
+
+    const bool applied = ::SetWindowDisplayAffinity(row.hwnd, affinity) != FALSE;
+    const DWORD error = applied ? ERROR_SUCCESS : ::GetLastError();
+    if (applied) {
+        DWORD current = WDA_NONE;
+        state->statusText = ::GetWindowDisplayAffinity(row.hwnd, &current)
+            ? L"已设置为 " + CaptureAffinityText(current) + L"。"
+            : L"设置调用成功，但回读属性失败。";
+    } else {
+        state->statusText = L"设置窗口捕获保护失败（错误码 " + std::to_wstring(error) + L"）。";
+        if (error == ERROR_ACCESS_DENIED) {
+            state->statusText += L" 该 API 主要用于进程保护自身窗口，跨进程设置通常被拒绝。";
+        }
+    }
+    ShowDetail(state, SelectedModelIndex(state));
+    ::InvalidateRect(state->hwnd, nullptr, TRUE);
+}
+
 // BuildWin32kGuiAuditRows creates the GUI audit entry matrix. Inputs are the
 // current R3 window count; processing calls available ArkDriverClient win32k
 // wrappers and keeps the R3 window count as cross-view context; output is a
@@ -726,16 +804,19 @@ void ShowDetail(WindowViewState* state, int modelIndex) {
         return;
     }
     if (state->viewMode != WindowViewMode::WindowList) {
+        WindowTools::UpdateWindowHierarchyReportView(state->hierarchyReportView, nullptr);
         ShowAuditDetail(state, modelIndex);
         return;
     }
     const WindowSnapshotRow* row = state->model.rowAt(modelIndex);
     if (!row || !state->detailTask) {
+        WindowTools::UpdateWindowHierarchyReportView(state->hierarchyReportView, nullptr);
         ListView_DeleteAllItems(state->detailList);
         AddDetailRow(state->detailList, 0, L"Selection", L"No window selected");
         return;
     }
     const WindowSnapshotRow input = *row;
+    WindowTools::UpdateWindowHierarchyReportView(state->hierarchyReportView, input.hwnd);
     const std::uint64_t generation = state->snapshotGeneration;
     ListView_DeleteAllItems(state->detailList);
     AddDetailRow(state->detailList, 0, L"状态", L"正在后台查询窗口与 Win32k 详情…");
@@ -960,6 +1041,8 @@ void RefreshWindows(WindowViewState* state) {
                 state->statusText = L"GPU / Display / Watchdog 审计快照已刷新。";
             }
             PopulateList(state);
+            WindowTools::UpdateWindowHierarchyReportView(state->hierarchyReportView,
+                snapshot->mode == WindowViewMode::WindowList ? SelectedWindow(state) : nullptr);
             ::InvalidateRect(state->hwnd, nullptr, TRUE);
         });
 }
@@ -1005,6 +1088,9 @@ void UpdateViewModeFromCombo(WindowViewState* state) {
         ::EnableWindow(state->minimizeButton, TRUE);
         ::EnableWindow(state->maximizeButton, TRUE);
         ::EnableWindow(state->closeButton, TRUE);
+    }
+    if (state->viewMode != WindowViewMode::WindowList) {
+        WindowTools::UpdateWindowHierarchyReportView(state->hierarchyReportView, nullptr);
     }
     RefreshWindows(state);
 }
@@ -1214,6 +1300,14 @@ void ShowWindowContextMenu(WindowViewState* state, POINT screenPoint) {
         ::AppendMenuW(operationMenu, MF_STRING | (hasWindow ? 0U : MF_GRAYED), kWindowMenuClose, L"关闭窗口");
         ::AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(operationMenu), L"窗口操作");
     }
+    HMENU captureMenu = ::CreatePopupMenu();
+    if (captureMenu) {
+        const UINT enabled = hasWindow ? MF_ENABLED : MF_GRAYED;
+        ::AppendMenuW(captureMenu, MF_STRING | enabled, kWindowMenuAllowCapture, L"允许窗口捕获");
+        ::AppendMenuW(captureMenu, MF_STRING | enabled, kWindowMenuBlockCapture, L"阻止屏幕捕获");
+        ::AppendMenuW(captureMenu, MF_STRING | enabled, kWindowMenuExcludeFromCapture, L"从捕获中排除");
+        ::AppendMenuW(menu, MF_POPUP | enabled, reinterpret_cast<UINT_PTR>(captureMenu), L"窗口捕获保护");
+    }
     HMENU copyMenu = ::CreatePopupMenu();
     if (copyMenu) {
         ::AppendMenuW(copyMenu, MF_STRING | (hasRow ? 0U : MF_GRAYED), kWindowMenuCopyCell, L"复制单元格");
@@ -1267,6 +1361,15 @@ void ShowWindowContextMenu(WindowViewState* state, POINT screenPoint) {
     case kWindowMenuClose:
         RunAction(state, kCloseButtonId);
         break;
+    case kWindowMenuAllowCapture:
+        SetCaptureProtection(state, WDA_NONE);
+        break;
+    case kWindowMenuBlockCapture:
+        SetCaptureProtection(state, WDA_MONITOR);
+        break;
+    case kWindowMenuExcludeFromCapture:
+        SetCaptureProtection(state, WDA_EXCLUDEFROMCAPTURE);
+        break;
     default:
         break;
     }
@@ -1282,6 +1385,9 @@ void LayoutView(WindowViewState* state) {
     ::GetClientRect(state->hwnd, &rc);
     const int width = Width(rc);
     const int height = Height(rc);
+    const int leftWidth = (std::max)(1, (width - kGap * 3) * 2 / 3);
+    const int hierarchyLeft = kGap * 2 + leftWidth;
+    const int hierarchyWidth = (std::max)(1, width - hierarchyLeft - kGap);
     int x = kGap;
     ::MoveWindow(state->auditModeCombo, x, kGap, 180, 160, TRUE); x += 186;
     ::MoveWindow(state->sortCombo, x, kGap, 150, 160, TRUE); x += 156;
@@ -1295,14 +1401,18 @@ void LayoutView(WindowViewState* state) {
     ::MoveWindow(state->minimizeButton, x, actionY, 78, 24, TRUE); x += 84;
     ::MoveWindow(state->maximizeButton, x, actionY, 78, 24, TRUE); x += 84;
     ::MoveWindow(state->closeButton, x, actionY, 78, 24, TRUE); x += 84;
-    ::MoveWindow(state->filterBar, kGap, kGap * 3 + 48, std::max(100, width - kGap * 2), 24, TRUE);
+    ::MoveWindow(state->filterBar, kGap, kGap * 3 + 48, leftWidth, 24, TRUE);
 
     const int detailHeight = height > 480 ? kDetailHeight : height / 3;
     const int listTop = kHeaderHeight + kGap;
-    const int listHeight = height - listTop - detailHeight - (kGap * 2);
-    ::MoveWindow(state->windowList, kGap, listTop, width - (kGap * 2), listHeight, TRUE);
-    ::MoveWindow(state->detailList, kGap, listTop + listHeight + kGap, width - (kGap * 2), detailHeight, TRUE);
-    ::MoveWindow(state->loadingOverlay, kGap, listTop, width - (kGap * 2), listHeight, TRUE);
+    const int listHeight = (std::max)(0, height - listTop - detailHeight - (kGap * 2));
+    ::MoveWindow(state->windowList, kGap, listTop, leftWidth, listHeight, TRUE);
+    ::MoveWindow(state->detailList, kGap, listTop + listHeight + kGap, leftWidth, detailHeight, TRUE);
+    ::MoveWindow(state->loadingOverlay, kGap, listTop, leftWidth, listHeight, TRUE);
+    if (state->hierarchyReportView) {
+        ::MoveWindow(state->hierarchyReportView, hierarchyLeft, kGap, hierarchyWidth,
+            (std::max)(1, height - kGap * 2), TRUE);
+    }
 }
 
 // CreateChildControls creates all native controls for the Window page. Inputs are
@@ -1347,8 +1457,9 @@ bool CreateChildControls(WindowViewState* state, HWND hwnd) {
     state->detailList = ::CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | LVS_REPORT | LVS_SHOWSELALWAYS | LVS_SINGLESEL,
         0, 0, 100, 100, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kDetailListId)), ::GetModuleHandleW(nullptr), nullptr);
+    state->hierarchyReportView = WindowTools::CreateWindowHierarchyReportView(hwnd, { 0, 0, 1, 1 });
     if (!state->auditModeCombo || !state->sortCombo || !state->refreshButton || !state->exportButton || !state->frontButton || !state->restoreButton || !state->minimizeButton || !state->filterBar ||
-        !state->maximizeButton || !state->closeButton || !state->windowList || !state->detailList) {
+        !state->maximizeButton || !state->closeButton || !state->windowList || !state->detailList || !state->hierarchyReportView) {
         return false;
     }
 
@@ -1515,7 +1626,8 @@ bool RegisterWindowViewClass() {
             RECT rc{};
             ::GetClientRect(hwnd, &rc);
             ::FillRect(dc, &rc, Ksword::Ui::AppTheme().panelBrush());
-            RECT textRc{ 854, 7, rc.right - kGap, kHeaderHeight };
+            const int leftWidth = (std::max)(1, (Width(rc) - kGap * 3) * 2 / 3);
+            RECT textRc{ 510, 7, kGap + leftWidth, kHeaderHeight };
             const std::wstring title = state ? state->statusText : L"Windows";
             Ksword::Ui::DrawTextLine(dc, title, textRc, Ksword::Ui::AppTheme().mutedTextColor,
                 Ksword::Ui::SystemUIFont(), DT_SINGLELINE | DT_LEFT | DT_VCENTER);

@@ -3055,6 +3055,7 @@ void KernelPage::Layout() {
     const RECT oldSplitterRect = verticalSplitterRect_;
     verticalSplitterRect_ = {};
     const int tabHeight = 28;
+    const bool showPrimary = !hasDirectFeatureId_;
     const bool showSecondary = CurrentPrimaryUsesSecondaryTabs();
     const KernelFeatureDescriptor* descriptor = CurrentDescriptor();
     const bool showPropertyTable = descriptor != nullptr &&
@@ -3114,10 +3115,11 @@ void KernelPage::Layout() {
     const int includeWidth = showIncludeCombo ? 150 : 0;
     const int filterEditWidth = std::max(120, (width - buttonWidth - locateWidth - copyWidth - includeWidth - filterLabelWidth * 2) / 2);
 
+    ::ShowWindow(primaryTab_, showPrimary ? SW_SHOW : SW_HIDE);
     ::MoveWindow(primaryTab_, 0, 0, width, tabHeight, TRUE);
     ::ShowWindow(secondaryTab_, showSecondary ? SW_SHOW : SW_HIDE);
     ::MoveWindow(secondaryTab_, 0, tabHeight, width, secondaryHeight, TRUE);
-    const int contentTop = tabHeight + secondaryHeight;
+    const int contentTop = (showPrimary ? tabHeight : 0) + secondaryHeight;
     const int actionRight = width;
     const int refreshLeft = std::max(0, actionRight - buttonWidth);
     const int copyLeft = std::max(0, refreshLeft - copyWidth);
@@ -4210,8 +4212,20 @@ void KernelPage::PopulateTabs() {
     if (!primaryTabs_.empty()) {
         ::SendMessageW(primaryTab_, TCM_SETCURSEL, 0, 0);
         RebuildSecondLevelTabs();
-        if (hasInitialFeatureId_ && SelectFeatureById(initialFeatureId_)) {
+        if (hasInitialFeatureId_) {
+            // Embedded callers use CreateKernelSingleFeaturePage. Keep that
+            // contract even when the requested feature also belongs to the
+            // full Kernel dock's primary/secondary navigation tree; otherwise
+            // the host dock ends up rendering a duplicate tab strip.
             hasInitialFeatureId_ = false;
+            if (FeatureById(initialFeatureId_) != nullptr) {
+                hasDirectFeatureId_ = true;
+                directFeatureId_ = initialFeatureId_;
+                SelectCurrentFeature();
+                Layout();
+            } else {
+                SelectCurrentFeature();
+            }
         } else {
             SelectCurrentFeature();
         }
@@ -13823,6 +13837,11 @@ const KernelFeatureDescriptor* KernelPage::FeatureById(const KernelFeatureId fea
 }
 
 bool KernelPage::CurrentPrimaryUsesSecondaryTabs() const {
+    // A page embedded as a single feature is already hosted by an outer dock;
+    // exposing this page's own group tabs would duplicate that navigation.
+    if (hasDirectFeatureId_) {
+        return false;
+    }
     const int primary = CurrentPrimaryIndex();
     return primary >= 0 &&
         primary < static_cast<int>(primaryFeatureIds_.size()) &&

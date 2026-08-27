@@ -1,9 +1,7 @@
 #include "WindowFeature.h"
 
 #include "WindowView.h"
-#include "../WindowTools/WindowToolsCaptureView.h"
 #include "../WindowTools/WindowToolsClipboardView.h"
-#include "../WindowTools/WindowToolsHierarchyView.h"
 #include "../WindowTools/WindowToolsHotkeyView.h"
 #include "../../Ui/Controls.h"
 #include "../../Ui/TabUtil.h"
@@ -20,21 +18,18 @@ constexpr wchar_t kWindowFeatureClass[] = L"KswordARKLight.WindowFeaturePage";
 constexpr int kTabControlId = 62401;
 constexpr int kWindowTabIndex = 0;
 constexpr int kClipboardTabIndex = 1;
-constexpr int kCaptureTabIndex = 2;
-constexpr int kHierarchyTabIndex = 3;
-constexpr int kHotkeyTabIndex = 4;
+constexpr int kHotkeyTabIndex = 2;
 constexpr int kGap = 6;
 
 // WindowFeaturePageState is the single Dock content host. The retained window
-// manager and the four former WindowTools pages are direct children of one tab
-// control, so no action strip can end up between the Dock chrome and a page.
+// manager and the remaining WindowTools pages are direct children of one tab
+// control. WindowView owns its hierarchy diagnostics pane so it stays beside
+// the window manager rather than becoming another top-level tab.
 struct WindowFeaturePageState final {
     HWND hwnd = nullptr;
     HWND tab = nullptr;
     HWND windowView = nullptr;
     HWND clipboardView = nullptr;
-    HWND captureView = nullptr;
-    HWND hierarchyView = nullptr;
     HWND hotkeyView = nullptr;
     int currentTab = kWindowTabIndex;
 };
@@ -53,7 +48,7 @@ int Height(const RECT& rc) {
 
 void ShowChildPages(WindowFeaturePageState& state) {
     const HWND pages[] = {
-        state.windowView, state.clipboardView, state.captureView, state.hierarchyView, state.hotkeyView
+        state.windowView, state.clipboardView, state.hotkeyView
     };
     for (int index = 0; index < static_cast<int>(sizeof(pages) / sizeof(pages[0])); ++index) {
         if (pages[index]) {
@@ -76,7 +71,7 @@ void LayoutChildren(WindowFeaturePageState& state) {
     ::GetClientRect(state.tab, &pageRect);
     TabCtrl_AdjustRect(state.tab, FALSE, &pageRect);
     const HWND pages[] = {
-        state.windowView, state.clipboardView, state.captureView, state.hierarchyView, state.hotkeyView
+        state.windowView, state.clipboardView, state.hotkeyView
     };
     for (HWND page : pages) {
         if (page) {
@@ -93,8 +88,6 @@ bool CreateChildControls(WindowFeaturePageState& state) {
     }
     Ksword::Ui::AddTabPage(state.tab, kWindowTabIndex, { L"窗口管理" });
     Ksword::Ui::AddTabPage(state.tab, kClipboardTabIndex, { L"剪贴板查看" });
-    Ksword::Ui::AddTabPage(state.tab, kCaptureTabIndex, { L"窗口捕获保护" });
-    Ksword::Ui::AddTabPage(state.tab, kHierarchyTabIndex, { L"窗口层级诊断" });
     Ksword::Ui::AddTabPage(state.tab, kHotkeyTabIndex, { L"热键占用探测" });
     ::SendMessageW(state.tab, TCM_SETCURSEL, static_cast<WPARAM>(kWindowTabIndex), 0);
 
@@ -105,10 +98,8 @@ bool CreateChildControls(WindowFeaturePageState& state) {
 
     state.windowView = CreateWindowFeatureView(state.tab, childBounds);
     state.clipboardView = WindowTools::CreateClipboardInspectorView(state.tab, childBounds);
-    state.captureView = WindowTools::CreateCaptureProtectionView(state.tab, childBounds);
-    state.hierarchyView = WindowTools::CreateWindowHierarchyView(state.tab, childBounds);
     state.hotkeyView = WindowTools::CreateHotkeyProbeView(state.tab, childBounds);
-    if (!state.windowView || !state.clipboardView || !state.captureView || !state.hierarchyView || !state.hotkeyView) {
+    if (!state.windowView || !state.clipboardView || !state.hotkeyView) {
         return false;
     }
     Ksword::Ui::SetWindowFontRecursive(state.hwnd);
