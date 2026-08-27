@@ -592,6 +592,11 @@ void RebuildColumns(ProcessViewState& state) {
 std::vector<DWORD> SelectedPids(ProcessViewState& state);
 std::vector<std::wstring> SelectedStableKeys(ProcessViewState& state);
 std::wstring StableKeyFromListItem(const ProcessViewState& state, int item);
+void ApplyProcessFilter(ProcessViewState& state,
+    ProcessFilterResult result,
+    const std::vector<ProcessPresentationRow>* previousPresentationRows = nullptr,
+    const std::vector<std::size_t>* previousVisibleRowIndexes = nullptr,
+    const std::unordered_map<std::wstring, ProcessRowVisualState>* previousVisualStates = nullptr);
 void RequestProcessFilter(ProcessViewState& state,
     const std::wstring& query,
     std::vector<std::wstring> selectedStableKeys,
@@ -646,33 +651,47 @@ void BuildPresentationRows(ProcessViewState& state,
     }
 }
 
-// RebuildRows replaces the backing presentation snapshot, then schedules a
-// background match against it. LVS_OWNERDATA receives only an item count here;
-// no per-row ListView_InsertItem or ListView_SetItemText messages are sent.
-void RebuildRows(ProcessViewState& state) {
+// RebuildRows creates and installs a complete owner-data snapshot in one UI
+// transaction. The previous rows stay mapped until the new filter indexes are
+// ready, so periodic refreshes never briefly clear the process list.
+void RebuildRows(ProcessViewState& state,
+    const std::unordered_map<std::wstring, ProcessRowVisualState>* previousVisualStates = nullptr) {
     if (!state.listView) {
         return;
     }
 
     const std::vector<std::wstring> selectedStableKeys = SelectedStableKeys(state);
     const std::wstring topStableKey = StableKeyFromListItem(state, ListView_GetTopIndex(state.listView));
+    std::vector<ProcessPresentationRow> previousPresentationRows = std::move(state.presentationRows);
+    const std::vector<std::size_t> previousVisibleRowIndexes = state.visibleRowIndexes;
     auto filterRows = std::make_shared<std::vector<Ksword::Ui::VirtualListRow>>();
     BuildPresentationRows(state, state.presentationRows, *filterRows);
     state.filterRows = std::move(filterRows);
     ++state.displayGeneration;
 
-    // The old row mapping belongs to the previous immutable snapshot. Clear it
-    // until the matching result arrives rather than letting stale indexes point
-    // at newly enumerated process data.
-    state.visibleRowIndexes.clear();
-    {
-        Ksword::Ui::ScopedListViewRedrawLock redrawLock(state.listView);
-        ListView_SetItemCountEx(state.listView, 0, LVSICF_NOINVALIDATEALL | LVSICF_NOSCROLL);
-    }
-    ::InvalidateRect(state.listView, nullptr, FALSE);
-
     const std::wstring query = state.filterBar ? Ksword::Ui::GetFilterBarText(state.filterBar) : state.filterQuery;
-    RequestProcessFilter(state, query, selectedStableKeys, topStableKey);
+    state.filterQuery = query;
+    state.filterUseRegex = Ksword::Ui::GetFilterBarRegexEnabled(state.filterBar);
+
+    // Process snapshots are intentionally kept compact, so matching this
+    // immutable text view on the UI thread is cheap. More importantly, it lets
+    // the list swap from one valid mapping directly to the next instead of
+    // exposing an empty owner-data table while a worker filters the new rows.
+    ProcessFilterResult result{};
+    result.displayGeneration = state.displayGeneration;
+    result.query = query;
+    result.useRegex = state.filterUseRegex;
+    result.selectedStableKeys = selectedStableKeys;
+    result.topStableKey = topStableKey;
+    result.visibleIndexes = Ksword::Ui::VirtualListView::FilterRowIndexes(
+        *state.filterRows,
+        result.query,
+        result.useRegex);
+    ApplyProcessFilter(state,
+        std::move(result),
+        &previousPresentationRows,
+        &previousVisibleRowIndexes,
+        previousVisualStates);
 }
 
 // DisplayIndexFromListItem maps a visible owner-data row to its immutable
@@ -1004,28 +1023,137 @@ LRESULT HandleVirtualListDisplayInfo(ProcessViewState& state, NMLVDISPINFOW* dis
     return 0;
 }
 
-// ApplyProcessFilter installs a background-filtered index map while preserving
-// selection and the top visible logical row whenever they remain present.
-void ApplyProcessFilter(ProcessViewState& state, ProcessFilterResult result) {
+// PresentationRowsEqual reports whether two owner-data rows can retain the same
+// painted ListView item. Tree layout attributes participate because custom draw
+// uses them even when the column text happens to be unchanged.
+bool PresentationRowsEqual(const ProcessPresentationRow& left, const ProcessPresentationRow& right) {
+    return left.stableKey == right.stableKey &&
+        left.iconPath == right.iconPath &&
+        left.cells == right.cells &&
+        left.processId == right.processId &&
+        left.creationTime100ns == right.creationTime100ns &&
+        left.kernelOnly == right.kernelOnly &&
+        left.display.groupHeader == right.display.groupHeader &&
+        left.display.group == right.display.group &&
+        left.display.depth == right.display.depth;
+}
+
+// PresentationRowAtVisibleItem maps an owner-data item position through a
+// supplied snapshot. It is intentionally independent of ProcessViewState so a
+// refresh can compare the old and new snapshots before changing ListView state.
+const ProcessPresentationRow* PresentationRowAtVisibleItem(
+    const std::vector<ProcessPresentationRow>& presentationRows,
+    const std::vector<std::size_t>& visibleRowIndexes,
+    std::size_t item) {
+    if (item >= visibleRowIndexes.size()) {
+        return nullptr;
+    }
+    const std::size_t displayIndex = visibleRowIndexes[item];
+    return displayIndex < presentationRows.size() ? &presentationRows[displayIndex] : nullptr;
+}
+
+// AppendRedrawItem accumulates adjacent list positions into the smallest set of
+// ListView_RedrawItems calls. Inputs are an item position and mutable ranges;
+// processing appends or extends the tail range; no value is returned.
+void AppendRedrawItem(std::vector<std::pair<int, int>>& ranges, int item) {
+    if (item < 0) {
+        return;
+    }
+    if (!ranges.empty() && item <= ranges.back().second + 1) {
+        ranges.back().second = std::max(ranges.back().second, item);
+        return;
+    }
+    ranges.emplace_back(item, item);
+}
+
+// ApplyProcessFilter installs a filtered index map while preserving selection
+// and the top visible logical row. Refresh callers pass the outgoing snapshot,
+// allowing the virtual ListView to repaint only positions whose presentation
+// actually changed instead of blanking and invalidating the full table.
+void ApplyProcessFilter(ProcessViewState& state,
+    ProcessFilterResult result,
+    const std::vector<ProcessPresentationRow>* previousPresentationRows,
+    const std::vector<std::size_t>* previousVisibleRowIndexes,
+    const std::unordered_map<std::wstring, ProcessRowVisualState>* previousVisualStates) {
     if (!state.listView || result.displayGeneration != state.displayGeneration || result.query != state.filterQuery ||
         result.useRegex != state.filterUseRegex) {
         return;
+    }
+
+    const std::vector<ProcessPresentationRow>& oldPresentationRows = previousPresentationRows
+        ? *previousPresentationRows
+        : state.presentationRows;
+    const std::vector<std::size_t>& oldVisibleRowIndexes = previousVisibleRowIndexes
+        ? *previousVisibleRowIndexes
+        : state.visibleRowIndexes;
+    const std::unordered_map<std::wstring, ProcessRowVisualState>* oldVisualStates = previousVisualStates
+        ? previousVisualStates
+        : &state.visualStateByIdentity;
+    const std::size_t newItemCount = std::min<std::size_t>(
+        result.visibleIndexes.size(),
+        static_cast<std::size_t>(INT_MAX));
+    const std::size_t oldItemCount = std::min<std::size_t>(
+        oldVisibleRowIndexes.size(),
+        static_cast<std::size_t>(INT_MAX));
+    const std::size_t comparableItemCount = std::min(oldItemCount, newItemCount);
+    std::vector<std::pair<int, int>> redrawRanges;
+    redrawRanges.reserve(8);
+
+    auto visualStateFor = [](const ProcessPresentationRow* row,
+                              const std::unordered_map<std::wstring, ProcessRowVisualState>* visualStates) {
+        if (!row || row->display.groupHeader || row->processId == 0) {
+            return ProcessRowVisualState::Normal;
+        }
+        if (row->kernelOnly) {
+            return ProcessRowVisualState::KernelOnly;
+        }
+        if (!visualStates) {
+            return ProcessRowVisualState::Normal;
+        }
+        const auto found = visualStates->find(row->stableKey);
+        return found == visualStates->end() ? ProcessRowVisualState::Normal : found->second;
+    };
+
+    for (std::size_t item = 0; item < comparableItemCount; ++item) {
+        const ProcessPresentationRow* oldRow = PresentationRowAtVisibleItem(
+            oldPresentationRows, oldVisibleRowIndexes, item);
+        const ProcessPresentationRow* newRow = PresentationRowAtVisibleItem(
+            state.presentationRows, result.visibleIndexes, item);
+        if (!oldRow || !newRow || !PresentationRowsEqual(*oldRow, *newRow) ||
+            visualStateFor(oldRow, oldVisualStates) != visualStateFor(newRow, &state.visualStateByIdentity)) {
+            AppendRedrawItem(redrawRanges, static_cast<int>(item));
+        }
+    }
+    for (std::size_t item = comparableItemCount; item < newItemCount; ++item) {
+        AppendRedrawItem(redrawRanges, static_cast<int>(item));
+    }
+
+    std::vector<int> selectedItemsBefore;
+    for (int item = -1;
+         (item = ListView_GetNextItem(state.listView, item, LVNI_SELECTED)) != -1;) {
+        selectedItemsBefore.push_back(item);
     }
 
     state.visibleRowIndexes = std::move(result.visibleIndexes);
     int topItem = -1;
     int firstSelectedItem = -1;
     {
-        Ksword::Ui::ScopedListViewRedrawLock redrawLock(state.listView);
-        ListView_SetItemCountEx(state.listView,
-            static_cast<int>(std::min<std::size_t>(state.visibleRowIndexes.size(), static_cast<std::size_t>(INT_MAX))),
-            LVSICF_NOINVALIDATEALL | LVSICF_NOSCROLL);
+        // Do not use ScopedListViewRedrawLock here: its balanced full
+        // invalidation would undo the delta calculation above. The header is
+        // unchanged, so only freeze the body while its mapping and selection
+        // are switched together.
+        Ksword::Ui::ScopedWindowRedrawLock redrawLock(state.listView, false);
+        if (oldItemCount != newItemCount) {
+            ListView_SetItemCountEx(state.listView,
+                static_cast<int>(newItemCount),
+                LVSICF_NOINVALIDATEALL | LVSICF_NOSCROLL);
+        }
         ListView_SetItemState(state.listView, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
 
         std::unordered_set<std::wstring> selectedSet(
             result.selectedStableKeys.begin(),
             result.selectedStableKeys.end());
-        for (std::size_t item = 0; item < state.visibleRowIndexes.size(); ++item) {
+        for (std::size_t item = 0; item < newItemCount; ++item) {
             const std::size_t displayIndex = state.visibleRowIndexes[item];
             if (displayIndex >= state.presentationRows.size()) {
                 continue;
@@ -1051,7 +1179,23 @@ void ApplyProcessFilter(ProcessViewState& state, ProcessFilterResult result) {
             ListView_EnsureVisible(state.listView, firstSelectedItem, FALSE);
         }
     }
-    ::InvalidateRect(state.listView, nullptr, FALSE);
+
+    // Selection styling can change independently from row text. Repaint the
+    // previous and restored selection positions in addition to data deltas.
+    for (const auto& range : redrawRanges) {
+        ListView_RedrawItems(state.listView, range.first, range.second);
+    }
+    for (const int item : selectedItemsBefore) {
+        if (item >= 0 && static_cast<std::size_t>(item) < newItemCount) {
+            ListView_RedrawItems(state.listView, item, item);
+        }
+    }
+    if (firstSelectedItem >= 0) {
+        ListView_RedrawItems(state.listView, firstSelectedItem, firstSelectedItem);
+    }
+    if (newItemCount == 0 && oldItemCount != 0) {
+        ::InvalidateRect(state.listView, nullptr, FALSE);
+    }
     if (!result.query.empty()) {
         SetStatus(state,
             L"筛选结果 " + std::to_wstring(state.visibleRowIndexes.size()) +
@@ -1552,8 +1696,8 @@ ProcessRefreshSnapshot CollectProcessRefreshSnapshot() {
 }
 
 // ApplyProcessRefresh installs a completed immutable snapshot on the UI thread.
-// It performs lightweight diff bookkeeping and preserves the existing
-// incremental ListView update path until the virtual-list migration lands.
+// It records lifecycle differences and commits the owner-data presentation with
+// selective ListView invalidation, preserving a stable process-list surface.
 void ApplyProcessRefresh(ProcessViewState& state, ProcessRefreshSnapshot snapshot) {
     if (!snapshot.enumeration.success) {
         state.model.setRows({});
@@ -1571,6 +1715,8 @@ void ApplyProcessRefresh(ProcessViewState& state, ProcessRefreshSnapshot snapsho
     std::unordered_map<std::wstring, ProcessSnapshotRow> activeRowsByIdentity;
     newCpuTimes.reserve(rows.size());
     activeRowsByIdentity.reserve(rows.size());
+    const std::unordered_map<std::wstring, ProcessRowVisualState> previousVisualStates =
+        std::move(state.visualStateByIdentity);
     state.visualStateByIdentity.clear();
     for (ProcessSnapshotRow& row : rows) {
         const std::wstring identityKey = ProcessStableKey(row.processId, row.creationTime100ns);
@@ -1618,7 +1764,7 @@ void ApplyProcessRefresh(ProcessViewState& state, ProcessRefreshSnapshot snapsho
     state.hasLastActiveSnapshot = true;
 
     state.model.setRows(std::move(rows));
-    RebuildRows(state);
+    RebuildRows(state, &previousVisualStates);
     SetStatus(state,
         L"已同步 " + std::to_wstring(activeCount) +
         L" 个进程；新增 " + std::to_wstring(addedCount) +
