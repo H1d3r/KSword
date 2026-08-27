@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstring>
+#include <limits>
 #include <sstream>
 #include <utility>
 
@@ -236,6 +237,25 @@ namespace ksword::ark
             result.droppedCount = static_cast<std::uint64_t>(header.droppedCount);
             result.lostBeforeFirst = static_cast<std::uint64_t>(header.lostBeforeFirst);
             const unsigned char* const firstRecord = outputBuffer.data() + responseHeaderBytes;
+            std::uint64_t effectiveAfterSequence = afterSequence;
+            if (effectiveAfterSequence > result.latestSequence)
+            {
+                effectiveAfterSequence = 0ULL;
+            }
+            std::uint64_t expectedFirstSequence = 0ULL;
+            if (header.returnedCount != 0UL)
+            {
+                if (effectiveAfterSequence == std::numeric_limits<std::uint64_t>::max())
+                {
+                    result.io.ok = false;
+                    result.io.win32Error = ERROR_INVALID_DATA;
+                    result.io.message = "callback-monitor event record is invalid";
+                    return result;
+                }
+                expectedFirstSequence = std::max(
+                    effectiveAfterSequence + 1ULL,
+                    result.firstAvailableSequence);
+            }
             result.records.reserve(static_cast<std::size_t>(header.returnedCount));
             std::uint64_t previousSequence = 0ULL;
             for (std::size_t recordIndex = 0U;
@@ -251,6 +271,7 @@ namespace ksword::ark
                     packet.size != sizeof(packet) ||
                     packet.sequence < header.firstAvailableSequence ||
                     packet.sequence > header.latestSequence ||
+                    (recordIndex == 0U && packet.sequence != expectedFirstSequence) ||
                     (previousSequence != 0ULL && packet.sequence != previousSequence + 1ULL))
                 {
                     result.io.ok = false;

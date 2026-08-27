@@ -492,7 +492,8 @@ public:
         std::uint32_t pid = 0;         // pid：快照悬停展示和排查用。
         double cpuPercent = 0.0;       // cpuPercent：该进程采样时 CPU。
         double cpuCorePercent = 0.0;   // cpuCorePercent：该进程单核等效 CPU，可超过 100%。
-        double memoryMB = 0.0;         // memoryMB：该进程采样时工作集。
+        double ramMB = 0.0;            // ramMB：该进程采样时申请/提交内存。
+        double workingSetMB = 0.0;     // workingSetMB：该进程采样时实际工作集。
         double diskMBps = 0.0;         // diskMBps：该进程采样时磁盘吞吐。
         double netKBps = 0.0;          // netKBps：该进程采样时网络吞吐。
         double netRxKBps = 0.0;        // netRxKBps：该进程采样时网络下行吞吐。
@@ -801,6 +802,8 @@ private:
     bool isProcessActivityRefreshAllowedNow() const;
     bool isProcessActivityRecordingAllowedNow() const;
     bool isProcessListPageVisibleForRecording() const;
+    template <typename Destination, typename Source>
+    static void copyProcessActivityDynamicFields(Destination& destination, const Source& source);
     void appendProcessActivitySample();
     void synchronizeDetailWindowPerformanceHistory(
         ProcessDetailWindow* detailWindow,

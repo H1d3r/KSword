@@ -116,6 +116,7 @@ KswordArkObjectPreOperation(
     WCHAR targetPathBuffer[KSWORD_ARK_CALLBACK_EVENT_MAX_TARGET_CHARS] = { 0 };
     ACCESS_MASK* desiredAccessPointer = NULL;
     ACCESS_MASK originalDesiredAccess = 0U;
+    ACCESS_MASK accessBeforeRuleStrip = 0U;
     ACCESS_MASK stripMask = 0U;
     ACCESS_MASK strippedAccess = 0U;
     PEPROCESS targetProcess = NULL;
@@ -205,7 +206,42 @@ KswordArkObjectPreOperation(
     }
     RtlInitUnicodeString(&targetPath, targetPathBuffer);
 
-    // 对象遥测在通用规则前发布，记录请求权限及进程保护层已经削减后的权限。
+    matchStatus = KswordArkCallbackMatchRule(
+        KSWORD_ARK_CALLBACK_TYPE_OBJECT,
+        callbackOperationMask,
+        &initiatorPath,
+        &targetPath,
+        &matchResult);
+    if (NT_SUCCESS(matchStatus) && matchResult.Matched) {
+        if (matchResult.Action == KSWORD_ARK_RULE_ACTION_LOG_ONLY) {
+            KswordArkCallbackLogFormat(
+                "Info",
+                "Object callback log rule hit, objectType=%lu, operation=0x%08lX, groupId=%lu, ruleId=%lu.",
+                (unsigned long)((OperationInformation->ObjectType == *PsProcessType) ? 1UL : 2UL),
+                (unsigned long)callbackOperationMask,
+                (unsigned long)matchResult.GroupId,
+                (unsigned long)matchResult.RuleId);
+        }
+        else if (matchResult.Action == KSWORD_ARK_RULE_ACTION_STRIP_ACCESS &&
+                 desiredAccessPointer != NULL) {
+            stripMask = KswordArkObjectBuildStripMask(OperationInformation->ObjectType);
+            accessBeforeRuleStrip = *desiredAccessPointer;
+            strippedAccess = accessBeforeRuleStrip & (~stripMask);
+            *desiredAccessPointer = strippedAccess;
+
+            KswordArkCallbackLogFormat(
+                "Warn",
+                "Object access stripped, objectType=%lu, op=0x%08lX, desired=0x%08lX->0x%08lX, groupId=%lu, ruleId=%lu.",
+                (unsigned long)((OperationInformation->ObjectType == *PsProcessType) ? 1UL : 2UL),
+                (unsigned long)callbackOperationMask,
+                (unsigned long)accessBeforeRuleStrip,
+                (unsigned long)strippedAccess,
+                (unsigned long)matchResult.GroupId,
+                (unsigned long)matchResult.RuleId);
+        }
+    }
+
+    // 所有保护层和通用规则处理完成后再发布，DesiredAccess 才是对象管理器实际采用的最终权限。
     if (KswordArkCallbackMonitorIsEnabled(KSWORD_ARK_CALLBACK_MONITOR_CATEGORY_OBJECT)) {
         KSWORD_ARK_CALLBACK_MONITOR_EVENT_INPUT monitorInput;
         RtlZeroMemory(&monitorInput, sizeof(monitorInput));
@@ -227,47 +263,6 @@ KswordArkObjectPreOperation(
         monitorInput.Path = &targetPath;
         KswordArkCallbackMonitorPublish(&monitorInput);
     }
-
-    matchStatus = KswordArkCallbackMatchRule(
-        KSWORD_ARK_CALLBACK_TYPE_OBJECT,
-        callbackOperationMask,
-        &initiatorPath,
-        &targetPath,
-        &matchResult);
-    if (!NT_SUCCESS(matchStatus) || !matchResult.Matched) {
-        return OB_PREOP_SUCCESS;
-    }
-
-    if (matchResult.Action == KSWORD_ARK_RULE_ACTION_LOG_ONLY) {
-        KswordArkCallbackLogFormat(
-            "Info",
-            "Object callback log rule hit, objectType=%lu, operation=0x%08lX, groupId=%lu, ruleId=%lu.",
-            (unsigned long)((OperationInformation->ObjectType == *PsProcessType) ? 1UL : 2UL),
-            (unsigned long)callbackOperationMask,
-            (unsigned long)matchResult.GroupId,
-            (unsigned long)matchResult.RuleId);
-        return OB_PREOP_SUCCESS;
-    }
-
-    if (matchResult.Action != KSWORD_ARK_RULE_ACTION_STRIP_ACCESS ||
-        desiredAccessPointer == NULL) {
-        return OB_PREOP_SUCCESS;
-    }
-
-    stripMask = KswordArkObjectBuildStripMask(OperationInformation->ObjectType);
-    originalDesiredAccess = *desiredAccessPointer;
-    strippedAccess = originalDesiredAccess & (~stripMask);
-    *desiredAccessPointer = strippedAccess;
-
-    KswordArkCallbackLogFormat(
-        "Warn",
-        "Object access stripped, objectType=%lu, op=0x%08lX, desired=0x%08lX->0x%08lX, groupId=%lu, ruleId=%lu.",
-        (unsigned long)((OperationInformation->ObjectType == *PsProcessType) ? 1UL : 2UL),
-        (unsigned long)callbackOperationMask,
-        (unsigned long)originalDesiredAccess,
-        (unsigned long)strippedAccess,
-        (unsigned long)matchResult.GroupId,
-        (unsigned long)matchResult.RuleId);
     return OB_PREOP_SUCCESS;
 }
 
