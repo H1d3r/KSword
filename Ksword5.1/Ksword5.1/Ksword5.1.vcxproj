@@ -422,6 +422,7 @@
     <ClCompile Include="UI\EmbeddedRowDelegate.cpp" />
     <ClCompile Include="UI\DetailLayoutHost.cpp" />
     <ClCompile Include="UI\DetailLayoutRegistry.cpp" />
+    <ClCompile Include="UI\ReportStructuredView.cpp" />
     <ClCompile Include="UI\KernelDisassemblyDialog.cpp" />
     <ClCompile Include="..\..\third_party\zydis\Zydis.c">
       <CompileAs>CompileAsC</CompileAs>
@@ -618,6 +619,7 @@
     <ClInclude Include="UI\EmbeddedRowDelegate.h" />
     <ClInclude Include="UI\DetailLayoutHost.h" />
     <ClInclude Include="UI\DetailLayoutRegistry.h" />
+    <ClInclude Include="UI\ReportStructuredView.h" />
     <ClInclude Include="UI\SmoothScrollSupport.h" />
     <ClInclude Include="UI\TableColumnAutoFit.h" />
     <ClInclude Include="UI\TableFreezeSupport.h" />
