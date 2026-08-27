@@ -192,6 +192,36 @@ namespace
             .arg(KswordTheme::OnAccentDynamicHex());
     }
 
+    // buildFloatingToggleStyle：
+    // - 内容区右上角悬浮切换按钮的样式；
+    // - 与工具栏按钮不同，它压在正文之上，必须自带不透明底色和边框，
+    //   否则叠在属性表行或报告文字上会看不清；
+    // - 颜色全部走 palette(...) 形式的 token，主题切换时跟着变，不做快照。
+    QString buildFloatingToggleStyle()
+    {
+        return QStringLiteral(
+            "QToolButton{"
+            "  border:1px solid %1;"
+            "  border-radius:6px;"
+            "  padding:5px 12px;"
+            "  background:%2;"
+            "  color:%3;"
+            "}"
+            "QToolButton:hover{"
+            "  background:%4;"
+            "  color:%5;"
+            "  border:1px solid %4;"
+            "}"
+            "QToolButton:checked{"
+            "  border:1px solid %4;"
+            "}")
+            .arg(KswordTheme::BorderHex())
+            .arg(KswordTheme::SurfaceHex())
+            .arg(KswordTheme::TextPrimaryHex())
+            .arg(KswordTheme::PrimaryBlueHex)
+            .arg(KswordTheme::OnAccentDynamicHex());
+    }
+
     // buildInputStyle：
     // - 统一输入框样式，适配深浅色。
     QString buildInputStyle()
@@ -1173,18 +1203,6 @@ void CodeEditorWidget::initializeUi()
     m_replaceButton = buildButton(QStringLiteral(":/Icon/codeeditor_replace.svg"), QStringLiteral("替换 Ctrl+H"));
     m_gotoButton = buildButton(QStringLiteral(":/Icon/codeeditor_goto.svg"), QStringLiteral("跳转行 Ctrl+G"));
     m_wrapButton = buildButton(QStringLiteral(":/Icon/codeeditor_wrap.svg"), QStringLiteral("切换自动换行"));
-    // 视图切换按钮带文字而不是纯图标：一个图标看不出“还能切回原始文本”，
-    // 而报告原文是取证时要整段复制、要 Ctrl+F 全文检索的东西，入口必须一眼可见。
-    m_structuredButton = new QToolButton(m_toolbarWidget);
-    m_structuredButton->setIcon(buildToolbarSvgIcon(QStringLiteral(":/Icon/codeeditor_structured.svg")));
-    m_structuredButton->setIconSize(QSize(18, 18));
-    m_structuredButton->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-    m_structuredButton->setAutoRaise(true);
-    m_structuredButton->setCheckable(true);
-    m_structuredButton->setToolTip(
-        QStringLiteral("在结构视图与原始文本之间切换：结构视图按字段和表格解析当前报告，原始文本保留完整报告便于全文检索和整段复制"));
-    // 入口默认隐藏：只有内容确实是可解析的只读报告时才由 updateStructuredReportView 放出来。
-    m_structuredButton->setVisible(false);
 
     m_toolbarLayout->addWidget(m_newButton);
     m_toolbarLayout->addWidget(m_openButton);
@@ -1201,7 +1219,6 @@ void CodeEditorWidget::initializeUi()
     m_toolbarLayout->addWidget(m_replaceButton);
     m_toolbarLayout->addWidget(m_gotoButton);
     m_toolbarLayout->addWidget(m_wrapButton);
-    m_toolbarLayout->addWidget(m_structuredButton);
     m_toolbarLayout->addStretch(1);
     m_rootLayout->addWidget(m_toolbarWidget);
 
@@ -1270,6 +1287,25 @@ void CodeEditorWidget::initializeUi()
     m_viewStack->addWidget(m_structuredView);
     m_viewStack->setCurrentWidget(m_editor);
     m_rootLayout->addWidget(m_viewStack, 1);
+
+    // 切换按钮浮在内容区右上角，而不是混在顶部那排编辑动作里：
+    // 它切的是“这块内容怎么看”，和新建/保存/剪贴板不是一类操作，放在内容自己的角上更好找。
+    // 因此按钮不进任何布局，由 positionStructuredButton 跟着 m_viewStack 的几何走。
+    m_structuredButton = new QToolButton(m_viewStack);
+    m_structuredButton->setIcon(
+        buildToolbarSvgIcon(QStringLiteral(":/Icon/codeeditor_structured.svg"), QSize(20, 20)));
+    m_structuredButton->setIconSize(QSize(20, 20));
+    m_structuredButton->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    m_structuredButton->setCheckable(true);
+    m_structuredButton->setCursor(Qt::PointingHandCursor);
+    m_structuredButton->setToolTip(
+        QStringLiteral("在结构视图与原始文本之间切换：结构视图按字段和表格解析当前报告，原始文本保留完整报告便于全文检索和整段复制"));
+    // 悬浮按钮压在正文之上，必须自带不透明底色和边框，否则叠在属性表行上会看不清。
+    m_structuredButton->setStyleSheet(buildFloatingToggleStyle());
+    // 入口默认隐藏：只有内容确实是可解析的只读报告时才由 updateStructuredReportView 放出来。
+    m_structuredButton->setVisible(false);
+    // m_viewStack 换页或改尺寸时都要重新贴角，事件过滤器比逐页 connect 省事也更不易漏。
+    m_viewStack->installEventFilter(this);
 
     m_statusLabel = new QLabel(QStringLiteral("就绪。"), this);
     m_rootLayout->addWidget(m_statusLabel);
@@ -1461,6 +1497,12 @@ void CodeEditorWidget::applyThemeStyle()
         }
     }
 
+    // 悬浮切换按钮不在上面那批里：它压在正文之上，用的是自带底色和边框的另一套样式。
+    if (m_structuredButton != nullptr)
+    {
+        m_structuredButton->setStyleSheet(buildFloatingToggleStyle());
+    }
+
     m_findEdit->setStyleSheet(inputStyle);
     m_replaceEdit->setStyleSheet(inputStyle);
     m_gotoLineEdit->setStyleSheet(inputStyle);
@@ -1498,6 +1540,48 @@ void CodeEditorWidget::refreshReadOnlyUiState()
     updateStructuredReportView();
 }
 
+bool CodeEditorWidget::eventFilter(QObject* watchedObject, QEvent* eventObject)
+{
+    if (!m_destroying &&
+        watchedObject == m_viewStack &&
+        eventObject != nullptr &&
+        (eventObject->type() == QEvent::Resize || eventObject->type() == QEvent::Show))
+    {
+        positionStructuredButton();
+    }
+    return QWidget::eventFilter(watchedObject, eventObject);
+}
+
+void CodeEditorWidget::positionStructuredButton()
+{
+    if (m_destroying || m_structuredButton == nullptr || m_viewStack == nullptr)
+    {
+        return;
+    }
+
+    // 右边距要避开当前页可见的垂直滚动条：压在滚动条上会让拖动条变成误点区。
+    int rightMargin = 12;
+    const QWidget* currentPage = m_viewStack->currentWidget();
+    if (currentPage == m_editor && m_editor != nullptr &&
+        m_editor->verticalScrollBar() != nullptr &&
+        m_editor->verticalScrollBar()->isVisible())
+    {
+        rightMargin += m_editor->verticalScrollBar()->width();
+    }
+    else if (currentPage == m_structuredView && m_structuredView != nullptr)
+    {
+        rightMargin += m_structuredView->verticalScrollBarWidth();
+    }
+
+    const QSize buttonSize = m_structuredButton->sizeHint();
+    m_structuredButton->setGeometry(
+        m_viewStack->width() - buttonSize.width() - rightMargin,
+        10,
+        buttonSize.width(),
+        buttonSize.height());
+    m_structuredButton->raise();
+}
+
 void CodeEditorWidget::refreshStructuredButtonLabel(const bool structuredActive)
 {
     if (m_structuredButton == nullptr)
@@ -1511,9 +1595,14 @@ void CodeEditorWidget::refreshStructuredButtonLabel(const bool structuredActive)
     if (structuredActive)
     {
         m_structuredButton->setText(QStringLiteral("原始文本"));
-        return;
     }
-    m_structuredButton->setText(QStringLiteral("结构视图"));
+    else
+    {
+        m_structuredButton->setText(QStringLiteral("结构视图"));
+    }
+
+    // 文字换了按钮宽度就变，悬浮按钮不在布局里，必须自己重新贴回右上角。
+    positionStructuredButton();
 }
 
 void CodeEditorWidget::updateStructuredReportView()

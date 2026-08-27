@@ -51,6 +51,11 @@ namespace ks::ui
         // hasStructure：返回最近一次 setReportText 的判定结果。
         bool hasStructure() const;
 
+        // verticalScrollBarWidth：
+        // - 返回当前可见的垂直滚动条宽度，没有滚动条时为 0；
+        // - 用途：宿主把悬浮控件贴到右上角时需要避开滚动条，否则拖动条容易误点。
+        int verticalScrollBarWidth() const;
+
     protected:
         // changeEvent：主题调色板变化时按新前景色重建块，保证状态色跟随主题。
         void changeEvent(QEvent* event) override;

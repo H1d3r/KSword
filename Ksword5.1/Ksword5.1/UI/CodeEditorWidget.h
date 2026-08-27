@@ -141,6 +141,9 @@ protected:
     // changeEvent：语言切换时重新渲染 setLocalizedText 保存的生成报告。
     void changeEvent(QEvent* event) override;
 
+    // eventFilter：内容区换页或改尺寸时，把右上角悬浮切换按钮重新贴到角上。
+    bool eventFilter(QObject* watchedObject, QEvent* eventObject) override;
+
 private:
     // initializeUi：
     // - 创建工具栏、查找替换面板、跳转面板、编辑区与状态栏。
@@ -215,6 +218,11 @@ private:
     // - 若文本识别为 JSON/XML，则自动格式化；
     // - 返回格式化后的文本，无法识别或解析失败时原样返回。
     QString applyStructuredAutoFormatIfNeeded(const QString& inputText, QString* detectedKindOut = nullptr) const;
+
+    // positionStructuredButton：
+    // - 把悬浮切换按钮贴到内容区右上角；
+    // - 按钮不进任何布局，尺寸取自身 sizeHint，右边距额外避开当前页可见的垂直滚动条。
+    void positionStructuredButton();
 
     // refreshStructuredButtonLabel：
     // - 按当前所处视图刷新切换按钮文字，文字始终写“点下去会切到哪一边”；

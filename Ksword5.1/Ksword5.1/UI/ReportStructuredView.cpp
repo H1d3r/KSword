@@ -33,6 +33,7 @@
 #include <QPoint>
 #include <QRegularExpression>
 #include <QScrollArea>
+#include <QScrollBar>
 #include <QShowEvent>
 #include <QTableWidget>
 #include <QTreeWidget>
@@ -52,6 +53,28 @@ namespace
 
     // kMaxCodeBlockHeight：等宽代码块的最大像素高度，超出部分块内自行滚动。
     constexpr int kMaxCodeBlockHeight = 320;
+
+    // kBlockFontScale：结构视图相对界面默认字号的放大倍数。
+    // 详情报告是要逐条读地址、哈希和路径的，沿用工具栏那一档小字号看着太吃力。
+    constexpr double kBlockFontScale = 1.2;
+
+    // scaledBlockFont 作用：
+    // - 输入 baseFont：界面默认字体；
+    // - 处理：按 kBlockFontScale 放大，优先用 pointSizeF，磅值不可用时退回像素值；
+    // - 返回：结构视图各块统一使用的字体。
+    QFont scaledBlockFont(QFont baseFont)
+    {
+        if (baseFont.pointSizeF() > 0.0)
+        {
+            baseFont.setPointSizeF(baseFont.pointSizeF() * kBlockFontScale);
+            return baseFont;
+        }
+        if (baseFont.pixelSize() > 0)
+        {
+            baseFont.setPixelSize(static_cast<int>(baseFont.pixelSize() * kBlockFontScale));
+        }
+        return baseFont;
+    }
 
     // ParsedField：一条属性行，或一条跨列说明行。
     struct ParsedField
@@ -498,9 +521,10 @@ namespace
     }
 
     // fixedFont 作用：返回等宽字体，用于地址、哈希和机器码。
+    // 同样按 kBlockFontScale 放大：只放大正文会让同一行里的地址显得比标签矮一截。
     QFont fixedFont()
     {
-        return QFontDatabase::systemFont(QFontDatabase::FixedFont);
+        return scaledBlockFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
     }
 
     // valueLooksMonospace 作用：
@@ -783,6 +807,9 @@ namespace ks::ui
 
         m_blockHost = new QWidget(m_scrollArea);
         m_blockHost->setAutoFillBackground(false);
+        // 字号只在这一处放大：块控件全部是 m_blockHost 的后代，Qt 字体沿父子链继承，
+        // 逐个控件 setFont 反而容易漏掉新加的块类型。
+        m_blockHost->setFont(scaledBlockFont(font()));
         m_blockLayout = new QVBoxLayout(m_blockHost);
         m_blockLayout->setContentsMargins(0, 0, 0, 0);
         m_blockLayout->setSpacing(8);
@@ -815,6 +842,19 @@ namespace ks::ui
         return m_hasStructure;
     }
 
+    int ReportStructuredView::verticalScrollBarWidth() const
+    {
+        if (m_scrollArea == nullptr || m_scrollArea->verticalScrollBar() == nullptr)
+        {
+            return 0;
+        }
+        if (!m_scrollArea->verticalScrollBar()->isVisible())
+        {
+            return 0;
+        }
+        return m_scrollArea->verticalScrollBar()->width();
+    }
+
     void ReportStructuredView::changeEvent(QEvent* event)
     {
         QWidget::changeEvent(event);
@@ -823,12 +863,13 @@ namespace ks::ui
             return;
         }
         if (event->type() != QEvent::PaletteChange &&
-            event->type() != QEvent::ApplicationPaletteChange)
+            event->type() != QEvent::ApplicationPaletteChange &&
+            event->type() != QEvent::FontChange)
         {
             return;
         }
 
-        // 语义色是按主题算出来写进 item 的，主题一变必须整块重算。
+        // 语义色和放大字号都是按当前主题/字体算出来写进块控件的，两者一变必须整块重算。
         m_blocksDirty = true;
         if (isVisible())
         {
@@ -862,6 +903,10 @@ namespace ks::ui
     {
         m_blocksDirty = false;
         clearBlocks();
+
+        // 每次重建都按当前继承字体重算：构造时全局样式可能还没落到控件上，
+        // 而 m_blockHost 一旦显式 setFont 就不再跟随父链，只能在这里刷新。
+        m_blockHost->setFont(scaledBlockFont(font()));
 
         const ParsedDocument document = parseReport(m_reportText);
         if (!document.structured)
