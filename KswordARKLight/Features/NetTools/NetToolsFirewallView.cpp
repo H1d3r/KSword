@@ -458,15 +458,26 @@ void SelectRowAtPoint(FirewallViewState& state, const POINT screenPoint) {
     ShowDetail(state, SelectedModelIndex(state));
 }
 
+// ApplicationDirectoryForEntry keeps the strict source-path contract intact
+// across the FileBrowser boundary. FileBrowser accepts user-entered paths and
+// expands environment tokens, so a firewall rule directory containing '%' must
+// stay unavailable instead of being turned into a different target later.
+std::wstring ApplicationDirectoryForEntry(const FirewallRuleEntry* entry) {
+    if (!entry) {
+        return {};
+    }
+    const std::wstring directory =
+        Ksword::Features::File::PathNavigator::parentDirectoryForKnownFilePath(entry->applicationName);
+    return directory.find(L'%') == std::wstring::npos ? directory : std::wstring{};
+}
+
 // OpenSelectedApplicationDirectory accepts only an already explicit DOS or UNC
 // application file path from the current firewall rule. It does not expand
 // variables, split command lines, or translate device paths into a guessed file
 // system target.
 void OpenSelectedApplicationDirectory(FirewallViewState& state) {
     const FirewallRuleEntry* entry = SelectedEntry(state);
-    const std::wstring directory = entry
-        ? Ksword::Features::File::PathNavigator::parentDirectoryForKnownFilePath(entry->applicationName)
-        : std::wstring{};
+    const std::wstring directory = ApplicationDirectoryForEntry(entry);
     if (directory.empty()) {
         state.statusText = L"所选规则未提供可安全定位的程序文件路径。";
         ::InvalidateRect(state.hwnd, nullptr, TRUE);
@@ -486,8 +497,7 @@ void OpenSelectedApplicationDirectory(FirewallViewState& state) {
 void ShowFirewallContextMenu(FirewallViewState& state, POINT screenPoint) {
     SelectRowAtPoint(state, screenPoint);
     const FirewallRuleEntry* entry = SelectedEntry(state);
-    const bool hasApplicationDirectory = entry &&
-        !Ksword::Features::File::PathNavigator::parentDirectoryForKnownFilePath(entry->applicationName).empty();
+    const bool hasApplicationDirectory = !ApplicationDirectoryForEntry(entry).empty();
     HMENU menu = ::CreatePopupMenu();
     if (!menu) {
         return;
