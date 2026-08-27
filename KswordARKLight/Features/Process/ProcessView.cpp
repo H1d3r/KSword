@@ -8,7 +8,6 @@
 #include "../../Ui/AsyncTask.h"
 #include "../../Ui/FilterBar.h"
 #include "../../Ui/ListViewUtil.h"
-#include "../../Ui/LoadingOverlay.h"
 #include "../../Ui/Theme.h"
 #include "../../Ui/VirtualListView.h"
 #include "../../../Ksword5.1/Ksword5.1/ArkDriverClient/ArkDriverClient.h"
@@ -279,7 +278,6 @@ struct ProcessViewState {
     HWND statusText = nullptr;
     HWND filterBar = nullptr;
     HWND listView = nullptr;
-    HWND loadingOverlay = nullptr;
     HIMAGELIST imageList = nullptr;
     ProcessModel model;
     ProcessViewMode mode = ProcessViewMode::UtilizationFriendly;
@@ -543,14 +541,6 @@ void LayoutChildren(ProcessViewState& state, const RECT& rc) {
         std::max(80, width),
         std::max(80, height - listTop),
         TRUE);
-    if (state.loadingOverlay) {
-        ::MoveWindow(state.loadingOverlay,
-            0,
-            listTop,
-            std::max(80, width),
-            std::max(80, height - listTop),
-            TRUE);
-    }
 }
 
 // PaintBackground clears the page background only. Inputs are HWND and paint DC;
@@ -1785,14 +1775,12 @@ void BeginProcessRefresh(ProcessViewState& state) {
     if (state.refreshButton) {
         ::EnableWindow(state.refreshButton, FALSE);
     }
-    Ksword::Ui::SetLoadingOverlay(state.loadingOverlay, true, L"正在刷新进程列表…");
     state.refreshTask->request(
         []() { return CollectProcessRefreshSnapshot(); },
         [&state](std::uint64_t, std::optional<ProcessRefreshSnapshot>&& snapshot, std::exception_ptr error) {
             if (state.refreshButton) {
                 ::EnableWindow(state.refreshButton, TRUE);
             }
-            Ksword::Ui::SetLoadingOverlay(state.loadingOverlay, false);
             if (error || !snapshot.has_value()) {
                 SetStatus(state, L"进程刷新任务异常结束。请检查驱动状态和访问权限。");
                 return;
@@ -2241,7 +2229,6 @@ void CreateChildControls(ProcessViewState& state) {
     if (state.listView && state.imageList) {
         ListView_SetImageList(state.listView, state.imageList, LVSIL_SMALL);
     }
-    state.loadingOverlay = Ksword::Ui::CreateLoadingOverlay(state.hwnd, 52009, { 0, 0, 1, 1 });
     UpdateToolbarTexts(state);
     RebuildColumns(state);
 }
