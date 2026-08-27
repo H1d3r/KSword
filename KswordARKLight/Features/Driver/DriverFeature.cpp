@@ -10,6 +10,7 @@
 #include "../Kernel/KernelFeature.h"
 #include "../../Ui/Controls.h"
 #include "../../Ui/AsyncTask.h"
+#include "../../Ui/ExportUtil.h"
 #include "../../Ui/LoadingOverlay.h"
 #include "../../Ui/TabUtil.h"
 #include "../../Ui/Theme.h"
@@ -158,30 +159,71 @@ void RefreshFeatureModel(DriverFeaturePageState& state) {
         });
 }
 
-// CopyCurrentTabTsv exports the active table to the clipboard. Input is page
-// state; processing renders the current visible tab into TSV and copies it to
-// the clipboard; no value is returned.
-void CopyCurrentTabTsv(DriverFeaturePageState& state) {
+// ExportCurrentTabTsv saves the active local table as UTF-8 TSV. It only uses
+// the pre-filtered visible-row export helpers and leaves Kernel-rendered tabs
+// with their own page-local export commands.
+void ExportCurrentTabTsv(DriverFeaturePageState& state) {
     const int currentTab = Ksword::Ui::WorkspaceHostActiveTabId(state.workspace);
-    std::wstring tsv;
-    if (currentTab == kObjectTabIndex) {
-        tsv = ExportDriverObjectViewTsv(state.objectView);
-    } else if (currentTab == kUnloadedTabIndex) {
-        tsv = ExportDriverUnloadedViewTsv(state.unloadedView);
-    } else if (currentTab == kIntegrityTabIndex ||
+    if (currentTab == kIntegrityTabIndex ||
         currentTab == kDynDataCapabilitiesTabIndex ||
         currentTab == kDriverStatusTabIndex ||
         currentTab == kDynDataTabIndex ||
         currentTab == kDebugOutputTabIndex) {
-        SetStatus(state, L"当前页由内核模块渲染，请在该页内使用其右键菜单复制/导出。");
+        SetStatus(state, L"当前页使用自身的复制或导出命令。");
         return;
-    } else {
-        tsv = ExportDriverOverviewViewTsv(state.overviewView);
     }
-    if (DriverActions::CopyTextToClipboard(state.hwnd, tsv)) {
-        SetStatus(state, L"已将当前表格导出为 TSV 并复制到剪贴板。");
+
+    // WorkspaceHost defers page creation after a tab switch. A toolbar command
+    // is synchronous, so materialize only the local exportable page before
+    // reading its visible virtual-list rows.
+    const HWND activePage = Ksword::Ui::WorkspaceHostPage(state.workspace, currentTab, true);
+    if (!activePage) {
+        SetStatus(state, L"当前页尚未就绪，无法导出 TSV。");
+        return;
+    }
+
+    std::wstring tsv;
+    const wchar_t* suggestedFileName = L"ksword-arklight-driver-overview.tsv";
+    const wchar_t* dialogTitle = L"导出驱动概览 TSV";
+    if (currentTab == kObjectTabIndex) {
+        tsv = ExportDriverObjectViewTsv(activePage);
+        suggestedFileName = L"ksword-arklight-driver-objects.tsv";
+        dialogTitle = L"导出驱动对象 TSV";
+    } else if (currentTab == kUnloadedTabIndex) {
+        tsv = ExportDriverUnloadedViewTsv(activePage);
+        suggestedFileName = L"ksword-arklight-unloaded-drivers.tsv";
+        dialogTitle = L"导出已卸载驱动 TSV";
+    } else if (currentTab == kOverviewTabIndex) {
+        tsv = ExportDriverOverviewViewTsv(activePage);
     } else {
-        SetStatus(state, L"TSV 导出失败：剪贴板不可用或当前没有可导出的内容。");
+        SetStatus(state, L"当前页不支持顶栏 TSV 导出。");
+        return;
+    }
+
+    if (tsv.empty()) {
+        SetStatus(state, L"当前没有可导出的可见 TSV 内容。");
+        return;
+    }
+
+    std::wstring error;
+    switch (Ksword::Ui::SaveUtf8TextFileWithDialog(
+        state.hwnd,
+        suggestedFileName,
+        dialogTitle,
+        L"TSV (*.tsv)\0*.tsv\0All Files (*.*)\0*.*\0",
+        L"tsv",
+        tsv,
+        &error)) {
+    case Ksword::Ui::SaveTextFileResult::Saved:
+        SetStatus(state, L"当前可见 TSV 已导出并记录到证据会话。");
+        break;
+    case Ksword::Ui::SaveTextFileResult::Cancelled:
+        SetStatus(state, L"已取消 TSV 导出。");
+        break;
+    case Ksword::Ui::SaveTextFileResult::Failed:
+    default:
+        SetStatus(state, L"TSV 导出失败：" + error);
+        break;
     }
 }
 
@@ -287,7 +329,10 @@ bool RegisterDriverFeatureClass() {
         case WM_CREATE:
             if (state) {
                 if (!CreateChildControls(*state)) {
-                    delete state;
+                    // CreateWindowExW returns nullptr after WM_CREATE fails;
+                    // ownership then stays with CreateDriverFeaturePage. Clear
+                    // the HWND association so the ensuing WM_NCDESTROY cannot
+                    // free the state before that caller releases it.
                     ::SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
                     return -1;
                 }
@@ -313,7 +358,7 @@ bool RegisterDriverFeatureClass() {
                     RefreshFeatureModel(*state);
                     return 0;
                 case kExportButtonId:
-                    CopyCurrentTabTsv(*state);
+                    ExportCurrentTabTsv(*state);
                     return 0;
                 default:
                     break;

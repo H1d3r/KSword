@@ -3,6 +3,7 @@
 #include "DriverActions.h"
 #include "../../Ui/AsyncTask.h"
 #include "../../Ui/Controls.h"
+#include "../../Ui/ExportUtil.h"
 #include "../../Ui/FilterBar.h"
 #include "../../Ui/ListViewUtil.h"
 #include "../../Ui/LoadingOverlay.h"
@@ -543,25 +544,13 @@ void PopulateOverviewList(DriverOverviewViewState& state) {
     RequestOverviewFilter(state, state.filterBar ? Ksword::Ui::GetFilterBarText(state.filterBar) : state.filterQuery);
 }
 
-// BuildOverviewTsv converts the current overview rows into TSV text. Input is
-// the view state; processing reads the model snapshot and serializes the same
-// columns displayed in the report control; output is clipboard/file ready text.
+// BuildOverviewTsv converts the rows currently rendered by the virtual list
+// into TSV text. Input is the view state; processing serializes its active
+// visible indexes so an in-flight filter cannot yield stale export data.
 std::wstring BuildOverviewTsv(const DriverOverviewViewState& state) {
-    std::vector<std::vector<std::wstring>> rows;
-    for (const DriverOverviewRow& row : state.visibleRows) {
-        rows.push_back({
-            row.driverName,
-            row.baseAddressText,
-            row.memoryRangeText,
-            row.sizeText,
-            row.pathText,
-            row.signatureText,
-            row.statusText,
-            row.anomalyText,
-            row.capabilityHint
-        });
-    }
-    return DriverActions::BuildTsv({ L"驱动名称", L"基址", L"内存区间", L"大小", L"路径", L"签名/来源", L"状态", L"异常标记", L"能力提示" }, rows);
+    return Ksword::Ui::BuildVisibleVirtualListTsv(
+        { L"驱动名称", L"基址", L"内存区间", L"大小", L"路径", L"签名/来源", L"状态", L"异常标记", L"能力提示" },
+        state.virtualList);
 }
 
 // RegisterDriverOverviewClass installs the child window class once. There is no
