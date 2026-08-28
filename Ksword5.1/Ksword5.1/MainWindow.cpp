@@ -35,6 +35,7 @@
 #include <QVBoxLayout>
 #include <QLabel>
 #include <QList>
+#include <QMargins>
 #include <QPainter>
 #include <QPaintEvent>
 #include <QPalette>
@@ -5413,6 +5414,51 @@ void MainWindow::updateResizeBorderOverlays()
         {
             return;
         }
+    }
+
+    // 最大化布局补偿：
+    // - Windows 为带 WS_THICKFRAME 的最大化窗口把不可见 resize frame 扩到工作区外；
+    // - HWND 与 Qt backing store 保持系统原样，只把标题栏和 Dock 内容向内收口；
+    // - 边距使用 Qt 逻辑像素，避免高 DPI 下把原生物理像素重复放大。
+    QMargins maximizedLayoutMargins;
+#ifdef Q_OS_WIN
+    if (m_mainRootLayout != nullptr
+        && isWindowActuallyMaximized()
+        && testAttribute(Qt::WA_WState_Created))
+    {
+        const HWND mainWindowHandle = reinterpret_cast<HWND>(winId());
+        if (mainWindowHandle != nullptr && ::IsWindow(mainWindowHandle) != FALSE)
+        {
+            UINT windowDpi = ::GetDpiForWindow(mainWindowHandle);
+            if (windowDpi == 0)
+            {
+                windowDpi = USER_DEFAULT_SCREEN_DPI;
+            }
+            const int nativePaddedBorder =
+                ::GetSystemMetricsForDpi(SM_CXPADDEDBORDER, windowDpi);
+            const int nativeFrameX =
+                ::GetSystemMetricsForDpi(SM_CXSIZEFRAME, windowDpi) + nativePaddedBorder;
+            const int nativeFrameY =
+                ::GetSystemMetricsForDpi(SM_CYSIZEFRAME, windowDpi) + nativePaddedBorder;
+            const qreal deviceScale = std::max<qreal>(1.0, devicePixelRatioF());
+            const int layoutInsetX = std::max(
+                0,
+                static_cast<int>(std::lround(static_cast<qreal>(nativeFrameX) / deviceScale)));
+            const int layoutInsetY = std::max(
+                0,
+                static_cast<int>(std::lround(static_cast<qreal>(nativeFrameY) / deviceScale)));
+            maximizedLayoutMargins = QMargins(
+                layoutInsetX,
+                layoutInsetY,
+                layoutInsetX,
+                layoutInsetY);
+        }
+    }
+#endif
+    if (m_mainRootLayout != nullptr
+        && m_mainRootLayout->contentsMargins() != maximizedLayoutMargins)
+    {
+        m_mainRootLayout->setContentsMargins(maximizedLayoutMargins);
     }
 
     const bool shouldShowBorders =
