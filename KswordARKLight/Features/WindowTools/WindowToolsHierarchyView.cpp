@@ -55,6 +55,11 @@ constexpr int kColumnCount = 5;
 // a new parent means the tree changed under the walk, and a bound is the only
 // way to leave that loop.
 constexpr int kAncestorChainLimit = 32;
+constexpr DWORD kDwmwaExtendedFrameBounds = 9;
+constexpr DWORD kDwmwaCloaked = 14;
+constexpr DWORD kDwmCloakedApp = 0x00000001;
+constexpr DWORD kDwmCloakedShell = 0x00000002;
+constexpr DWORD kDwmCloakedInherited = 0x00000004;
 
 int Width(const RECT& rc) {
     return rc.right > rc.left ? static_cast<int>(rc.right - rc.left) : 0;
@@ -110,6 +115,15 @@ struct DpiApi final {
     AreDpiAwarenessContextsEqualFn contextsEqual = nullptr;
 };
 
+// DwmApi is deliberately resolved at runtime. DwmGetWindowAttribute is useful
+// evidence when it exists, but this diagnostic field must not add a load-time
+// dwmapi dependency or narrow the systems on which Lite starts.
+struct DwmApi final {
+    using GetWindowAttributeFn = HRESULT(WINAPI*)(HWND, DWORD, PVOID, DWORD);
+
+    GetWindowAttributeFn getWindowAttribute = nullptr;
+};
+
 const DpiApi& LoadDpiApi() {
     static const DpiApi api = [] {
         DpiApi loaded{};
@@ -127,6 +141,22 @@ const DpiApi& LoadDpiApi() {
             reinterpret_cast<DpiApi::GetDpiFromDpiAwarenessContextFn>(::GetProcAddress(user32, "GetDpiFromDpiAwarenessContext"));
         loaded.contextsEqual =
             reinterpret_cast<DpiApi::AreDpiAwarenessContextsEqualFn>(::GetProcAddress(user32, "AreDpiAwarenessContextsEqual"));
+        return loaded;
+    }();
+    return api;
+}
+
+const DwmApi& LoadDwmApi() {
+    static const DwmApi api = [] {
+        DwmApi loaded{};
+        HMODULE module = ::GetModuleHandleW(L"dwmapi.dll");
+        if (!module) {
+            module = ::LoadLibraryW(L"dwmapi.dll");
+        }
+        if (module) {
+            loaded.getWindowAttribute = reinterpret_cast<DwmApi::GetWindowAttributeFn>(
+                ::GetProcAddress(module, "DwmGetWindowAttribute"));
+        }
         return loaded;
     }();
     return api;
@@ -387,6 +417,113 @@ void AppendDpi(std::wstring& text, HWND hwnd) {
     }
 }
 
+std::wstring CloakStateText(const DWORD flags) {
+    if (flags == 0) {
+        return L"未 Cloak";
+    }
+    std::vector<std::wstring> sources;
+    if ((flags & kDwmCloakedApp) != 0) {
+        sources.push_back(L"应用");
+    }
+    if ((flags & kDwmCloakedShell) != 0) {
+        sources.push_back(L"Shell");
+    }
+    if ((flags & kDwmCloakedInherited) != 0) {
+        sources.push_back(L"继承");
+    }
+    std::wstring text = L"已 Cloak " + HexText(flags, 8);
+    if (!sources.empty()) {
+        text += L"（";
+        for (std::size_t index = 0; index < sources.size(); ++index) {
+            if (index != 0) {
+                text += L" / ";
+            }
+            text += sources[index];
+        }
+        text += L"）";
+    }
+    return text;
+}
+
+std::wstring HresultText(const HRESULT status) {
+    return HexText(static_cast<std::uint32_t>(status), 8);
+}
+
+std::wstring LayeredFlagsText(const DWORD flags) {
+    std::wstring text = HexText(flags, 8);
+    std::vector<std::wstring> names;
+    if ((flags & LWA_ALPHA) != 0) {
+        names.push_back(L"LWA_ALPHA");
+    }
+    if ((flags & LWA_COLORKEY) != 0) {
+        names.push_back(L"LWA_COLORKEY");
+    }
+    if (!names.empty()) {
+        text += L"（";
+        for (std::size_t index = 0; index < names.size(); ++index) {
+            if (index != 0) {
+                text += L" / ";
+            }
+            text += names[index];
+        }
+        text += L"）";
+    }
+    return text;
+}
+
+// AppendCompositionState adds a small, explicit read-only composition block to
+// the per-window report. Each query is independent so an unsupported DWM field
+// never hides the documented User32 evidence or turns into a page-level error.
+void AppendCompositionState(std::wstring& text, HWND hwnd) {
+    AppendSection(text, L"合成与分层状态（只读）");
+
+    const DwmApi& dwm = LoadDwmApi();
+    if (!dwm.getWindowAttribute) {
+        AppendField(text, L"DwmGetWindowAttribute", L"Unsupported（dwmapi.dll 或入口不可用）");
+    } else {
+        DWORD cloaked = 0;
+        const HRESULT cloakStatus = dwm.getWindowAttribute(hwnd, kDwmwaCloaked, &cloaked, sizeof(cloaked));
+        AppendField(text, L"DWMWA_CLOAKED", SUCCEEDED(cloakStatus)
+            ? CloakStateText(cloaked)
+            : L"Partial（HRESULT " + HresultText(cloakStatus) + L"）");
+
+        RECT extendedFrame{};
+        const HRESULT frameStatus = dwm.getWindowAttribute(
+            hwnd, kDwmwaExtendedFrameBounds, &extendedFrame, sizeof(extendedFrame));
+        AppendField(text, L"DWMWA_EXTENDED_FRAME_BOUNDS", SUCCEEDED(frameStatus)
+            ? RectText(extendedFrame)
+            : L"Partial（HRESULT " + HresultText(frameStatus) + L"）");
+    }
+
+    DWORD affinity = WDA_NONE;
+    ::SetLastError(ERROR_SUCCESS);
+    if (::GetWindowDisplayAffinity(hwnd, &affinity)) {
+        AppendField(text, L"GetWindowDisplayAffinity", DisplayAffinityText(affinity, true));
+    } else {
+        AppendField(text, L"GetWindowDisplayAffinity",
+            L"Partial（Win32=" + std::to_wstring(::GetLastError()) + L"）");
+    }
+
+    const DWORD exStyle = static_cast<DWORD>(::GetWindowLongPtrW(hwnd, GWL_EXSTYLE));
+    if ((exStyle & WS_EX_LAYERED) == 0) {
+        AppendField(text, L"GetLayeredWindowAttributes", L"不适用（未设置 WS_EX_LAYERED）");
+    } else {
+        COLORREF colorKey = 0;
+        BYTE alpha = 0;
+        DWORD flags = 0;
+        ::SetLastError(ERROR_SUCCESS);
+        if (::GetLayeredWindowAttributes(hwnd, &colorKey, &alpha, &flags)) {
+            AppendField(text, L"GetLayeredWindowAttributes",
+                L"Alpha=" + std::to_wstring(alpha) +
+                L"  ColorKey=" + HexText(colorKey, 8) +
+                L"  Flags=" + LayeredFlagsText(flags));
+        } else {
+            AppendField(text, L"GetLayeredWindowAttributes",
+                L"Partial（Win32=" + std::to_wstring(::GetLastError()) + L"）");
+        }
+    }
+}
+
 std::wstring BuildHierarchyReport(HWND hwnd) {
     if (!hwnd) {
         return L"在左侧选择一个窗口，这里会显示它的祖先链、Z 序、样式位、类信息、几何与 DPI 感知上下文。";
@@ -403,6 +540,7 @@ std::wstring BuildHierarchyReport(HWND hwnd) {
     AppendClassInfo(text, hwnd);
     AppendGeometry(text, hwnd);
     AppendDpi(text, hwnd);
+    AppendCompositionState(text, hwnd);
     return text;
 }
 
