@@ -24,6 +24,7 @@
 #include <memory>
 #include <string>
 #include <cstring>
+#include <climits>
 #include <cstdint>
 #include <sstream>
 #include <unordered_map>
@@ -67,6 +68,7 @@ constexpr UINT kWindowMenuBlockCapture = 62615;
 constexpr UINT kWindowMenuExcludeFromCapture = 62616;
 constexpr UINT kWindowMenuOpenProcess = 62617;
 constexpr UINT kWindowMenuOpenImageDirectory = 62618;
+constexpr UINT kWindowMenuExportDetail = 62619;
 constexpr UINT kMsgWindowRefreshCompleted = WM_APP + 610;
 constexpr UINT kMsgWindowFilterCompleted = WM_APP + 611;
 constexpr UINT kMsgWindowDetailCompleted = WM_APP + 612;
@@ -254,11 +256,62 @@ std::vector<std::wstring> WindowColumnTitles(const WindowViewState& state) {
     return { L"类别", L"数据源", L"入口 / 对象", L"状态", L"说明" };
 }
 
+// AppendTsvCell appends one strictly single-line TSV cell. Inputs are the
+// current rendered string and an output buffer; tabs/newlines are flattened so
+// a copied window title or driver diagnostic cannot add columns or rows.
+void AppendTsvCell(std::wstring& output, const std::wstring& cell) {
+    for (const wchar_t character : cell) {
+        output.push_back(character == L'\t' || character == L'\r' || character == L'\n' ? L' ' : character);
+    }
+}
+
+// AppendTsvRow writes exactly columnCount cells from one retained display row.
+// The Window list keeps additional cells for filtering, but export intentionally
+// stops at the currently visible column count so headers and data remain aligned.
+void AppendTsvRow(std::wstring& output, const std::vector<std::wstring>& cells, const std::size_t columnCount) {
+    for (std::size_t column = 0U; column < columnCount; ++column) {
+        if (column != 0U) {
+            output.push_back(L'\t');
+        }
+        if (column < cells.size()) {
+            AppendTsvCell(output, cells[column]);
+        }
+    }
+    output += L"\r\n";
+}
+
+// BuildVisibleRowsTsv serializes the already-filtered display snapshot. It
+// never enumerates HWNDs or queries ArkDriverClient; normal window rows retain
+// extra supporting cells for in-page workflows, which are deliberately excluded
+// from this five-column visible export.
+std::wstring BuildVisibleRowsTsv(const WindowViewState& state) {
+    const std::vector<std::wstring> columns = WindowColumnTitles(state);
+    const auto& rows = state.virtualList.rows();
+    const auto& visibleIndexes = state.virtualList.visibleIndexes();
+    if (columns.empty() || visibleIndexes.empty()) {
+        return {};
+    }
+
+    std::wstring text;
+    bool wroteHeader = false;
+    for (const std::size_t index : visibleIndexes) {
+        if (index >= rows.size()) {
+            continue;
+        }
+        if (!wroteHeader) {
+            AppendTsvRow(text, columns, columns.size());
+            wroteHeader = true;
+        }
+        AppendTsvRow(text, rows[index].cells, columns.size());
+    }
+    return text;
+}
+
 void ExportVisibleRows(WindowViewState* state) {
     if (!state) {
         return;
     }
-    const std::wstring text = Ksword::Ui::BuildVisibleVirtualListTsv(WindowColumnTitles(*state), state->virtualList);
+    const std::wstring text = BuildVisibleRowsTsv(*state);
     if (text.empty()) {
         state->statusText = L"没有可导出的可见结果。";
         ::InvalidateRect(state->hwnd, nullptr, TRUE);
@@ -329,19 +382,96 @@ void AddDetailRow(HWND list, int row, const std::wstring& name, const std::wstri
 }
 
 // ListText returns one ListView cell as UTF-16 text. Inputs are control, row and
-// column indexes; processing uses a bounded local buffer; output is empty on
-// invalid input or blank cells.
+// column indexes; processing grows its buffer until the common control reports
+// a complete value, so detail exports do not silently truncate long diagnostics
+// or titles; output is empty on invalid input or a blank cell.
 std::wstring ListText(HWND list, int row, int column) {
     if (!list || row < 0 || column < 0) {
         return {};
     }
-    std::vector<wchar_t> buffer(4096, L'\0');
-    LVITEMW item{};
-    item.iSubItem = column;
-    item.cchTextMax = static_cast<int>(buffer.size());
-    item.pszText = buffer.data();
-    ListView_GetItemText(list, row, column, buffer.data(), static_cast<int>(buffer.size()));
-    return std::wstring(buffer.data());
+    std::vector<wchar_t> buffer(256, L'\0');
+    for (;;) {
+        LVITEMW item{};
+        item.iSubItem = column;
+        item.pszText = buffer.data();
+        item.cchTextMax = static_cast<int>(buffer.size());
+        const LRESULT copiedResult = ::SendMessageW(
+            list, LVM_GETITEMTEXTW, static_cast<WPARAM>(row), reinterpret_cast<LPARAM>(&item));
+        if (copiedResult < 0 || copiedResult > INT_MAX) {
+            return {};
+        }
+        const int copied = static_cast<int>(copiedResult);
+        if (copied < static_cast<int>(buffer.size()) - 1) {
+            return std::wstring(buffer.data(), static_cast<std::size_t>(copied));
+        }
+
+        // ListView_GetItemText returns cchTextMax - 1 when a buffer might have
+        // been filled. Grow and retry even when the cell happened to be exactly
+        // that long; only the larger read can prove the value was complete.
+        const std::size_t current = buffer.size();
+        if (current >= static_cast<std::size_t>(INT_MAX / 2)) {
+            // A common-control string cannot be read into a larger cchTextMax
+            // value. Returning empty is safer than exporting a partial value.
+            return {};
+        }
+        buffer.assign(current * 2U, L'\0');
+    }
+}
+
+// BuildRenderedDetailTsv serializes only the property/value strings presently
+// shown in the detail ListView. It neither revalidates the HWND nor calls the
+// driver, so an export remains evidence for the exact R3/R0 snapshot the user
+// can see, including an Unsupported or Partial result.
+std::wstring BuildRenderedDetailTsv(HWND detailList) {
+    const int rows = detailList ? ListView_GetItemCount(detailList) : 0;
+    if (rows <= 0) {
+        return {};
+    }
+
+    std::wstring text;
+    AppendTsvCell(text, L"Property");
+    text.push_back(L'\t');
+    AppendTsvCell(text, L"Value");
+    text += L"\r\n";
+    for (int row = 0; row < rows; ++row) {
+        AppendTsvCell(text, ListText(detailList, row, 0));
+        text.push_back(L'\t');
+        AppendTsvCell(text, ListText(detailList, row, 1));
+        text += L"\r\n";
+    }
+    return text;
+}
+
+// ExportCurrentDetail persists the already-rendered window/Win32k detail as
+// UTF-8 TSV. Inputs are page state and user-selected output path; it performs
+// no new R3 inspection, ArkDriverClient request, privilege change, or path
+// navigation. SaveUtf8TextFileWithDialog also records the exact text in the
+// existing evidence session after a successful write.
+void ExportCurrentDetail(WindowViewState* state) {
+    if (!state) {
+        return;
+    }
+    const std::wstring text = BuildRenderedDetailTsv(state->detailList);
+    if (text.empty()) {
+        state->statusText = L"没有可导出的当前窗口/Win32k 详情。";
+        ::InvalidateRect(state->hwnd, nullptr, TRUE);
+        return;
+    }
+
+    std::wstring error;
+    switch (Ksword::Ui::SaveUtf8TextFileWithDialog(state->hwnd, L"window_detail.tsv", L"导出窗口/Win32k 详情",
+        L"TSV (*.tsv)\0*.tsv\0All Files (*.*)\0*.*\0", L"tsv", text, &error)) {
+    case Ksword::Ui::SaveTextFileResult::Saved:
+        state->statusText = L"当前窗口/Win32k 详情已导出，并已记录到证据会话。";
+        break;
+    case Ksword::Ui::SaveTextFileResult::Cancelled:
+        state->statusText = L"已取消导出当前窗口/Win32k 详情。";
+        break;
+    case Ksword::Ui::SaveTextFileResult::Failed:
+        state->statusText = L"导出当前窗口/Win32k 详情失败：" + error;
+        break;
+    }
+    ::InvalidateRect(state->hwnd, nullptr, TRUE);
 }
 
 // CopyText writes Unicode text to the clipboard. Inputs are owner HWND and text;
@@ -1211,8 +1341,15 @@ void ShowDetailContextMenu(WindowViewState* state, POINT screenPoint) {
     ::AppendMenuW(menu, MF_STRING | (selected >= 0 ? 0U : MF_GRAYED), kWindowMenuCopyDetailCell, L"复制单元格");
     ::AppendMenuW(menu, MF_STRING | (selected >= 0 ? 0U : MF_GRAYED), kWindowMenuCopyDetailRow, L"复制行");
     ::AppendMenuW(menu, MF_STRING | (ListView_GetItemCount(state->detailList) > 0 ? 0U : MF_GRAYED), kWindowMenuCopyDetailVisible, L"复制可见结果");
+    ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    ::AppendMenuW(menu, MF_STRING | (ListView_GetItemCount(state->detailList) > 0 ? 0U : MF_GRAYED),
+        kWindowMenuExportDetail, L"导出当前详情为 TSV");
     const UINT command = ::TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, screenPoint.x, screenPoint.y, 0, state->hwnd, nullptr);
     ::DestroyMenu(menu);
+    if (command == kWindowMenuExportDetail) {
+        ExportCurrentDetail(state);
+        return;
+    }
     std::wstring text;
     if (command == kWindowMenuCopyDetailCell && selected >= 0) {
         text = ListText(state->detailList, selected, std::max(0, hit.iSubItem));
@@ -1391,6 +1528,7 @@ void ShowWindowContextMenu(WindowViewState* state, POINT screenPoint) {
 
     const bool hasWindow = state->viewMode == WindowViewMode::WindowList && SelectedWindow(state) != nullptr;
     const bool hasRow = ListView_GetNextItem(state->windowList, -1, LVNI_SELECTED) >= 0;
+    const bool hasDetailRows = state->detailList && ListView_GetItemCount(state->detailList) > 0;
     const WindowSnapshotRow* investigationRow = SelectedWindowSnapshot(state);
     const AuditEntry* auditInvestigationRow = SelectedAuditEntry(state);
     const bool canOpenProcess = (investigationRow != nullptr && investigationRow->processId != 0U) ||
@@ -1405,6 +1543,7 @@ void ShowWindowContextMenu(WindowViewState* state, POINT screenPoint) {
     if (detailMenu) {
         ::AppendMenuW(detailMenu, MF_STRING | (hasWindow ? 0U : MF_GRAYED), kWindowMenuRefreshDetail, L"刷新详细信息");
         ::AppendMenuW(detailMenu, MF_STRING | (hasRow ? 0U : MF_GRAYED), kWindowMenuCopyDetail, L"复制详细信息");
+        ::AppendMenuW(detailMenu, MF_STRING | (hasDetailRows ? 0U : MF_GRAYED), kWindowMenuExportDetail, L"导出当前详情为 TSV");
         ::AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(detailMenu), L"详细信息");
     }
     HMENU operationMenu = ::CreatePopupMenu();
@@ -1457,6 +1596,9 @@ void ShowWindowContextMenu(WindowViewState* state, POINT screenPoint) {
         break;
     case kWindowMenuCopyDetail:
         CopyCurrentDetail(state);
+        break;
+    case kWindowMenuExportDetail:
+        ExportCurrentDetail(state);
         break;
     case kWindowMenuCopyCell:
         state->statusText = CopyText(state->hwnd, CopyVirtualCell(state)) ? L"已复制单元格。" : L"复制单元格失败。";
