@@ -12801,7 +12801,27 @@ QString MainWindow::buildAppearanceOverlayStyleSheet(
             .arg(primaryTextColor)
             .arg(borderColorText);
 
-    const QString kernelDockStyle = kernelDockContainerStyle + kernelDockContentStyle;
+    // 对象命名空间总览底部的结构视图是详情文本的派生呈现，不应被 KernelDock
+    // 的通用表格实底规则覆盖；保持透明，让它继承详情区域的底色。
+    const QString objectNamespaceStructuredViewStyle = QStringLiteral(
+        "ads--CDockWidget#ksDock_kernel QWidget#KernelDockRoot "
+        "#ks_object_namespace_detail_editor QScrollArea,"
+        "ads--CDockWidget#ksDock_kernel QWidget#KernelDockRoot "
+        "#ks_object_namespace_detail_editor QScrollArea::viewport,"
+        "ads--CDockWidget#ksDock_kernel QWidget#KernelDockRoot "
+        "#ks_object_namespace_detail_editor QScrollArea QWidget,"
+        "ads--CDockWidget#ksDock_kernel QWidget#KernelDockRoot "
+        "#ks_object_namespace_detail_editor QTreeWidget,"
+        "ads--CDockWidget#ksDock_kernel QWidget#KernelDockRoot "
+        "#ks_object_namespace_detail_editor QTreeWidget::viewport{"
+        "  background:transparent !important;"
+        "  background-color:transparent !important;"
+        "  alternate-background-color:transparent !important;"
+        "}");
+
+    const QString kernelDockStyle = kernelDockContainerStyle
+        + kernelDockContentStyle
+        + objectNamespaceStructuredViewStyle;
 
     // tabPluginOpaqueStyle 作用：
     // - 让「插件」页始终保持主题实底，不参与 Dock 内容透明。

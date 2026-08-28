@@ -3159,7 +3159,8 @@ namespace
     }
 
     // enumerateProcessesByR0Driver 作用：
-    // - 通过 ArkDriverClient 获取内核侧进程列表；
+    // - 仅在 KswordARK 控制设备已就绪时，通过 ArkDriverClient 获取内核侧进程列表；
+    // - 驱动未加载的 R3 刷新不发送枚举 IOCTL，也不触发 R0 权限提示。
     // - 输出可用于“R3 列表 vs R0 列表”差异比对的数据。
     bool enumerateProcessesByR0Driver(
         std::vector<KernelProcessSnapshotEntry>* const processListOut,
@@ -3176,8 +3177,19 @@ namespace
         }
 
         const ksword::ark::DriverClient driverClient;
+        ksword::ark::DriverHandle driverHandle = driverClient.openSilently();
+        if (!driverHandle.isValid())
+        {
+            if (detailTextOut != nullptr)
+            {
+                *detailTextOut = "R0 driver device is not ready; kernel process comparison skipped";
+            }
+            return false;
+        }
+
         const ksword::ark::ProcessEnumResult enumResult = driverClient.enumerateProcesses(
-            KSWORD_ARK_ENUM_PROCESS_FLAG_SCAN_CID_TABLE);
+            KSWORD_ARK_ENUM_PROCESS_FLAG_SCAN_CID_TABLE,
+            &driverHandle);
         if (!enumResult.io.ok)
         {
             if (detailTextOut != nullptr)
@@ -6403,7 +6415,7 @@ void ProcessDock::requestAsyncRefresh(const bool forceRefresh)
     // 静态详情预算按“当前是否真的显示了需要打开进程才能补齐的列”判定，
     // 而不是绑定在某个具体视图上：用户在任意视图手动加上命令行/描述列时同样需要补齐。
     const bool detailModeEnabled = isStaticDetailIntensiveViewActive();
-    // 每轮都尝试 R0/R3 对比；驱动不可用时现有结果链路保留 R3 列表并提供诊断信息。
+    // 每轮在驱动控制设备就绪时进行 R0/R3 对比；R3 状态仅保留用户态列表并静默跳过。
     constexpr bool queryKernelProcessList = true;
     const bool isFirstRefresh = m_cacheByIdentity.empty();
     const int staticDetailFillBudget =
