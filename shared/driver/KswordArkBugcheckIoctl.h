@@ -240,3 +240,133 @@ typedef struct _KSWORD_ARK_BUGCHECK_GUARD_RESPONSE
     unsigned char originalBytes[KSWORD_ARK_BUGCHECK_GUARD_HOOK_BYTES];
     unsigned char hookBytes[KSWORD_ARK_BUGCHECK_GUARD_HOOK_BYTES];
 } KSWORD_ARK_BUGCHECK_GUARD_RESPONSE;
+
+// Bugcheck Shield: PatchGuard-safe multi-stage bugcheck buffer.
+//
+// The Shield is an alternative buffer backend inspired by publicly circulated
+// reverse-engineering notes on private-slot bugcheck-suppression drivers.
+// Those samples hook undocumented ntoskrnl function-pointer slots and wait
+// forever on unsignaled events; that design fails Windows integrity checks
+// and cannot be presented as a supported feature. The Shield instead uses
+// only documented KeRegisterBugCheckCallback / KeRegisterBugCheckReasonCallback
+// entry points. PatchGuard has no visibility into these APIs, so the Shield
+// is guaranteed to leave the kernel image untouched.
+//
+// The Shield stages a bounded delay across up to four reason callbacks so
+// external observers (screenshot capture, out-of-band logging, remote
+// telemetry) receive a longer window before the actual reboot. It never
+// modifies private kernel state, never suppresses the underlying bugcheck,
+// and always yields control back to Windows so a normal dump can be written.
+#define KSWORD_ARK_BUGCHECK_SHIELD_PROTOCOL_VERSION 1UL
+#define KSWORD_ARK_IOCTL_FUNCTION_CONFIGURE_BUGCHECK_SHIELD 0x8FEUL
+
+#define IOCTL_KSWORD_ARK_CONFIGURE_BUGCHECK_SHIELD \
+    CTL_CODE( \
+        KSWORD_ARK_IOCTL_DEVICE_TYPE, \
+        KSWORD_ARK_IOCTL_FUNCTION_CONFIGURE_BUGCHECK_SHIELD, \
+        METHOD_BUFFERED, \
+        FILE_WRITE_ACCESS)
+
+// Fixed-length action set. QUERY inspects state without altering it; ENABLE
+// registers all requested reason callbacks; DISABLE deregisters everything
+// and drains any in-flight callback invocations before returning.
+#define KSWORD_ARK_BUGCHECK_SHIELD_ACTION_QUERY   0UL
+#define KSWORD_ARK_BUGCHECK_SHIELD_ACTION_ENABLE  1UL
+#define KSWORD_ARK_BUGCHECK_SHIELD_ACTION_DISABLE 2UL
+
+// Enabling the Shield requires an explicit UI confirmation flag plus a
+// well-known token, mirroring the KSword guard contract. This prevents an
+// accidental or headless enable from installing crash-time callbacks.
+#define KSWORD_ARK_BUGCHECK_SHIELD_FLAG_UI_CONFIRMED  0x00000001UL
+#define KSWORD_ARK_BUGCHECK_SHIELD_CONFIRMATION_TOKEN 0x4C48534BUL /* 'KSHL' */
+
+// Callback reason bitmask. R3 selects which reasons to register; every
+// selected reason must succeed or the enable fails atomically.
+#define KSWORD_ARK_BUGCHECK_SHIELD_REASON_CLASSIC              0x00000001UL
+#define KSWORD_ARK_BUGCHECK_SHIELD_REASON_SECONDARY_DUMP_DATA  0x00000002UL
+#define KSWORD_ARK_BUGCHECK_SHIELD_REASON_DUMP_IO              0x00000004UL
+#define KSWORD_ARK_BUGCHECK_SHIELD_REASON_ADD_PAGES            0x00000008UL
+#define KSWORD_ARK_BUGCHECK_SHIELD_REASON_ALL \
+    (KSWORD_ARK_BUGCHECK_SHIELD_REASON_CLASSIC | \
+     KSWORD_ARK_BUGCHECK_SHIELD_REASON_SECONDARY_DUMP_DATA | \
+     KSWORD_ARK_BUGCHECK_SHIELD_REASON_DUMP_IO | \
+     KSWORD_ARK_BUGCHECK_SHIELD_REASON_ADD_PAGES)
+
+// Buffer budgets. Each active callback contributes up to per-stage seconds
+// of stall; the total is capped so a slow storage stack or watchdog cannot
+// be starved. Values are validated in the driver and clamped as required.
+#define KSWORD_ARK_BUGCHECK_SHIELD_STAGE_MIN_SECONDS  0UL
+#define KSWORD_ARK_BUGCHECK_SHIELD_STAGE_MAX_SECONDS  8UL
+#define KSWORD_ARK_BUGCHECK_SHIELD_TOTAL_MAX_SECONDS  16UL
+#define KSWORD_ARK_BUGCHECK_SHIELD_DEFAULT_STAGE_SECONDS 3UL
+#define KSWORD_ARK_BUGCHECK_SHIELD_DEFAULT_TOTAL_SECONDS 10UL
+
+// Status codes returned to R3. INACTIVE and ACTIVE describe the primary
+// mode; the remaining values describe why an enable was refused.
+#define KSWORD_ARK_BUGCHECK_SHIELD_STATUS_OK                  0UL
+#define KSWORD_ARK_BUGCHECK_SHIELD_STATUS_INACTIVE            1UL
+#define KSWORD_ARK_BUGCHECK_SHIELD_STATUS_ACTIVE              2UL
+#define KSWORD_ARK_BUGCHECK_SHIELD_STATUS_CONFIRMATION_NEEDED 3UL
+#define KSWORD_ARK_BUGCHECK_SHIELD_STATUS_UNSUPPORTED         4UL
+#define KSWORD_ARK_BUGCHECK_SHIELD_STATUS_BUSY                5UL
+#define KSWORD_ARK_BUGCHECK_SHIELD_STATUS_REGISTRATION_FAILED 6UL
+#define KSWORD_ARK_BUGCHECK_SHIELD_STATUS_INVALID_REQUEST     7UL
+
+// State flag bitmap: mirrors what the Shield has actually installed.
+#define KSWORD_ARK_BUGCHECK_SHIELD_STATE_ACTIVE                0x00000001UL
+#define KSWORD_ARK_BUGCHECK_SHIELD_STATE_FIRED                 0x00000002UL
+#define KSWORD_ARK_BUGCHECK_SHIELD_STATE_CLASSIC_REGISTERED    0x00000004UL
+#define KSWORD_ARK_BUGCHECK_SHIELD_STATE_SECONDARY_REGISTERED  0x00000008UL
+#define KSWORD_ARK_BUGCHECK_SHIELD_STATE_DUMPIO_REGISTERED     0x00000010UL
+#define KSWORD_ARK_BUGCHECK_SHIELD_STATE_ADDPAGES_REGISTERED   0x00000020UL
+
+// Bounded timeline reported back to R3. Each callback records reason id,
+// bug-check code, CPU and 100ns duration. The ring is intentionally small
+// and only committed after the callback returns.
+#define KSWORD_ARK_BUGCHECK_SHIELD_TIMELINE_ENTRIES 16UL
+
+typedef struct _KSWORD_ARK_BUGCHECK_SHIELD_TIMELINE_ENTRY
+{
+    unsigned long reason;
+    unsigned long bugcheckCode;
+    unsigned long cpu;
+    unsigned long stalledMilliseconds;
+} KSWORD_ARK_BUGCHECK_SHIELD_TIMELINE_ENTRY;
+
+// Request layout. Fields default to 0; ENABLE fills reasonMask plus stage
+// and total seconds. Reserved fields must be zero and are rejected otherwise
+// so future versions can safely repurpose them.
+typedef struct _KSWORD_ARK_BUGCHECK_SHIELD_REQUEST
+{
+    unsigned long size;
+    unsigned long version;
+    unsigned long action;
+    unsigned long flags;
+    unsigned long confirmationToken;
+    unsigned long reasonMask;
+    unsigned long stageSeconds;
+    unsigned long totalSeconds;
+    unsigned long reserved0;
+    unsigned long reserved1;
+} KSWORD_ARK_BUGCHECK_SHIELD_REQUEST;
+
+// Response layout. The Shield never returns raw kernel pointers.
+typedef struct _KSWORD_ARK_BUGCHECK_SHIELD_RESPONSE
+{
+    unsigned long size;
+    unsigned long version;
+    unsigned long status;
+    unsigned long stateFlags;
+    unsigned long reasonMask;
+    unsigned long stageSeconds;
+    unsigned long totalSeconds;
+    unsigned long fireCount;
+    unsigned long timelineCount;
+    long lastStatus;
+    unsigned long reserved0;
+    unsigned long reserved1;
+    KSWORD_ARK_BUGCHECK_SHIELD_TIMELINE_ENTRY timeline
+        [KSWORD_ARK_BUGCHECK_SHIELD_TIMELINE_ENTRIES];
+} KSWORD_ARK_BUGCHECK_SHIELD_RESPONSE;
+
+

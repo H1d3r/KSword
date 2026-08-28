@@ -94,6 +94,9 @@
     <Filter Include="ksword">
       <UniqueIdentifier>{2970CB71-A7F5-55F3-930D-EDC176831B4F}</UniqueIdentifier>
     </Filter>
+    <Filter Include="ksword\file">
+      <UniqueIdentifier>{37D614DE-9801-5D38-AE41-78C337A5B6F3}</UniqueIdentifier>
+    </Filter>
     <Filter Include="ksword\string">
       <UniqueIdentifier>{11B7D9D1-747D-5D13-A410-986B80A3FFA3}</UniqueIdentifier>
     </Filter>
@@ -717,6 +720,9 @@
     <ClCompile Include="..\Ksword5.1\Ksword5.1\ArkDriverClient\ArkDriverSection.cpp">
       <Filter>ArkDriverClient</Filter>
     </ClCompile>
+    <ClCompile Include="..\Ksword5.1\Ksword5.1\ksword\file\pe_analyzer.cpp">
+      <Filter>ksword\file</Filter>
+    </ClCompile>
     <ClCompile Include="..\Ksword5.1\Ksword5.1\ksword\process\process.cpp">
       <Filter>ksword\process</Filter>
     </ClCompile>
@@ -1262,6 +1268,9 @@
     <None Include="..\Ksword5.1\Ksword5.1\ArkDriverClient\ArkRuntimeDynDataCatalog.inc">
       <Filter>ArkDriverClient</Filter>
     </None>
+    <ClInclude Include="..\Ksword5.1\Ksword5.1\ksword\file\pe_analyzer.h">
+      <Filter>ksword\file</Filter>
+    </ClInclude>
     <ClInclude Include="..\Ksword5.1\Ksword5.1\ksword\process\process.h">
       <Filter>ksword\process</Filter>
     </ClInclude>

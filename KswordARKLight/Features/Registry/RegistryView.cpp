@@ -4,6 +4,7 @@
 #include "RegistryModel.h"
 #include "../../Ui/AsyncTask.h"
 #include "../../Ui/Controls.h"
+#include "../../Ui/ExportUtil.h"
 #include "../../Ui/FilterBar.h"
 #include "../../Ui/ListViewUtil.h"
 #include "../../Ui/LoadingOverlay.h"
@@ -56,6 +57,7 @@ constexpr UINT kMenuRename = 68108;
 constexpr UINT kMenuCopyRow = 68110;
 constexpr UINT kMenuCopyVisible = 68111;
 constexpr UINT kMenuCopyCell = 68112;
+constexpr UINT kMenuExportVisible = 68113;
 constexpr UINT kMsgSnapshotCompleted = WM_APP + 560;
 constexpr UINT kMsgTreeChildrenCompleted = WM_APP + 561;
 constexpr UINT kMsgFilterCompleted = WM_APP + 562;
@@ -1157,6 +1159,44 @@ std::wstring RegistrySelectedCellText(const RegistryViewState& state) {
     return rows[source].cells[static_cast<std::size_t>(state.contextColumn)];
 }
 
+// ExportVisibleRegistrySnapshot writes only the values already materialized in
+// the current ListView. It never re-reads the registry, recursively exports a
+// key, or turns a partial R0 snapshot into a claimed .reg backup.
+void ExportVisibleRegistrySnapshot(RegistryViewState& state) {
+    if (!state.currentSnapshotReady) {
+        SetStatus(state, L"当前注册表快照尚未就绪，无法导出。");
+        return;
+    }
+
+    const std::wstring text = Ksword::Ui::BuildVisibleVirtualListTsv(
+        { L"名称", L"类型", L"数据", L"详情" }, state.list);
+    if (text.empty()) {
+        SetStatus(state, L"当前没有可导出的注册表可见值。");
+        return;
+    }
+
+    std::wstring error;
+    switch (Ksword::Ui::SaveUtf8TextFileWithDialog(
+        state.hwnd,
+        L"ksword-arklight-registry-visible.tsv",
+        L"导出当前可见注册表快照",
+        L"TSV (*.tsv)\0*.tsv\0All Files (*.*)\0*.*\0",
+        L"tsv",
+        text,
+        &error)) {
+    case Ksword::Ui::SaveTextFileResult::Saved:
+        SetStatus(state, L"已导出当前可见注册表快照 TSV。");
+        break;
+    case Ksword::Ui::SaveTextFileResult::Cancelled:
+        SetStatus(state, L"已取消导出当前可见注册表快照。");
+        break;
+    case Ksword::Ui::SaveTextFileResult::Failed:
+    default:
+        SetStatus(state, L"导出当前可见注册表快照失败：" + error);
+        break;
+    }
+}
+
 void ShowContextMenu(RegistryViewState& state, POINT screenPoint) {
     HMENU menu = ::CreatePopupMenu();
     if (!menu) {
@@ -1175,12 +1215,14 @@ void ShowContextMenu(RegistryViewState& state, POINT screenPoint) {
     }
     const bool hasSelection = SelectedEntry(state, nullptr, nullptr);
     const bool canOperate = state.currentSnapshotReady && !state.operationInProgress;
+    const bool canExportVisible = state.currentSnapshotReady && !state.list.visibleIndexes().empty();
     ::AppendMenuW(menu, MF_STRING, kMenuRefresh, L"刷新");
     ::AppendMenuW(menu, MF_STRING | (hasSelection ? 0U : MF_GRAYED), kMenuCopyName, L"复制名称");
     ::AppendMenuW(menu, MF_STRING | (hasSelection ? 0U : MF_GRAYED), kMenuCopyData, L"复制数据");
     ::AppendMenuW(menu, MF_STRING | (hasSelection ? 0U : MF_GRAYED), kMenuCopyCell, L"复制单元格");
     ::AppendMenuW(menu, MF_STRING | (hasSelection ? 0U : MF_GRAYED), kMenuCopyRow, L"复制行");
     ::AppendMenuW(menu, MF_STRING | (!state.list.visibleIndexes().empty() ? 0U : MF_GRAYED), kMenuCopyVisible, L"复制可见结果");
+    ::AppendMenuW(menu, MF_STRING | (canExportVisible ? 0U : MF_GRAYED), kMenuExportVisible, L"导出当前可见值 TSV");
     ::AppendMenuW(menu, MF_STRING | (canOperate ? 0U : MF_GRAYED), kMenuRead, L"读取值");
     ::AppendMenuW(menu, MF_STRING | (canOperate ? 0U : MF_GRAYED), kMenuWrite, L"写入值");
     ::AppendMenuW(menu, MF_STRING | (canOperate ? 0U : MF_GRAYED), kMenuCreateSubKey, L"创建子键");
@@ -1216,6 +1258,9 @@ void ShowContextMenu(RegistryViewState& state, POINT screenPoint) {
         break;
     case kMenuCopyVisible:
         SetStatus(state, CopyRegistryTextToClipboard(state.hwnd, RegistryRowsAsText(state, true)) ? L"已复制可见注册表结果。" : L"复制可见注册表结果失败。");
+        break;
+    case kMenuExportVisible:
+        ExportVisibleRegistrySnapshot(state);
         break;
     case kMenuRead:
         ReadCurrentValue(state);

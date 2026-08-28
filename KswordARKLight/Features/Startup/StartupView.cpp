@@ -193,12 +193,15 @@ std::wstring StableKeyFromListItem(const StartupViewState& state, int item) {
     return sourceIndex < rows.size() ? rows[sourceIndex].stableKey : std::wstring{};
 }
 
+void SetActionControlsEnabled(StartupViewState& state, bool enabled);
+
 void ShowDetail(StartupViewState& state, int modelIndex) {
+    const StartupEntry* entry = state.model.entryAt(modelIndex);
+    SetActionControlsEnabled(state, !state.actionInProgress);
     if (!state.detailList) {
         return;
     }
     ListView_DeleteAllItems(state.detailList);
-    const StartupEntry* entry = state.model.entryAt(modelIndex);
     if (!entry) {
         SetListText(state.detailList, 0, 0, L"选择");
         SetListText(state.detailList, 0, 1, L"未选择启动项");
@@ -211,10 +214,19 @@ void ShowDetail(StartupViewState& state, int modelIndex) {
     }
 }
 
+// EntryAllowsStartupActions separates mutable startup rows from read-only service
+// observations. It is used by both toolbar and context-menu state; StartupActions
+// independently enforces the same boundary for posted commands.
+bool EntryAllowsStartupActions(const StartupEntry* entry) {
+    return entry != nullptr && entry->kind != StartupEntryKind::DriverService &&
+        entry->kind != StartupEntryKind::RegistryOnlyService;
+}
+
 void SetActionControlsEnabled(StartupViewState& state, bool enabled) {
+    const bool allowActions = enabled && EntryAllowsStartupActions(SelectedEntry(state));
     for (HWND control : { state.enableButton, state.disableButton, state.deleteButton, state.openButton }) {
         if (control) {
-            ::EnableWindow(control, enabled);
+            ::EnableWindow(control, allowActions);
         }
     }
 }
@@ -362,6 +374,9 @@ void BeginStartupRefresh(StartupViewState& state) {
             state.model.setEntries(std::move(snapshot->entries));
             BuildRows(state);
             state.statusText = L"已加载 " + std::to_wstring(entryCount) + L" 个启动项。";
+            if (!snapshot->diagnosticText.empty() && snapshot->diagnosticText != L"OK") {
+                state.statusText += L" " + snapshot->diagnosticText;
+            }
             RequestStartupFilter(state,
                 state.filterBar ? Ksword::Ui::GetFilterBarText(state.filterBar) : state.filterQuery,
                 selectedStableKey,
@@ -397,6 +412,14 @@ void RunAction(StartupViewState& state, int commandId) {
     const StartupEntry* selected = SelectedEntry(state);
     if (!selected) {
         state.statusText = L"未选择启动项。";
+        ::InvalidateRect(state.hwnd, nullptr, TRUE);
+        return;
+    }
+    if (!EntryAllowsStartupActions(selected)) {
+        state.statusText = selected->kind == StartupEntryKind::RegistryOnlyService
+            ? L"该服务本次未由 SCM 返回（可能受访问过滤），仅供只读调查，不能启用、禁用、删除或打开位置。"
+            : L"驱动启动项仅供 SCM 只读调查，不能启用、禁用、删除或打开位置。";
+        SetActionControlsEnabled(state, false);
         ::InvalidateRect(state.hwnd, nullptr, TRUE);
         return;
     }
@@ -570,6 +593,12 @@ StartupProvenanceRoute BuildStartupProvenanceRoute(const StartupEntry& entry) {
     case StartupEntryKind::Service:
         route.unavailableText = L"服务启动项没有可精确导航的注册表或文件存储来源。";
         return route;
+    case StartupEntryKind::DriverService:
+        route.unavailableText = L"驱动启动项只显示 SCM 快照；Lite 不会打开或管理驱动位置。";
+        return route;
+    case StartupEntryKind::RegistryOnlyService:
+        route.unavailableText = L"该服务本次未由 SCM 返回（可能受访问过滤）；Lite 不会打开或管理该位置。";
+        return route;
     }
     return route;
 }
@@ -608,8 +637,9 @@ void ShowStartupContextMenu(StartupViewState& state, POINT screenPoint) {
         ShowDetail(state, SelectedModelIndex(state));
     }
 
-    const bool hasEntry = SelectedEntry(state) != nullptr && !state.actionInProgress;
     const StartupEntry* selectedEntry = SelectedEntry(state);
+    const bool hasEntry = selectedEntry != nullptr && !state.actionInProgress;
+    const bool canRunActions = hasEntry && EntryAllowsStartupActions(selectedEntry);
     const StartupProvenanceRoute provenance = selectedEntry
         ? BuildStartupProvenanceRoute(*selectedEntry)
         : StartupProvenanceRoute{};
@@ -620,10 +650,10 @@ void ShowStartupContextMenu(StartupViewState& state, POINT screenPoint) {
     ::AppendMenuW(menu, MF_STRING, kStartupMenuRefresh, L"刷新");
     HMENU actionMenu = ::CreatePopupMenu();
     if (actionMenu) {
-        ::AppendMenuW(actionMenu, MF_STRING | (hasEntry ? 0U : MF_GRAYED), kStartupMenuEnable, L"启用");
-        ::AppendMenuW(actionMenu, MF_STRING | (hasEntry ? 0U : MF_GRAYED), kStartupMenuDisable, L"禁用");
-        ::AppendMenuW(actionMenu, MF_STRING | (hasEntry ? 0U : MF_GRAYED), kStartupMenuDelete, L"删除");
-        ::AppendMenuW(actionMenu, MF_STRING | (hasEntry ? 0U : MF_GRAYED), kStartupMenuOpen, L"打开位置");
+        ::AppendMenuW(actionMenu, MF_STRING | (canRunActions ? 0U : MF_GRAYED), kStartupMenuEnable, L"启用");
+        ::AppendMenuW(actionMenu, MF_STRING | (canRunActions ? 0U : MF_GRAYED), kStartupMenuDisable, L"禁用");
+        ::AppendMenuW(actionMenu, MF_STRING | (canRunActions ? 0U : MF_GRAYED), kStartupMenuDelete, L"删除");
+        ::AppendMenuW(actionMenu, MF_STRING | (canRunActions ? 0U : MF_GRAYED), kStartupMenuOpen, L"打开位置");
         ::AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(actionMenu), L"启动项操作");
     }
     HMENU investigationMenu = ::CreatePopupMenu();
@@ -709,6 +739,7 @@ bool CreateChildControls(StartupViewState& state) {
     AddColumn(state.detailList, 0, L"属性", 170);
     AddColumn(state.detailList, 1, L"值", 760);
     state.loadingOverlay = Ksword::Ui::CreateLoadingOverlay(state.hwnd, kLoadingOverlayId, { 0, 0, 1, 1 });
+    SetActionControlsEnabled(state, false);
     return true;
 }
 
