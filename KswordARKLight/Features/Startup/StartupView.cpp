@@ -214,11 +214,12 @@ void ShowDetail(StartupViewState& state, int modelIndex) {
     }
 }
 
-// EntryAllowsStartupActions separates the existing mutable startup rows from
-// SCM driver observations. It is used by both toolbar and context-menu state;
-// StartupActions independently enforces the same boundary for posted commands.
+// EntryAllowsStartupActions separates mutable startup rows from read-only service
+// observations. It is used by both toolbar and context-menu state; StartupActions
+// independently enforces the same boundary for posted commands.
 bool EntryAllowsStartupActions(const StartupEntry* entry) {
-    return entry != nullptr && entry->kind != StartupEntryKind::DriverService;
+    return entry != nullptr && entry->kind != StartupEntryKind::DriverService &&
+        entry->kind != StartupEntryKind::RegistryOnlyService;
 }
 
 void SetActionControlsEnabled(StartupViewState& state, bool enabled) {
@@ -373,6 +374,9 @@ void BeginStartupRefresh(StartupViewState& state) {
             state.model.setEntries(std::move(snapshot->entries));
             BuildRows(state);
             state.statusText = L"已加载 " + std::to_wstring(entryCount) + L" 个启动项。";
+            if (!snapshot->diagnosticText.empty() && snapshot->diagnosticText != L"OK") {
+                state.statusText += L" " + snapshot->diagnosticText;
+            }
             RequestStartupFilter(state,
                 state.filterBar ? Ksword::Ui::GetFilterBarText(state.filterBar) : state.filterQuery,
                 selectedStableKey,
@@ -412,7 +416,9 @@ void RunAction(StartupViewState& state, int commandId) {
         return;
     }
     if (!EntryAllowsStartupActions(selected)) {
-        state.statusText = L"驱动启动项仅供 SCM 只读调查，不能启用、禁用、删除或打开位置。";
+        state.statusText = selected->kind == StartupEntryKind::RegistryOnlyService
+            ? L"该服务本次未由 SCM 返回（可能受访问过滤），仅供只读调查，不能启用、禁用、删除或打开位置。"
+            : L"驱动启动项仅供 SCM 只读调查，不能启用、禁用、删除或打开位置。";
         SetActionControlsEnabled(state, false);
         ::InvalidateRect(state.hwnd, nullptr, TRUE);
         return;
@@ -589,6 +595,9 @@ StartupProvenanceRoute BuildStartupProvenanceRoute(const StartupEntry& entry) {
         return route;
     case StartupEntryKind::DriverService:
         route.unavailableText = L"驱动启动项只显示 SCM 快照；Lite 不会打开或管理驱动位置。";
+        return route;
+    case StartupEntryKind::RegistryOnlyService:
+        route.unavailableText = L"该服务本次未由 SCM 返回（可能受访问过滤）；Lite 不会打开或管理该位置。";
         return route;
     }
     return route;

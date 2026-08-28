@@ -17,6 +17,12 @@ constexpr wchar_t kRunKey[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Ru
 constexpr wchar_t kRunOnceKey[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce";
 constexpr wchar_t kDisabledRegistryBase[] = L"Software\\KswordARKLight\\DisabledStartup\\Registry";
 constexpr wchar_t kDisabledStartupFolderBase[] = L"KswordARKLight\\DisabledStartup\\StartupFolder";
+constexpr wchar_t kServicesRegistryRoot[] = L"SYSTEM\\CurrentControlSet\\Services";
+constexpr DWORD kServiceUserServiceBit = 0x00000040U;
+constexpr DWORD kServiceUserServiceInstanceBit = 0x00000080U;
+constexpr DWORD kMaxServiceEnumerationPages = 4096;
+constexpr DWORD kMaxServiceEnumerationPageBytes = 64U * 1024U;
+constexpr DWORD kMaxServiceRegistryStringBytes = 1024U * 1024U;
 
 // RegKey owns an HKEY opened by Win32 registry APIs. Inputs are HKEY handles;
 // processing closes them at scope exit; get returns the raw handle without
@@ -162,6 +168,40 @@ RegKey OpenRegistryKey(HKEY root, const std::wstring& subKey, REGSAM access, DWO
         return RegKey();
     }
     return RegKey(raw);
+}
+
+// ReadRegistryDword reads one exact REG_DWORD value. Inputs are an already-open
+// key and value name; output is false when the value is absent or has a different
+// type, leaving value unchanged.
+bool ReadRegistryDword(HKEY key, const wchar_t* valueName, DWORD& value) {
+    DWORD type = 0;
+    DWORD bytes = sizeof(value);
+    DWORD candidate = 0;
+    if (::RegQueryValueExW(key, valueName, nullptr, &type, reinterpret_cast<BYTE*>(&candidate), &bytes) != ERROR_SUCCESS ||
+        type != REG_DWORD || bytes != sizeof(candidate)) {
+        return false;
+    }
+    value = candidate;
+    return true;
+}
+
+// ReadRegistryString reads one REG_SZ or REG_EXPAND_SZ value into an owned
+// string. Inputs are an already-open key and value name; output is empty for a
+// missing, non-string, or malformed value and never expands environment text.
+std::wstring ReadRegistryString(HKEY key, const wchar_t* valueName) {
+    DWORD type = 0;
+    DWORD bytes = 0;
+    if (::RegQueryValueExW(key, valueName, nullptr, &type, nullptr, &bytes) != ERROR_SUCCESS ||
+        (type != REG_SZ && type != REG_EXPAND_SZ) || bytes == 0 || bytes > kMaxServiceRegistryStringBytes) {
+        return {};
+    }
+    std::vector<wchar_t> buffer((bytes / sizeof(wchar_t)) + 2, L'\0');
+    DWORD queriedBytes = bytes;
+    if (::RegQueryValueExW(key, valueName, nullptr, &type, reinterpret_cast<BYTE*>(buffer.data()), &queriedBytes) != ERROR_SUCCESS ||
+        (type != REG_SZ && type != REG_EXPAND_SZ)) {
+        return {};
+    }
+    return std::wstring(buffer.data());
 }
 
 // AddProperty appends a detail property when the value exists. Inputs are entry,
@@ -426,44 +466,18 @@ std::wstring DriverServiceTypeText(DWORD serviceType) {
     return L"Driver";
 }
 
-// EnumerateServices appends Service Control Manager rows. Input is output vector;
-// processing queries Win32 services plus kernel/file-system drivers and their
-// configurations. Driver rows are marked read-only before they reach the view.
-// No driver IOCTL, load/unload request, or configuration change is issued.
-void EnumerateServices(std::vector<StartupEntry>& entries) {
-    ServiceHandle scm(::OpenSCManagerW(nullptr, nullptr, SC_MANAGER_ENUMERATE_SERVICE));
-    if (!scm.valid()) {
-        StartupEntry error;
-        error.kind = StartupEntryKind::Service;
-        error.scope = StartupEntryScope::LocalMachine;
-        error.state = StartupEntryState::Unknown;
-        error.name = L"Service enumeration failed";
-        error.description = Ksword::Core::LastErrorMessage();
-        entries.push_back(std::move(error));
-        return;
-    }
-
-    DWORD bytesNeeded = 0;
-    DWORD servicesReturned = 0;
-    DWORD resumeHandle = 0;
-    ::EnumServicesStatusExW(scm.get(), SC_ENUM_PROCESS_INFO, SERVICE_WIN32 | SERVICE_DRIVER, SERVICE_STATE_ALL,
-        nullptr, 0, &bytesNeeded, &servicesReturned, &resumeHandle, nullptr);
-    if (bytesNeeded == 0) {
-        return;
-    }
-
-    std::vector<BYTE> buffer(bytesNeeded + 4096, 0);
-    resumeHandle = 0;
-    if (!::EnumServicesStatusExW(scm.get(), SC_ENUM_PROCESS_INFO, SERVICE_WIN32 | SERVICE_DRIVER, SERVICE_STATE_ALL,
-            buffer.data(), static_cast<DWORD>(buffer.size()), &bytesNeeded, &servicesReturned, &resumeHandle, nullptr)) {
-        return;
-    }
-
-    auto* services = reinterpret_cast<ENUM_SERVICE_STATUS_PROCESSW*>(buffer.data());
+// AppendServiceRows adds one SCM enumeration page and records the service short
+// names returned by that same page. Inputs are the already-filled SCM buffer and
+// a query-only SCM handle; output rows retain the existing action boundaries.
+void AppendServiceRows(std::vector<StartupEntry>& entries, const ENUM_SERVICE_STATUS_PROCESSW* services,
+    DWORD servicesReturned, SC_HANDLE scm, std::vector<std::wstring>& scmServiceNames) {
     for (DWORD index = 0; index < servicesReturned; ++index) {
         const ENUM_SERVICE_STATUS_PROCESSW& service = services[index];
+        if (!service.lpServiceName || !*service.lpServiceName) {
+            continue;
+        }
         const bool isDriver = (service.ServiceStatusProcess.dwServiceType & SERVICE_DRIVER) != 0U;
-        ServiceHandle handle(::OpenServiceW(scm.get(), service.lpServiceName, SERVICE_QUERY_CONFIG));
+        ServiceHandle handle(::OpenServiceW(scm, service.lpServiceName, SERVICE_QUERY_CONFIG));
         DWORD startType = SERVICE_DEMAND_START;
         std::wstring binaryPath;
         std::wstring description;
@@ -505,7 +519,7 @@ void EnumerateServices(std::vector<StartupEntry>& entries) {
         entry.command = binaryPath;
         entry.location = L"Service Control Manager";
         entry.description = description;
-        entry.serviceName = service.lpServiceName ? service.lpServiceName : L"";
+        entry.serviceName = service.lpServiceName;
         entry.serviceStartType = startType;
         AddProperty(entry, L"Service name", entry.serviceName);
         if (isDriver) {
@@ -518,7 +532,173 @@ void EnumerateServices(std::vector<StartupEntry>& entries) {
             AddProperty(entry, L"Start type", ServiceStartText(startType));
             AddProperty(entry, L"Current state", std::to_wstring(service.ServiceStatusProcess.dwCurrentState));
         }
+        scmServiceNames.push_back(entry.serviceName);
         entries.push_back(std::move(entry));
+    }
+}
+
+// EnumerateServices appends every available SCM service/driver row while keeping
+// an exact per-pass short-name set for later registry cross-checking. It uses only
+// SC_MANAGER_ENUMERATE_SERVICE and SERVICE_QUERY_CONFIG; false means that the
+// returned SCM pages are incomplete and must not be used for mismatch findings.
+bool EnumerateServices(std::vector<StartupEntry>& entries, std::vector<std::wstring>& scmServiceNames) {
+    ServiceHandle scm(::OpenSCManagerW(nullptr, nullptr, SC_MANAGER_ENUMERATE_SERVICE));
+    if (!scm.valid()) {
+        StartupEntry error;
+        error.kind = StartupEntryKind::Service;
+        error.scope = StartupEntryScope::LocalMachine;
+        error.state = StartupEntryState::Unknown;
+        error.name = L"Service enumeration failed";
+        error.description = Ksword::Core::LastErrorMessage();
+        entries.push_back(std::move(error));
+        return false;
+    }
+
+    DWORD resumeHandle = 0;
+    for (DWORD page = 0; page < kMaxServiceEnumerationPages; ++page) {
+        DWORD bytesNeeded = 0;
+        DWORD servicesReturned = 0;
+        // A zero-byte probe is only sizing. Keep the live resume handle intact
+        // until the corresponding data-bearing call has consumed this page.
+        DWORD probeResumeHandle = resumeHandle;
+        if (::EnumServicesStatusExW(scm.get(), SC_ENUM_PROCESS_INFO, SERVICE_WIN32 | SERVICE_DRIVER, SERVICE_STATE_ALL,
+                nullptr, 0, &bytesNeeded, &servicesReturned, &probeResumeHandle, nullptr)) {
+            return true;
+        }
+        if (::GetLastError() != ERROR_MORE_DATA || bytesNeeded == 0) {
+            return false;
+        }
+
+        const DWORD pageBytes = std::min(bytesNeeded, kMaxServiceEnumerationPageBytes);
+        std::vector<BYTE> buffer(pageBytes, 0);
+        servicesReturned = 0;
+        const BOOL enumerated = ::EnumServicesStatusExW(scm.get(), SC_ENUM_PROCESS_INFO, SERVICE_WIN32 | SERVICE_DRIVER,
+            SERVICE_STATE_ALL, buffer.data(), static_cast<DWORD>(buffer.size()), &bytesNeeded, &servicesReturned, &resumeHandle, nullptr);
+        const DWORD error = enumerated ? ERROR_SUCCESS : ::GetLastError();
+        if (!enumerated && error != ERROR_MORE_DATA) {
+            return false;
+        }
+        AppendServiceRows(entries, reinterpret_cast<const ENUM_SERVICE_STATUS_PROCESSW*>(buffer.data()), servicesReturned,
+            scm.get(), scmServiceNames);
+        if (enumerated) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// ServiceNameWasReturned compares two SCM service short names case-insensitively.
+// Inputs are one completed enumeration's names and one registry subkey name;
+// output is true only when SCM actually returned that name in the same pass.
+bool ServiceNameWasReturned(const std::vector<std::wstring>& scmServiceNames, const std::wstring& serviceName) {
+    return std::any_of(scmServiceNames.cbegin(), scmServiceNames.cend(), [&serviceName](const std::wstring& candidate) {
+        return ::_wcsicmp(candidate.c_str(), serviceName.c_str()) == 0;
+    });
+}
+
+// IsUninstantiatedUserServiceTemplate excludes per-user service template records
+// that do not represent a running instance. Input is the registry Type value;
+// output follows the documented service type flags without calling SCM.
+bool IsUninstantiatedUserServiceTemplate(DWORD serviceType) {
+    return (serviceType & kServiceUserServiceBit) != 0U &&
+        (serviceType & kServiceUserServiceInstanceBit) == 0U;
+}
+
+// AppendRegistryOnlyServices enumerates Services registry records that were not
+// returned by a completed SCM pass. Inputs are the destination rows and SCM short
+// names; output is false when the root scan is incomplete, so callers make no
+// registry/SCM mismatch claim for that pass. All appended rows remain read-only.
+bool AppendRegistryOnlyServices(std::vector<StartupEntry>& entries, const std::vector<std::wstring>& scmServiceNames) {
+    RegKey servicesRoot = OpenRegistryKey(HKEY_LOCAL_MACHINE, kServicesRegistryRoot, KEY_READ, KEY_WOW64_64KEY);
+    if (!servicesRoot.valid()) {
+        return false;
+    }
+
+    std::vector<StartupEntry> registryOnlyEntries;
+    std::vector<wchar_t> serviceNameBuffer(256, L'\0');
+    for (DWORD index = 0;; ++index) {
+        DWORD serviceNameLength = static_cast<DWORD>(serviceNameBuffer.size() - 1);
+        FILETIME lastWriteTime{};
+        LSTATUS status = ::RegEnumKeyExW(servicesRoot.get(), index, serviceNameBuffer.data(), &serviceNameLength,
+            nullptr, nullptr, nullptr, &lastWriteTime);
+        while (status == ERROR_MORE_DATA && serviceNameBuffer.size() < 32768) {
+            serviceNameBuffer.resize(serviceNameBuffer.size() * 2, L'\0');
+            serviceNameLength = static_cast<DWORD>(serviceNameBuffer.size() - 1);
+            status = ::RegEnumKeyExW(servicesRoot.get(), index, serviceNameBuffer.data(), &serviceNameLength,
+                nullptr, nullptr, nullptr, &lastWriteTime);
+        }
+        if (status == ERROR_NO_MORE_ITEMS) {
+            for (StartupEntry& entry : registryOnlyEntries) {
+                entries.push_back(std::move(entry));
+            }
+            return true;
+        }
+        if (status != ERROR_SUCCESS) {
+            return false;
+        }
+
+        const std::wstring serviceName(serviceNameBuffer.data(), serviceNameLength);
+        if (serviceName.empty() || ServiceNameWasReturned(scmServiceNames, serviceName)) {
+            continue;
+        }
+
+        HKEY rawServiceKey = nullptr;
+        if (::RegOpenKeyExW(servicesRoot.get(), serviceName.c_str(), 0, KEY_READ, &rawServiceKey) != ERROR_SUCCESS) {
+            // Do not publish a partial cross-source result when an enumerated
+            // child cannot be read; the caller discards this pass's local rows.
+            return false;
+        }
+        RegKey serviceKey(rawServiceKey);
+        DWORD serviceType = 0;
+        if (!ReadRegistryDword(serviceKey.get(), L"Type", serviceType) ||
+            (serviceType & (SERVICE_DRIVER | SERVICE_WIN32)) == 0U ||
+            IsUninstantiatedUserServiceTemplate(serviceType)) {
+            continue;
+        }
+
+        DWORD startType = 0;
+        const bool hasStartType = ReadRegistryDword(serviceKey.get(), L"Start", startType);
+        DWORD errorControl = 0;
+        const bool hasErrorControl = ReadRegistryDword(serviceKey.get(), L"ErrorControl", errorControl);
+        DWORD delayedAutoStart = 0;
+        const bool hasDelayedAutoStart = ReadRegistryDword(serviceKey.get(), L"DelayedAutoStart", delayedAutoStart);
+        const std::wstring imagePath = ReadRegistryString(serviceKey.get(), L"ImagePath");
+        const std::wstring objectName = ReadRegistryString(serviceKey.get(), L"ObjectName");
+        std::wstring serviceDll;
+        HKEY rawParametersKey = nullptr;
+        if (::RegOpenKeyExW(serviceKey.get(), L"Parameters", 0, KEY_READ, &rawParametersKey) == ERROR_SUCCESS) {
+            RegKey parametersKey(rawParametersKey);
+            serviceDll = ReadRegistryString(parametersKey.get(), L"ServiceDll");
+        }
+
+        StartupEntry entry;
+        entry.kind = StartupEntryKind::RegistryOnlyService;
+        entry.scope = StartupEntryScope::LocalMachine;
+        entry.state = hasStartType ? ServiceStartState(startType) : StartupEntryState::Unknown;
+        entry.name = serviceName;
+        entry.command = imagePath;
+        entry.location = RegistryLocationText(HKEY_LOCAL_MACHINE, KEY_WOW64_64KEY,
+            std::wstring(kServicesRegistryRoot) + L"\\" + serviceName);
+        entry.description = L"Registry record was not returned by this SCM enumeration; access filtering is possible and this is not a hidden-service verdict.";
+        entry.serviceName = serviceName;
+        entry.serviceStartType = startType;
+        AddProperty(entry, L"Service name", entry.serviceName);
+        AddProperty(entry, L"SCM observation", L"Present in Services registry; this SCM enumeration did not return it (access filtering is possible).");
+        AddProperty(entry, L"Type", std::to_wstring(serviceType));
+        if (hasStartType) {
+            AddProperty(entry, L"Start", ServiceStartText(startType) + L" (" + std::to_wstring(startType) + L")");
+        }
+        if (hasErrorControl) {
+            AddProperty(entry, L"Error control", std::to_wstring(errorControl));
+        }
+        if (hasDelayedAutoStart) {
+            AddProperty(entry, L"Delayed auto-start", delayedAutoStart != 0U ? L"true" : L"false");
+        }
+        AddProperty(entry, L"Object name", objectName);
+        AddProperty(entry, L"Service DLL", serviceDll);
+        AddProperty(entry, L"Image path", imagePath);
+        AddProperty(entry, L"Actions", L"Read-only source observation; enable, disable, delete, and open are unavailable.");
+        registryOnlyEntries.push_back(std::move(entry));
     }
 }
 
@@ -603,11 +783,15 @@ StartupEnumerationResult EnumerateStartupEntries() {
 
     EnumerateStartupFolder(result.entries, StartupEntryScope::CurrentUser, FolderPath(CSIDL_STARTUP));
     EnumerateStartupFolder(result.entries, StartupEntryScope::AllUsers, FolderPath(CSIDL_COMMON_STARTUP));
-    EnumerateServices(result.entries);
+    std::vector<std::wstring> scmServiceNames;
+    if (!EnumerateServices(result.entries, scmServiceNames)) {
+        result.diagnosticText = L"服务来源交叉验证不可用：SCM 服务枚举未完整完成。";
+    } else if (!AppendRegistryOnlyServices(result.entries, scmServiceNames)) {
+        result.diagnosticText = L"服务来源交叉验证不可用：Services 注册表读取未完整完成。";
+    }
     EnumerateScheduledTaskFacade(result.entries);
 
     result.success = true;
-    result.diagnosticText = L"OK";
     return result;
 }
 

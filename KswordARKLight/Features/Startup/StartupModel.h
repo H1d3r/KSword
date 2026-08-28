@@ -19,6 +19,10 @@ enum class StartupEntryKind {
     // These rows are investigation-only: StartupActions deliberately rejects all
     // mutation and Shell-open requests for this kind.
     DriverService,
+    // RegistryOnlyService represents a Services-registry record that this SCM
+    // enumeration did not return. It is an observation-only source mismatch,
+    // not a hidden-service verdict, and all StartupActions reject it.
+    RegistryOnlyService,
     ScheduledTaskFacade
 };
 
