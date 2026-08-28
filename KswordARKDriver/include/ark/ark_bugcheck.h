@@ -115,5 +115,31 @@ KswordARKBugcheckGuardIoctlConfigure(
     _In_ size_t OutputBufferLength,
     _Out_ size_t* BytesReturned
     );
+
+// Bugcheck Shield is a PatchGuard-safe buffer backend. Unlike the guard, it
+// never patches KeBugCheckEx and never writes any private ntoskrnl state; it
+// only registers up to four documented BugCheck reason callbacks and stalls
+// each callback for a configurable, bounded window. Enabling and disabling
+// stay fully R3-controlled, and DriverEntry only prepares the synchronization
+// primitives — nothing observable happens until an IOCTL explicitly enables it.
+VOID
+KswordARKBugcheckShieldInitialize(
+    VOID
+    );
+
+VOID
+KswordARKBugcheckShieldUninitialize(
+    VOID
+    );
+
+NTSTATUS
+KswordARKBugcheckShieldIoctlConfigure(
+    _In_ WDFDEVICE Device,
+    _In_ WDFREQUEST Request,
+    _In_ size_t InputBufferLength,
+    _In_ size_t OutputBufferLength,
+    _Out_ size_t* BytesReturned
+    );
+
 EXTERN_C_END
 

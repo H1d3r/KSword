@@ -249,6 +249,8 @@ Return Value:
     }
     // Guard 仍是独立的一次性调试能力；初始化本身不会安装 KeBugCheckEx hook。
     KswordARKBugcheckGuardInitialize();
+    // Shield 只准备同步原语，不注册任何 BugCheck 回调；R3 通过 IOCTL 显式启用。
+    KswordARKBugcheckShieldInitialize();
 #else
     // Fail closed while the crash-time renderer and guard are disabled.
     TraceEvents(
@@ -315,8 +317,9 @@ Return Value:
     KswordARKDriverResetDirectoryScanCache();
 
 #if KSWORD_ARK_BUGCHECK_DIAGNOSTICS_ENABLED
-    // 先还原一次性 Guard，再由控制器撤销按需安装的 BGP 回调和预生成资源。
+    // 先还原一次性 Guard 与 Shield 回调，再撤销 BGP 资源。
     KswordARKBugcheckGuardUninitialize();
+    KswordARKBugcheckShieldUninitialize();
     KswordARKBugcheckControlUninitialize();
 #endif
 
