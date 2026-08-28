@@ -49,6 +49,7 @@ constexpr UINT kHandleMenuCopyCell = 57101;
 constexpr UINT kHandleMenuCopyRow = 57102;
 constexpr UINT kHandleMenuCopyVisible = 57103;
 constexpr UINT kHandleMenuOpenProcessDetails = 57104;
+constexpr UINT kHandleMenuExportVisible = 57105;
 constexpr UINT kMsgHandleRefreshCompleted = WM_APP + 574;
 constexpr UINT kMsgHandleFilterCompleted = WM_APP + 575;
 constexpr UINT kMsgHandleDetailCompleted = WM_APP + 576;
@@ -369,6 +370,37 @@ std::wstring RowsAsTsv(const HandlePageState& state, const bool allVisible) {
         if (source < rows.size()) {
             AppendTsvRow(output, rows[source].cells);
         }
+    }
+    return output;
+}
+
+// VisibleHandleRowsAsTsv serializes exactly the twelve columns shown in the
+// current filtered handle table. Input is the immutable rendered snapshot;
+// processing never refreshes, resolves objects, or reads hidden diagnostics.
+std::wstring VisibleHandleRowsAsTsv(const HandlePageState& state) {
+    static const std::vector<std::wstring> kColumnTitles = {
+        L"PID", L"Handle", L"Object", L"ObjectHeader", L"ObjectType", L"TypeIdx",
+        L"GrantedAccess", L"Attributes", L"PtrCount", L"HandleCount", L"Decode", L"异常句柄标记"
+    };
+    const auto& visible = state.handleList.visibleIndexes();
+    const auto& rows = state.handleList.rows();
+    if (visible.empty()) {
+        return {};
+    }
+
+    std::wstring output;
+    AppendTsvRow(output, kColumnTitles);
+    for (const std::size_t source : visible) {
+        if (source >= rows.size()) {
+            return {};
+        }
+        std::vector<std::wstring> cells(kColumnTitles.size());
+        const std::vector<std::wstring>& rowCells = rows[source].cells;
+        const std::size_t count = (std::min)(cells.size(), rowCells.size());
+        for (std::size_t column = 0; column < count; ++column) {
+            cells[column] = rowCells[column];
+        }
+        AppendTsvRow(output, cells);
     }
     return output;
 }
@@ -732,6 +764,7 @@ void HandlePage::ShowHandleContextMenu(POINT screenPoint) {
     ::AppendMenuW(menu, MF_STRING | (hasSelection ? 0U : MF_GRAYED), kHandleMenuCopyCell, L"复制单元格");
     ::AppendMenuW(menu, MF_STRING | (hasSelection ? 0U : MF_GRAYED), kHandleMenuCopyRow, L"复制行");
     ::AppendMenuW(menu, MF_STRING | (!state_->handleList.visibleIndexes().empty() ? 0U : MF_GRAYED), kHandleMenuCopyVisible, L"复制可见结果");
+    ::AppendMenuW(menu, MF_STRING | (!state_->handleList.visibleIndexes().empty() ? 0U : MF_GRAYED), kHandleMenuExportVisible, L"导出当前可见句柄 TSV");
     ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     const bool hasAuditedProcessIdentity = HasAuditedProcessIdentity(*state_);
     ::AppendMenuW(
@@ -747,6 +780,26 @@ void HandlePage::ShowHandleContextMenu(POINT screenPoint) {
         SetStatus(CopyTextToClipboard(hwnd_, RowsAsTsv(*state_, false)) ? L"已复制行。" : L"复制行失败。");
     } else if (command == kHandleMenuCopyVisible) {
         SetStatus(CopyTextToClipboard(hwnd_, RowsAsTsv(*state_, true)) ? L"已复制可见结果。" : L"复制可见结果失败。");
+    } else if (command == kHandleMenuExportVisible) {
+        const std::wstring text = VisibleHandleRowsAsTsv(*state_);
+        if (text.empty()) {
+            SetStatus(L"没有可导出的当前可见句柄快照。");
+            return;
+        }
+        std::wstring error;
+        switch (Ksword::Ui::SaveUtf8TextFileWithDialog(
+            hwnd_, L"handle_visible_snapshot.tsv", L"导出当前可见句柄快照",
+            L"TSV (*.tsv)\0*.tsv\0All Files (*.*)\0*.*\0", L"tsv", text, &error)) {
+        case Ksword::Ui::SaveTextFileResult::Saved:
+            SetStatus(L"当前可见句柄快照已导出为 TSV，并已记录到证据会话。");
+            break;
+        case Ksword::Ui::SaveTextFileResult::Cancelled:
+            SetStatus(L"已取消导出当前可见句柄快照。");
+            break;
+        case Ksword::Ui::SaveTextFileResult::Failed:
+            SetStatus(L"导出当前可见句柄快照失败：" + error);
+            break;
+        }
     } else if (command == kHandleMenuOpenProcessDetails) {
         // Revalidate after the popup closes so an intervening refresh cannot
         // turn an older PID into a navigation target.
