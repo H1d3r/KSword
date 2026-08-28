@@ -15,6 +15,10 @@ enum class StartupEntryKind {
     RegistryRunOnce,
     StartupFolder,
     Service,
+    // DriverService represents a kernel or file-system driver reported by SCM.
+    // These rows are investigation-only: StartupActions deliberately rejects all
+    // mutation and Shell-open requests for this kind.
+    DriverService,
     ScheduledTaskFacade
 };
 

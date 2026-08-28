@@ -21,6 +21,14 @@ namespace {
 constexpr wchar_t kServiceDisabledStore[] = L"Software\\KswordARKLight\\DisabledStartup\\Services";
 constexpr wchar_t kDisabledStartupFolderBase[] = L"KswordARKLight\\DisabledStartup\\StartupFolder";
 
+// RejectDriverServiceAction keeps Startup's SCM driver rows observation-only.
+// Input is intentionally omitted because no driver property is needed to reject
+// the request; output never opens SCM with write access or launches an external
+// management surface.
+StartupActionResult RejectDriverServiceAction() {
+    return { false, L"Driver startup entries are read-only in Lite; enable, disable, delete, and open are unavailable." };
+}
+
 // RegKey owns an HKEY for StartupActions mutations. Inputs are handles returned
 // by registry APIs; processing closes the key at scope exit; get returns the raw
 // handle without transferring ownership.
@@ -637,6 +645,9 @@ StartupActionResult ShellOpen(const std::wstring& target, const std::wstring& pa
 } // namespace
 
 StartupActionResult EnableStartupEntry(const StartupEntry& entry) {
+    if (entry.kind == StartupEntryKind::DriverService) {
+        return RejectDriverServiceAction();
+    }
     if (entry.kind == StartupEntryKind::ScheduledTaskFacade) {
         return SetScheduledTaskEnabled(entry, true);
     }
@@ -658,6 +669,9 @@ StartupActionResult EnableStartupEntry(const StartupEntry& entry) {
 }
 
 StartupActionResult DisableStartupEntry(const StartupEntry& entry) {
+    if (entry.kind == StartupEntryKind::DriverService) {
+        return RejectDriverServiceAction();
+    }
     if (entry.state == StartupEntryState::Disabled) {
         return { false, L"Entry is already disabled." };
     }
@@ -683,6 +697,9 @@ StartupActionResult DisableStartupEntry(const StartupEntry& entry) {
 }
 
 StartupActionResult DeleteStartupEntry(const StartupEntry& entry) {
+    if (entry.kind == StartupEntryKind::DriverService) {
+        return RejectDriverServiceAction();
+    }
     if (entry.kind == StartupEntryKind::RegistryRun || entry.kind == StartupEntryKind::RegistryRunOnce) {
         const bool disabled = entry.state == StartupEntryState::Disabled;
         RegKey key = OpenRegistryKey(disabled ? HKEY_CURRENT_USER : entry.registryRoot,
@@ -724,6 +741,9 @@ StartupActionResult DeleteStartupEntry(const StartupEntry& entry) {
 }
 
 StartupActionResult OpenStartupEntryLocation(const StartupEntry& entry) {
+    if (entry.kind == StartupEntryKind::DriverService) {
+        return RejectDriverServiceAction();
+    }
     if (entry.kind == StartupEntryKind::RegistryRun || entry.kind == StartupEntryKind::RegistryRunOnce) {
         const std::wstring location = RegistryLocationForRegedit(entry);
         if (location.empty()) {

@@ -385,8 +385,51 @@ std::wstring ServiceStartText(DWORD startType) {
     return L"Unknown";
 }
 
+// ServiceCurrentStateText formats SCM's current runtime state. Input is one
+// SERVICE_* state from ENUM_SERVICE_STATUS_PROCESSW; output is display-only and
+// never drives an action.
+std::wstring ServiceCurrentStateText(DWORD currentState) {
+    switch (currentState) {
+    case SERVICE_STOPPED:
+        return L"Stopped";
+    case SERVICE_START_PENDING:
+        return L"Start pending";
+    case SERVICE_STOP_PENDING:
+        return L"Stop pending";
+    case SERVICE_RUNNING:
+        return L"Running";
+    case SERVICE_CONTINUE_PENDING:
+        return L"Continue pending";
+    case SERVICE_PAUSE_PENDING:
+        return L"Pause pending";
+    case SERVICE_PAUSED:
+        return L"Paused";
+    default:
+        break;
+    }
+    return L"Unknown";
+}
+
+// DriverServiceTypeText classifies the SCM service-type bits used for a driver
+// row. Inputs are the existing enumeration status bits; output is informational
+// only, so unknown combinations remain visible without any mutation path.
+std::wstring DriverServiceTypeText(DWORD serviceType) {
+    if ((serviceType & SERVICE_FILE_SYSTEM_DRIVER) != 0U) {
+        return L"File system driver";
+    }
+    if ((serviceType & SERVICE_RECOGNIZER_DRIVER) != 0U) {
+        return L"Recognizer driver";
+    }
+    if ((serviceType & SERVICE_KERNEL_DRIVER) != 0U) {
+        return L"Kernel driver";
+    }
+    return L"Driver";
+}
+
 // EnumerateServices appends Service Control Manager rows. Input is output vector;
-// processing queries all Win32 services and their configurations; no return.
+// processing queries Win32 services plus kernel/file-system drivers and their
+// configurations. Driver rows are marked read-only before they reach the view.
+// No driver IOCTL, load/unload request, or configuration change is issued.
 void EnumerateServices(std::vector<StartupEntry>& entries) {
     ServiceHandle scm(::OpenSCManagerW(nullptr, nullptr, SC_MANAGER_ENUMERATE_SERVICE));
     if (!scm.valid()) {
@@ -403,7 +446,7 @@ void EnumerateServices(std::vector<StartupEntry>& entries) {
     DWORD bytesNeeded = 0;
     DWORD servicesReturned = 0;
     DWORD resumeHandle = 0;
-    ::EnumServicesStatusExW(scm.get(), SC_ENUM_PROCESS_INFO, SERVICE_WIN32, SERVICE_STATE_ALL,
+    ::EnumServicesStatusExW(scm.get(), SC_ENUM_PROCESS_INFO, SERVICE_WIN32 | SERVICE_DRIVER, SERVICE_STATE_ALL,
         nullptr, 0, &bytesNeeded, &servicesReturned, &resumeHandle, nullptr);
     if (bytesNeeded == 0) {
         return;
@@ -411,7 +454,7 @@ void EnumerateServices(std::vector<StartupEntry>& entries) {
 
     std::vector<BYTE> buffer(bytesNeeded + 4096, 0);
     resumeHandle = 0;
-    if (!::EnumServicesStatusExW(scm.get(), SC_ENUM_PROCESS_INFO, SERVICE_WIN32, SERVICE_STATE_ALL,
+    if (!::EnumServicesStatusExW(scm.get(), SC_ENUM_PROCESS_INFO, SERVICE_WIN32 | SERVICE_DRIVER, SERVICE_STATE_ALL,
             buffer.data(), static_cast<DWORD>(buffer.size()), &bytesNeeded, &servicesReturned, &resumeHandle, nullptr)) {
         return;
     }
@@ -419,10 +462,12 @@ void EnumerateServices(std::vector<StartupEntry>& entries) {
     auto* services = reinterpret_cast<ENUM_SERVICE_STATUS_PROCESSW*>(buffer.data());
     for (DWORD index = 0; index < servicesReturned; ++index) {
         const ENUM_SERVICE_STATUS_PROCESSW& service = services[index];
+        const bool isDriver = (service.ServiceStatusProcess.dwServiceType & SERVICE_DRIVER) != 0U;
         ServiceHandle handle(::OpenServiceW(scm.get(), service.lpServiceName, SERVICE_QUERY_CONFIG));
         DWORD startType = SERVICE_DEMAND_START;
         std::wstring binaryPath;
         std::wstring description;
+        bool hasConfiguration = false;
         if (handle.valid()) {
             DWORD configBytes = 0;
             ::QueryServiceConfigW(handle.get(), nullptr, 0, &configBytes);
@@ -430,6 +475,7 @@ void EnumerateServices(std::vector<StartupEntry>& entries) {
                 std::vector<BYTE> configBuffer(configBytes, 0);
                 auto* config = reinterpret_cast<QUERY_SERVICE_CONFIGW*>(configBuffer.data());
                 if (::QueryServiceConfigW(handle.get(), config, configBytes, &configBytes)) {
+                    hasConfiguration = true;
                     startType = config->dwStartType;
                     if (config->lpBinaryPathName) {
                         binaryPath = config->lpBinaryPathName;
@@ -452,9 +498,9 @@ void EnumerateServices(std::vector<StartupEntry>& entries) {
         }
 
         StartupEntry entry;
-        entry.kind = StartupEntryKind::Service;
+        entry.kind = isDriver ? StartupEntryKind::DriverService : StartupEntryKind::Service;
         entry.scope = StartupEntryScope::LocalMachine;
-        entry.state = ServiceStartState(startType);
+        entry.state = isDriver && !hasConfiguration ? StartupEntryState::Unknown : ServiceStartState(startType);
         entry.name = service.lpDisplayName && *service.lpDisplayName ? service.lpDisplayName : service.lpServiceName;
         entry.command = binaryPath;
         entry.location = L"Service Control Manager";
@@ -462,8 +508,16 @@ void EnumerateServices(std::vector<StartupEntry>& entries) {
         entry.serviceName = service.lpServiceName ? service.lpServiceName : L"";
         entry.serviceStartType = startType;
         AddProperty(entry, L"Service name", entry.serviceName);
-        AddProperty(entry, L"Start type", ServiceStartText(startType));
-        AddProperty(entry, L"Current state", std::to_wstring(service.ServiceStatusProcess.dwCurrentState));
+        if (isDriver) {
+            AddProperty(entry, L"Driver type", DriverServiceTypeText(service.ServiceStatusProcess.dwServiceType));
+            AddProperty(entry, L"Startup type", hasConfiguration ? ServiceStartText(startType) : L"Unavailable (configuration query failed)");
+            AddProperty(entry, L"Image path", binaryPath.empty() ? L"Unavailable" : binaryPath);
+            AddProperty(entry, L"Current status", ServiceCurrentStateText(service.ServiceStatusProcess.dwCurrentState));
+            AddProperty(entry, L"Actions", L"Read-only SCM observation; enable, disable, delete, and open are unavailable.");
+        } else {
+            AddProperty(entry, L"Start type", ServiceStartText(startType));
+            AddProperty(entry, L"Current state", std::to_wstring(service.ServiceStatusProcess.dwCurrentState));
+        }
         entries.push_back(std::move(entry));
     }
 }
