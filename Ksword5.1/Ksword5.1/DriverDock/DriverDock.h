@@ -192,7 +192,7 @@ private:
     void initializeServiceTab();
 
     // initializeKernelModuleTab：
-    // - 作用：构建“内核模块”页（已加载模块与四种详细信息视图容器）。
+    // - 作用：构建“内核模块”页（已加载模块与统一详情编辑器）。
     void initializeKernelModuleTab();
 
     // initializeOperateTab：
@@ -230,10 +230,6 @@ private:
     // - 构建“系统线程”一级页；
     // - 复用 KernelThreadAuditTab 与 ArkDriverClient 现有线程协议。
     void initializeSystemThreadTab();
-
-    // - 作用：把四个已实现的只读诊断页收纳到内核模块页的详情标签中；
-    // - 处理：移除旧的一级标签，保留页面对象和既有查询逻辑；返回：无。
-    void organizeKernelModuleDetailViews();
 
     // initializeConnections：
     // - 作用：连接全部控件信号与业务槽函数。
@@ -623,7 +619,6 @@ private:
     QTableWidget* m_moduleTable = nullptr;            // 已加载模块表格。
     CodeEditorWidget* m_moduleEvidenceDetailEditor = nullptr; // 模块证据详情编辑器。
     QLabel* m_moduleEvidenceStatusLabel = nullptr;   // 模块证据聚合状态标签。
-    QTabWidget* m_moduleDetailTabWidget = nullptr;   // 内核模块四种详情视图容器。
     bool m_moduleEvidenceQuerying = false;           // 模块证据后台查询中标记。
     std::uint64_t m_moduleEvidenceQueryTicket = 0;   // 模块证据查询序号。
     bool m_moduleDumpRunning = false;                // 模块 R0 Dump 后台任务运行标记。

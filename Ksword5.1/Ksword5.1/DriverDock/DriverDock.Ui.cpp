@@ -1,6 +1,7 @@
 #include "DriverDock.Internal.h"
 #include "../KernelDock/KernelThreadAuditTab.h"
 #include "../UI/VisibleTableWidget.h"
+#include "../UI/DetailLayoutRegistry.h"
 
 // 说明：由原聚合式实现迁移为独立 .cpp，成员函数实现保持原样。
 using namespace ksword::driver_dock_internal;
@@ -248,7 +249,7 @@ void DriverDock::applyTranslatedHeaders()
                 driverText("driver.tab.services", QStringLiteral("驱动服务")));
         }
     }
-    if (m_kernelModulePage != nullptr && m_moduleDetailTabWidget != nullptr && m_tabWidget != nullptr)
+    if (m_kernelModulePage != nullptr && m_tabWidget != nullptr)
     {
         const int kernelModuleTabIndex = m_tabWidget->indexOf(m_kernelModulePage);
         if (kernelModuleTabIndex >= 0)
@@ -257,20 +258,6 @@ void DriverDock::applyTranslatedHeaders()
                 kernelModuleTabIndex,
                 driverText("driver.tab.kernel_modules", QStringLiteral("内核模块")));
         }
-        const auto updateDetailTabText = [this](QWidget* page, const char* contextKey, const QString& sourceText)
-        {
-            // page：详情页对象；处理：按当前语言更新详情标签；返回：无。
-            const int detailIndex = m_moduleDetailTabWidget->indexOf(page);
-            if (detailIndex >= 0)
-            {
-                m_moduleDetailTabWidget->setTabText(
-                    detailIndex, driverText(contextKey, sourceText));
-            }
-        };
-        updateDetailTabText(m_objectInfoPage, "driver.module.detail.object_info", QStringLiteral("对象信息"));
-        updateDetailTabText(m_moduleCrossViewPage, "driver.module.detail.cross_view", QStringLiteral("模块交叉视图"));
-        updateDetailTabText(m_integrityPage, "driver.module.detail.integrity", QStringLiteral("驱动完整性"));
-        updateDetailTabText(m_unloadedPiddbPage, "driver.module.detail.unloaded", QStringLiteral("已卸载驱动"));
     }
     if (m_serviceFilterEdit != nullptr)
     {
@@ -379,42 +366,6 @@ void DriverDock::initializeUi()
     initializeIntegrityTab();
     initializeUnloadedPiddbTab();
     initializeSystemThreadTab();
-    organizeKernelModuleDetailViews();
-}
-
-void DriverDock::organizeKernelModuleDetailViews()
-{
-    // 输入：已创建的四个诊断页；处理：移动到内核模块页；返回：无。
-    if (m_tabWidget == nullptr || m_moduleDetailTabWidget == nullptr)
-    {
-        return;
-    }
-
-    const auto moveDetailPage = [this](QWidget* page, const char* contextKey, const QString& sourceText,
-        const QIcon& icon)
-    {
-        // page：已有诊断页；处理：从一级页签移除并交给模块详情容器托管。
-        if (page == nullptr)
-        {
-            return;
-        }
-        const int oldIndex = m_tabWidget->indexOf(page);
-        if (oldIndex >= 0)
-        {
-            m_tabWidget->removeTab(oldIndex);
-        }
-        page->setParent(m_moduleDetailTabWidget);
-        m_moduleDetailTabWidget->addTab(page, icon, driverText(contextKey, sourceText));
-    };
-
-    moveDetailPage(m_objectInfoPage, "driver.module.detail.object_info", QStringLiteral("对象信息"),
-        QIcon(QStringLiteral(":/Icon/process_details.svg")));
-    moveDetailPage(m_moduleCrossViewPage, "driver.module.detail.cross_view", QStringLiteral("模块交叉视图"),
-        QIcon(QStringLiteral(":/Icon/process_list.svg")));
-    moveDetailPage(m_integrityPage, "driver.module.detail.integrity", QStringLiteral("驱动完整性"),
-        QIcon(QStringLiteral(":/Icon/process_critical.svg")));
-    moveDetailPage(m_unloadedPiddbPage, "driver.module.detail.unloaded", QStringLiteral("已卸载驱动"),
-        QIcon(QStringLiteral(":/Icon/process_uncritical.svg")));
 }
 
 void DriverDock::initializeSystemThreadTab()
@@ -493,7 +444,7 @@ void DriverDock::initializeServiceTab()
 
 void DriverDock::initializeKernelModuleTab()
 {
-    // 输入：无；处理：建立模块列表和四种详情视图；返回：无。
+    // 输入：无；处理：建立模块列表和统一详情编辑器；返回：无。
     m_kernelModulePage = new QWidget(m_tabWidget);
     m_kernelModuleLayout = new QVBoxLayout(m_kernelModulePage);
     m_kernelModuleLayout->setContentsMargins(4, 4, 4, 4);
@@ -541,14 +492,11 @@ void DriverDock::initializeKernelModuleTab()
 
     m_moduleEvidenceDetailEditor = new CodeEditorWidget(m_kernelModulePage);
     m_moduleEvidenceDetailEditor->setReadOnly(true);
-    m_moduleEvidenceDetailEditor->setMaximumHeight(125);
     m_moduleEvidenceDetailEditor->setText(driverText(
         "driver.overview.evidence.detail.initial", QStringLiteral("请选择一条已加载模块，或点击证据刷新按钮。")));
-    m_kernelModuleLayout->addWidget(m_moduleEvidenceDetailEditor);
-
-    m_moduleDetailTabWidget = new QTabWidget(m_kernelModulePage);
-    m_moduleDetailTabWidget->setDocumentMode(true);
-    m_kernelModuleLayout->addWidget(m_moduleDetailTabWidget, 2);
+    m_kernelModuleLayout->addWidget(m_moduleEvidenceDetailEditor, 2);
+    ks::ui::DetailLayoutRegistry::registerHost(
+        m_moduleTable, m_moduleEvidenceDetailEditor, m_kernelModulePage);
     m_tabWidget->addTab(m_kernelModulePage, QIcon(":/Icon/process_list.svg"), driverText(
         "driver.tab.kernel_modules", QStringLiteral("内核模块")));
 }
@@ -1039,12 +987,7 @@ void DriverDock::initializeConnections()
             rebuildLoadedModuleTable();
         });
 
-    // 内核模块页：刷新、过滤与四种详情视图均保持在同一页签上下文中。
-    connect(m_moduleDetailTabWidget, &QTabWidget::currentChanged, this, [this](int)
-        {
-            showSelectedModuleEvidenceDetail();
-        });
-
+    // 内核模块页：刷新、过滤和统一详情布局连接。
     connect(m_serviceTable, &QTableWidget::itemSelectionChanged, this, [this]()
         {
             syncOperateFormBySelectedService();

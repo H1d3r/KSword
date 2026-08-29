@@ -3922,6 +3922,7 @@ void DriverDock::rebuildLoadedModuleTable()
     const QString filterText = m_moduleFilterEdit != nullptr
         ? m_moduleFilterEdit->text().trimmed()
         : QString();
+    ks::ui::DetailLayoutRegistry::prepareDataRebuild(m_moduleEvidenceDetailEditor);
     m_moduleTable->setRowCount(0);
     for (std::size_t sourceIndex = 0U; sourceIndex < m_loadedModuleCache.size(); ++sourceIndex)
     {
@@ -3985,10 +3986,12 @@ void DriverDock::rebuildLoadedModuleTable()
             : 0;
         m_overviewStatusLabel->setText(
             driverText(
-                "driver.service.count.filtered",
-                QStringLiteral("状态：驱动服务 %1 条（显示 %2 条）"))
+                "driver.overview.count.filtered",
+                QStringLiteral("状态：驱动服务 %1 条（显示 %2 条），模块 %3 条（显示 %4 条）"))
             .arg(m_driverServiceCache.size())
-            .arg(visibleServiceCount));
+            .arg(visibleServiceCount)
+            .arg(m_loadedModuleCache.size())
+            .arg(m_moduleTable->rowCount()));
     }
 }
 
