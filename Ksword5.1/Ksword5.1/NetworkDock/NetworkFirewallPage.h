@@ -67,7 +67,8 @@ public:
         const QString& sourceText,
         std::uint32_t observedProcessId = 0,
         std::uint64_t expectedProcessCreationTime100ns = 0,
-        const QString& expectedProcessImagePath = QString());
+        const QString& expectedProcessImagePath = QString(),
+        const QString& applicationPathHint = QString());
 
     // FirewallEventEntry：
     // - 作用：保存一次 WFP net event 的展示字段；
@@ -76,6 +77,7 @@ public:
     struct FirewallEventEntry
     {
         QString nameText;          // nameText：进程/应用名或事件名。
+        QString applicationPathText;// applicationPathText：WFP appId 的原始应用路径，仅用于处置预填。
         QString actionText;        // actionText：DROP/Allowed 等动作。
         QString directionText;     // directionText：In/Out/FWD/BI。
         QString ruleText;          // ruleText：过滤器/规则名。

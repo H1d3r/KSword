@@ -31434,6 +31434,10 @@
     "由审计证据预填；已复核 PID=%1 的当前进程身份。请在保存前核对匹配范围。": "Pre-filled from audit evidence; the current identity of PID=%1 was verified. Verify the match scope before saving.",
     "由审计证据预填；关联进程已退出、不可访问或 PID 已复用，未预填程序范围。请在保存前核对匹配范围。": "Pre-filled from audit evidence; the associated process exited, is inaccessible, or its PID was reused, so no program scope was pre-filled. Verify the match scope before saving.",
     "审计证据未包含可信的入站或出站方向，无法安全预填防火墙规则。": "The audit evidence has no trustworthy inbound or outbound direction, so a firewall rule cannot be safely pre-filled.",
-    "流量报文": "Traffic packet"
+    "流量报文": "Traffic packet",
+    "审计证据未包含可信的远端地址，无法安全预填防火墙规则。": "The audit evidence has no trustworthy remote address, so a firewall rule cannot be safely pre-filled.",
+    "由审计证据预填；已带入 WFP 事件的应用程序路径。请在保存前核对匹配范围。": "Pre-filled from audit evidence; the application path from the WFP event was included. Verify the match scope before saving.",
+    "由审计证据预填；未能核验或提取应用程序范围。请在保存前核对匹配范围。": "Pre-filled from audit evidence; the application scope could not be verified or extracted. Verify the match scope before saving.",
+    "WFP 事件": "WFP event"
   }
 }

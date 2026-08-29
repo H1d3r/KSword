@@ -59,6 +59,7 @@
 #include <condition_variable>
 #include <cstring>
 #include <exception>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -108,7 +109,9 @@ namespace
     constexpr int kMaximumDisplayedFirewallEvents = 5000;
     constexpr std::size_t kMaximumQueuedLiveEvents = 2000U;
 
-    void installFirewallTableCopyMenu(QTableWidget* tableWidget)
+    void installFirewallTableCopyMenu(
+        QTableWidget* tableWidget,
+        const std::function<void(int)>& addBlockRuleHandler = {})
     {
         // installFirewallTableCopyMenu 作用：
         // - 输入：WFP 事件表或规则表；
@@ -124,7 +127,7 @@ namespace
             tableWidget,
             &QTableWidget::customContextMenuRequested,
             tableWidget,
-            [tableWidget](const QPoint& localPosition)
+            [tableWidget, addBlockRuleHandler](const QPoint& localPosition)
             {
                 const QModelIndex clickedIndex = tableWidget->indexAt(localPosition);
                 if (clickedIndex.isValid())
@@ -138,7 +141,23 @@ namespace
                     QIcon(QStringLiteral(":/Icon/process_copy_row.svg")),
                     QStringLiteral("复制当前行"));
                 copyRowAction->setEnabled(tableWidget->currentRow() >= 0);
-                if (contextMenu.exec(tableWidget->viewport()->mapToGlobal(localPosition)) != copyRowAction)
+                QAction* addBlockRuleAction = nullptr;
+                if (addBlockRuleHandler)
+                {
+                    addBlockRuleAction = contextMenu.addAction(
+                        QIcon(QStringLiteral(":/Icon/process_terminate.svg")),
+                        QStringLiteral("预填阻断规则"));
+                    addBlockRuleAction->setEnabled(tableWidget->currentRow() >= 0);
+                }
+
+                const QAction* selectedAction = contextMenu.exec(
+                    tableWidget->viewport()->mapToGlobal(localPosition));
+                if (selectedAction == addBlockRuleAction)
+                {
+                    addBlockRuleHandler(tableWidget->currentRow());
+                    return;
+                }
+                if (selectedAction != copyRowAction)
                 {
                     return;
                 }
@@ -738,11 +757,11 @@ namespace
         return QString::number(localPort ? header.localPort : header.remotePort);
     }
 
-    // appNameFromHeader 作用：
+    // appPathFromHeader 作用：
     // - 输入：WFP 事件头；
-    // - 处理：从 appId byte blob 中提取 NT/Win32 路径并取文件名；
-    // - 返回：应用名或空字符串。
-    QString appNameFromHeader(const FWPM_NET_EVENT_HEADER3& header)
+    // - 处理：从 appId byte blob 中保留原始 NT/Win32 路径；
+    // - 返回：应用路径或空字符串。
+    QString appPathFromHeader(const FWPM_NET_EVENT_HEADER3& header)
     {
         if ((header.flags & FWPM_NET_EVENT_FLAG_APP_ID_SET) == 0
             || header.appId.data == nullptr
@@ -752,9 +771,18 @@ namespace
         }
 
         const int charCount = static_cast<int>((header.appId.size / sizeof(wchar_t)) - 1U);
-        QString pathText = QString::fromWCharArray(
+        return QString::fromWCharArray(
             reinterpret_cast<const wchar_t*>(header.appId.data),
-            std::max(0, charCount));
+            std::max(0, charCount)).trimmed();
+    }
+
+    // appNameFromHeader 作用：
+    // - 输入：WFP 事件头；
+    // - 处理：从 appId 路径提取文件名用于表格展示；
+    // - 返回：应用名或空字符串。
+    QString appNameFromHeader(const FWPM_NET_EVENT_HEADER3& header)
+    {
+        QString pathText = appPathFromHeader(header);
         pathText = pathText.replace(QLatin1Char('\\'), QLatin1Char('/'));
         const int slashIndex = pathText.lastIndexOf(QLatin1Char('/'));
         return slashIndex >= 0 ? pathText.mid(slashIndex + 1) : pathText;
@@ -1676,6 +1704,7 @@ namespace
         entry.localPortText = portTextFromHeader(eventPointer->header, true);
         entry.remoteAddressText = addressTextFromHeader(eventPointer->header, false);
         entry.remotePortText = portTextFromHeader(eventPointer->header, false);
+        entry.applicationPathText = appPathFromHeader(eventPointer->header);
         entry.nameText = appNameFromHeader(eventPointer->header);
         if (entry.nameText.isEmpty())
         {
@@ -2605,7 +2634,39 @@ void NetworkFirewallPage::initializeEventMonitorUi()
     m_eventTable->setColumnWidth(ColumnLocalAddress, 130);
     m_eventTable->setColumnWidth(ColumnRemoteAddress, 130);
     m_eventTable->setColumnWidth(ColumnTimestamp, 170);
-    installFirewallTableCopyMenu(m_eventTable);
+    installFirewallTableCopyMenu(m_eventTable, [this](const int rowIndex)
+    {
+        if (m_eventTable == nullptr || rowIndex < 0 || rowIndex >= m_eventTable->rowCount())
+        {
+            return;
+        }
+
+        const auto textAt = [this, rowIndex](const int column) -> QString
+        {
+            const QTableWidgetItem* item = m_eventTable->item(rowIndex, column);
+            return item != nullptr ? item->text().trimmed() : QString();
+        };
+        const QTableWidgetItem* nameItem = m_eventTable->item(rowIndex, ColumnName);
+        const QString applicationPathHint = nameItem != nullptr
+            ? nameItem->data(Qt::UserRole + 1).toString().trimmed()
+            : QString();
+        const QString wfpDirection = textAt(ColumnDirection);
+        const QString firewallDirection = wfpDirection.compare(QStringLiteral("In"), Qt::CaseInsensitive) == 0
+            ? QStringLiteral("Inbound")
+            : wfpDirection.compare(QStringLiteral("Out"), Qt::CaseInsensitive) == 0
+                ? QStringLiteral("Outbound")
+                : QStringLiteral("Unknown");
+        addBlockRuleFromEvidence(
+            textAt(ColumnRemoteAddress),
+            textAt(ColumnRemotePort),
+            textAt(ColumnProtocol),
+            firewallDirection,
+            QStringLiteral("WFP 事件"),
+            0U,
+            0U,
+            QString(),
+            applicationPathHint);
+    });
     pageLayout->addWidget(m_eventTable, 1);
 
     if (m_innerTabWidget != nullptr)
@@ -3232,6 +3293,10 @@ void NetworkFirewallPage::appendEventsToTable(
         {
             QTableWidgetItem* item = new QTableWidgetItem(values[static_cast<std::size_t>(column)]);
             item->setData(Qt::UserRole, entry.isDrop);
+            if (column == ColumnName)
+            {
+                item->setData(Qt::UserRole + 1, entry.applicationPathText);
+            }
             // 不写入固定前景色：DROP/Allowed 均继承表格调色板，并可随主题切换自动更新。
             // 动作类别仍通过 Action 列和“仅 DROP”筛选判断。
             m_eventTable->setItem(row, column, item);
@@ -4093,7 +4158,8 @@ void NetworkFirewallPage::addBlockRuleFromEvidence(
     const QString& sourceText,
     const std::uint32_t observedProcessId,
     const std::uint64_t expectedProcessCreationTime100ns,
-    const QString& expectedProcessImagePath)
+    const QString& expectedProcessImagePath,
+    const QString& applicationPathHint)
 {
     if (!ks::ui::isCurrentProcessElevated())
     {
@@ -4109,6 +4175,14 @@ void NetworkFirewallPage::addBlockRuleFromEvidence(
             this,
             QStringLiteral("预填阻断规则"),
             QStringLiteral("审计证据未包含可信的入站或出站方向，无法安全预填防火墙规则。"));
+        return;
+    }
+    if (remoteAddress.trimmed().isEmpty())
+    {
+        QMessageBox::warning(
+            this,
+            QStringLiteral("预填阻断规则"),
+            QStringLiteral("审计证据未包含可信的远端地址，无法安全预填防火墙规则。"));
         return;
     }
 
@@ -4148,6 +4222,12 @@ void NetworkFirewallPage::addBlockRuleFromEvidence(
         }
     }
 
+    const QString trimmedApplicationPathHint = applicationPathHint.trimmed();
+    const bool hasUsableApplicationPathHint =
+        trimmedApplicationPathHint.size() >= 3 &&
+        trimmedApplicationPathHint.at(1) == QLatin1Char(':') &&
+        (trimmedApplicationPathHint.at(2) == QLatin1Char('\\') ||
+            trimmedApplicationPathHint.at(2) == QLatin1Char('/'));
     if (processIdentityMatches)
     {
         initialRule.applicationText = currentProcessImagePath;
@@ -4155,10 +4235,17 @@ void NetworkFirewallPage::addBlockRuleFromEvidence(
             "由审计证据预填；已复核 PID=%1 的当前进程身份。请在保存前核对匹配范围。")
             .arg(observedProcessId);
     }
+    else if (hasUsableApplicationPathHint)
+    {
+        initialRule.applicationText = trimmedApplicationPathHint;
+        initialRule.descriptionText = QStringLiteral(
+            "由审计证据预填；已带入 WFP 事件的应用程序路径。请在保存前核对匹配范围。");
+    }
     else
     {
-        initialRule.descriptionText = QStringLiteral(
-            "由审计证据预填；关联进程已退出、不可访问或 PID 已复用，未预填程序范围。请在保存前核对匹配范围。");
+        initialRule.descriptionText = expectedProcessCreationTime100ns != 0U || !expectedProcessImagePath.trimmed().isEmpty()
+            ? QStringLiteral("由审计证据预填；关联进程已退出、不可访问或 PID 已复用，未预填程序范围。请在保存前核对匹配范围。")
+            : QStringLiteral("由审计证据预填；未能核验或提取应用程序范围。请在保存前核对匹配范围。");
     }
     initialRule.remoteAddressesText = remoteAddress.trimmed();
     initialRule.remotePortsText = remotePort.trimmed();
