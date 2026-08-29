@@ -1262,6 +1262,8 @@ void RegistryDock::initializeConnections()
         const int row = m_searchResultTable->currentRow();
         const QTableWidgetItem* pathItem = row >= 0 ? m_searchResultTable->item(row, 0) : nullptr;
         const QTableWidgetItem* valueNameItem = row >= 0 ? m_searchResultTable->item(row, 1) : nullptr;
+        const bool isKeyResult = pathItem != nullptr
+            && pathItem->data(kSearchResultRoleTargetKind).toInt() == kSearchResultTargetKey;
         const bool isValueResult = pathItem != nullptr
             && pathItem->data(kSearchResultRoleTargetKind).toInt() == kSearchResultTargetValue;
 
@@ -1271,8 +1273,18 @@ void RegistryDock::initializeConnections()
         copyRowAction->setEnabled(row >= 0);
         QAction* deleteValueAction = menu.addAction(QIcon(":/Icon/process_terminate.svg"), QStringLiteral("删除该值"));
         deleteValueAction->setEnabled(isValueResult && valueNameItem != nullptr);
+        QAction* deleteKeyAction = menu.addAction(QIcon(":/Icon/process_terminate.svg"), QStringLiteral("删除该键（含子项）"));
+        deleteKeyAction->setEnabled(isKeyResult);
 
         const QAction* action = menu.exec(m_searchResultTable->viewport()->mapToGlobal(pos));
+        if (action == deleteKeyAction)
+        {
+            if (pathItem != nullptr)
+            {
+                deleteSearchResultKey(pathItem->text());
+            }
+            return;
+        }
         if (action == deleteValueAction)
         {
             if (pathItem == nullptr || valueNameItem == nullptr)
@@ -2896,6 +2908,93 @@ void RegistryDock::deleteSearchResultValue(const QString& keyPath, const QString
         }
     }
     refreshValueTable();
+}
+
+void RegistryDock::deleteSearchResultKey(const QString& keyPath)
+{
+    // 搜索结果处置不能借用当前树选择：搜索期间用户可能已导航到另一把键。
+    const QString normalizedKeyPath = keyPath.trimmed();
+    HKEY root = nullptr;
+    QString subPath;
+    if (!parseRegistryPath(normalizedKeyPath, &root, &subPath) || subPath.isEmpty())
+    {
+        QMessageBox::information(this, QStringLiteral("删除键"), QStringLiteral("根键不可删除。"));
+        return;
+    }
+
+    const QMessageBox::StandardButton choice = QMessageBox::question(
+        this,
+        QStringLiteral("删除键"),
+        QStringLiteral("确定删除注册表键“%1”及其所有子项吗？").arg(normalizedKeyPath),
+        QMessageBox::Yes | QMessageBox::No,
+        QMessageBox::No);
+    if (choice != QMessageBox::Yes)
+    {
+        return;
+    }
+
+    QString errorText;
+    if (!deleteRegistryKeyAny(normalizedKeyPath, &errorText))
+    {
+        const bool privilegePromptHandled =
+            ks::ui::promptForPrivilegeFailure(this, QStringLiteral("删除注册表键"), errorText);
+        kLogEvent event;
+        warn << event
+            << "[RegistryDock] 搜索结果删除键失败, keyPath="
+            << normalizedKeyPath.toStdString()
+            << ", error="
+            << errorText.toStdString()
+            << eol;
+        if (!privilegePromptHandled)
+        {
+            QMessageBox::warning(this, QStringLiteral("删除键"), errorText);
+        }
+        return;
+    }
+
+    kLogEvent event;
+    info << event
+        << "[RegistryDock] 搜索结果删除键成功, keyPath="
+        << normalizedKeyPath.toStdString()
+        << eol;
+
+    const QString targetPrefix = normalizedKeyPath + QStringLiteral("\\");
+    if (m_searchResultTable != nullptr)
+    {
+        // 键删除会连带删除所有子键及其值，不能保留这些过期审计行。
+        for (int row = m_searchResultTable->rowCount() - 1; row >= 0; --row)
+        {
+            const QTableWidgetItem* pathItem = m_searchResultTable->item(row, 0);
+            if (pathItem == nullptr)
+            {
+                continue;
+            }
+            const QString resultKeyPath = pathItem->text();
+            if (resultKeyPath.compare(normalizedKeyPath, Qt::CaseInsensitive) == 0
+                || resultKeyPath.startsWith(targetPrefix, Qt::CaseInsensitive))
+            {
+                m_searchResultTable->removeRow(row);
+            }
+        }
+    }
+
+    const bool currentPathWasDeleted = m_currentPath.compare(normalizedKeyPath, Qt::CaseInsensitive) == 0
+        || m_currentPath.startsWith(targetPrefix, Qt::CaseInsensitive);
+    if (currentPathWasDeleted)
+    {
+        const int slashPos = subPath.lastIndexOf('\\');
+        const QString parentSubPath = slashPos < 0 ? QString() : subPath.left(slashPos);
+        QString parentFullPath = rootKeyToText(root);
+        if (!parentSubPath.isEmpty())
+        {
+            parentFullPath += QStringLiteral("\\") + parentSubPath;
+        }
+        navigateToPath(parentFullPath, true);
+    }
+    else
+    {
+        refreshValueTable();
+    }
 }
 
 void RegistryDock::editSelectedValue()

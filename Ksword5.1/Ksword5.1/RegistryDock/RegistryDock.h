@@ -105,6 +105,10 @@ private:
     // - 作用：按搜索行保存的完整键路径与原始值名删除一个注册表值。
     // - 说明：不依赖当前树选择；驱动可用时由 deleteRegistryValueAny 优先走 R0。
     void deleteSearchResultValue(const QString& keyPath, const QString& rawValueName);
+    // deleteSearchResultKey：
+    // - 作用：按搜索行保存的完整键路径递归删除一个非根注册表键。
+    // - 说明：当前浏览位置落在目标子树内时，删除后回退到目标父键。
+    void deleteSearchResultKey(const QString& keyPath);
     void editSelectedValue();
     void copyCurrentPathToClipboard();
     // copyCurrentKernelPathToClipboard：
