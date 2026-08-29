@@ -56,6 +56,15 @@ public:
     // - 无返回值。
     void requestInitialRefresh();
 
+    // addBlockRuleFromEvidence：
+    // - 作用：以审计证据预填一条阻断规则，仍由用户在编辑器中确认后写入系统。
+    void addBlockRuleFromEvidence(
+        const QString& remoteAddress,
+        const QString& remotePort,
+        const QString& protocolText,
+        const QString& directionText,
+        const QString& sourceText);
+
     // FirewallEventEntry：
     // - 作用：保存一次 WFP net event 的展示字段；
     // - 处理逻辑：WFP 线程填充，UI 线程插入表格；

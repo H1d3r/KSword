@@ -31427,6 +31427,9 @@
     "定位": "定位",
     "测试签名：%2\n": "测试签名：%2\n",
     "驱动签名强制：%1\n": "驱动签名强制：%1\n",
-    "驱动签名强制：%1\n测试签名：%2\n内存完整性：%3\n安全启动：%4\ng_CiOptions 地址：%5\ng_CiOptions 值：%6\nCiInitialize RVA：%7\n命中指令：%8\n状态：%9": "驱动签名强制：%1\n测试签名：%2\n内存完整性：%3\n安全启动：%4\ng_CiOptions 地址：%5\ng_CiOptions 值：%6\nCiInitialize RVA：%7\n命中指令：%8\n状态：%9"
+    "驱动签名强制：%1\n测试签名：%2\n内存完整性：%3\n安全启动：%4\ng_CiOptions 地址：%5\ng_CiOptions 值：%6\nCiInitialize RVA：%7\n命中指令：%8\n状态：%9": "驱动签名强制：%1\n测试签名：%2\n内存完整性：%3\n安全启动：%4\ng_CiOptions 地址：%5\ng_CiOptions 值：%6\nCiInitialize RVA：%7\n命中指令：%8\n状态：%9",
+    "KSword 阻断 - %1": "KSword 阻断 - %1",
+    "由审计证据预填；请在保存前核对匹配范围。": "由审计证据预填；请在保存前核对匹配范围。",
+    "预填阻断规则": "预填阻断规则"
   }
 }

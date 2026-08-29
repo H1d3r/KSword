@@ -31427,6 +31427,9 @@
     "定位": "Locate",
     "测试签名：%2\n": "Test signing: %2\n",
     "驱动签名强制：%1\n": "Driver signature enforcement: %1\n",
-    "驱动签名强制：%1\n测试签名：%2\n内存完整性：%3\n安全启动：%4\ng_CiOptions 地址：%5\ng_CiOptions 值：%6\nCiInitialize RVA：%7\n命中指令：%8\n状态：%9": "Driver signature enforcement: %1\nTest signing: %2\nMemory integrity: %3\nSecure Boot: %4\ng_CiOptions address: %5\ng_CiOptions value: %6\nCiInitialize RVA: %7\nMatched instruction: %8\nStatus: %9"
+    "驱动签名强制：%1\n测试签名：%2\n内存完整性：%3\n安全启动：%4\ng_CiOptions 地址：%5\ng_CiOptions 值：%6\nCiInitialize RVA：%7\n命中指令：%8\n状态：%9": "Driver signature enforcement: %1\nTest signing: %2\nMemory integrity: %3\nSecure Boot: %4\ng_CiOptions address: %5\ng_CiOptions value: %6\nCiInitialize RVA: %7\nMatched instruction: %8\nStatus: %9",
+    "KSword 阻断 - %1": "KSword block - %1",
+    "由审计证据预填；请在保存前核对匹配范围。": "Pre-filled from audit evidence; verify the match scope before saving.",
+    "预填阻断规则": "Pre-fill block rule"
   }
 }

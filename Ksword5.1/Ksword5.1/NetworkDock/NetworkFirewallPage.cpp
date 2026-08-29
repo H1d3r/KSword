@@ -4084,6 +4084,57 @@ void NetworkFirewallPage::addFirewallRule()
     refreshRulesAsync(true);
 }
 
+void NetworkFirewallPage::addBlockRuleFromEvidence(
+    const QString& remoteAddress,
+    const QString& remotePort,
+    const QString& protocolText,
+    const QString& directionText,
+    const QString& sourceText)
+{
+    if (!ks::ui::isCurrentProcessElevated())
+    {
+        (void)ks::ui::requestAdministratorRestartForFeature(this, QStringLiteral("新增防火墙规则"));
+        return;
+    }
+
+    FirewallRuleEntry initialRule;
+    initialRule.nameText = QStringLiteral("KSword 阻断 - %1").arg(sourceText);
+    initialRule.descriptionText = QStringLiteral("由审计证据预填；请在保存前核对匹配范围。");
+    initialRule.remoteAddressesText = remoteAddress.trimmed();
+    initialRule.remotePortsText = remotePort.trimmed();
+    initialRule.actionValue = NET_FW_ACTION_BLOCK;
+    initialRule.directionValue = directionText.compare(QStringLiteral("Inbound"), Qt::CaseInsensitive) == 0
+        ? NET_FW_RULE_DIR_IN : NET_FW_RULE_DIR_OUT;
+    initialRule.protocolValue = protocolText.compare(QStringLiteral("UDP"), Qt::CaseInsensitive) == 0
+        ? NET_FW_IP_PROTOCOL_UDP
+        : protocolText.compare(QStringLiteral("TCP"), Qt::CaseInsensitive) == 0
+            ? NET_FW_IP_PROTOCOL_TCP
+            : NET_FW_IP_PROTOCOL_ANY;
+    initialRule.enabled = true;
+    initialRule.profilesValue = NET_FW_PROFILE2_ALL;
+
+    FirewallRuleEditorDialog dialog(&initialRule, this);
+    if (dialog.exec() != QDialog::Accepted)
+    {
+        return;
+    }
+    const FirewallRuleEntry ruleEntry = dialog.ruleEntry();
+    QString errorText;
+    if (!addFirewallRuleEntryToSystem(ruleEntry, &errorText))
+    {
+        const bool privilegePromptHandled =
+            ks::ui::promptForPrivilegeFailure(this, QStringLiteral("新增防火墙规则"), errorText);
+        if (!privilegePromptHandled)
+        {
+            QMessageBox::warning(this, QStringLiteral("新增规则失败"), errorText);
+        }
+        setStatusText(errorText);
+        return;
+    }
+    setStatusText(QStringLiteral("已新增防火墙规则：%1").arg(ruleEntry.nameText));
+    refreshRulesAsync(true);
+}
+
 void NetworkFirewallPage::editSelectedFirewallRule()
 {
     if (!ks::ui::isCurrentProcessElevated())
