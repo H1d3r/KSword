@@ -121,6 +121,12 @@ namespace
     constexpr std::size_t kSearchFlushBatchSize = 160;
     constexpr int kMaxSearchResultRows = 20000;
 
+    // 搜索结果角色：展示文字会因语言和默认值格式而变化，处置必须使用原始元数据。
+    constexpr int kSearchResultRoleTargetKind = Qt::UserRole + 40;
+    constexpr int kSearchResultRoleRawValueName = Qt::UserRole + 41;
+    constexpr int kSearchResultTargetKey = 1;
+    constexpr int kSearchResultTargetValue = 2;
+
     // 根键映射结构：支持全名与缩写两种输入。
     struct RootEntry
     {
@@ -1246,21 +1252,41 @@ void RegistryDock::initializeConnections()
     connect(m_searchFlushTimer, &QTimer::timeout, this, [this]() { flushPendingSearchRows(); });
 
     connect(m_searchResultTable, &QTableWidget::customContextMenuRequested, this, [this](const QPoint& pos) {
-        // 搜索结果复制：
+        // 搜索结果菜单：
         // - 输入：用户在搜索结果表中的右键位置；
-        // - 处理：同步当前行并把整行按 TSV 放入剪贴板；
-        // - 返回：无，只读复制，不修改注册表键或值。
+        // - 处理：同步当前行，支持复制；值命中还可按行保存的原始目标删除值。
+        // - 返回：无；删除走既有 R0 优先 / R3 回退路径。
         const QModelIndex hit = m_searchResultTable->indexAt(pos);
         if (hit.isValid()) m_searchResultTable->setCurrentCell(hit.row(), hit.column());
+
+        const int row = m_searchResultTable->currentRow();
+        const QTableWidgetItem* pathItem = row >= 0 ? m_searchResultTable->item(row, 0) : nullptr;
+        const QTableWidgetItem* valueNameItem = row >= 0 ? m_searchResultTable->item(row, 1) : nullptr;
+        const bool isValueResult = pathItem != nullptr
+            && pathItem->data(kSearchResultRoleTargetKind).toInt() == kSearchResultTargetValue;
 
         QMenu menu(this);
         menu.setStyleSheet(KswordTheme::ContextMenuStyle());
         QAction* copyRowAction = menu.addAction(QIcon(":/Icon/process_copy_row.svg"), QStringLiteral("复制当前行"));
-        copyRowAction->setEnabled(m_searchResultTable->currentRow() >= 0);
-        if (menu.exec(m_searchResultTable->viewport()->mapToGlobal(pos)) != copyRowAction) return;
+        copyRowAction->setEnabled(row >= 0);
+        QAction* deleteValueAction = menu.addAction(QIcon(":/Icon/process_terminate.svg"), QStringLiteral("删除该值"));
+        deleteValueAction->setEnabled(isValueResult && valueNameItem != nullptr);
+
+        const QAction* action = menu.exec(m_searchResultTable->viewport()->mapToGlobal(pos));
+        if (action == deleteValueAction)
+        {
+            if (pathItem == nullptr || valueNameItem == nullptr)
+            {
+                return;
+            }
+            deleteSearchResultValue(
+                pathItem->text(),
+                valueNameItem->data(kSearchResultRoleRawValueName).toString());
+            return;
+        }
+        if (action != copyRowAction) return;
 
         QClipboard* clipboard = QApplication::clipboard();
-        const int row = m_searchResultTable->currentRow();
         if (clipboard == nullptr || row < 0 || row >= m_searchResultTable->rowCount()) return;
 
         QStringList fields;
@@ -2799,6 +2825,79 @@ void RegistryDock::deleteSelectedObject()
     navigateToPath(parentFullPath, true);
 }
 
+void RegistryDock::deleteSearchResultValue(const QString& keyPath, const QString& rawValueName)
+{
+    // 搜索结果处置不能借用当前树选择：搜索期间用户可能已导航到另一把键。
+    const QString normalizedKeyPath = keyPath.trimmed();
+    if (normalizedKeyPath.isEmpty())
+    {
+        return;
+    }
+
+    const QString displayValueName = rawValueName.isEmpty() ? QStringLiteral("(默认)") : rawValueName;
+    const QMessageBox::StandardButton choice = QMessageBox::question(
+        this,
+        QStringLiteral("删除值"),
+        QStringLiteral("确定删除注册表值“%1”吗？\n\n键路径：%2")
+            .arg(displayValueName, normalizedKeyPath),
+        QMessageBox::Yes | QMessageBox::No,
+        QMessageBox::No);
+    if (choice != QMessageBox::Yes)
+    {
+        return;
+    }
+
+    QString errorText;
+    if (!deleteRegistryValueAny(normalizedKeyPath, rawValueName, &errorText))
+    {
+        const bool privilegePromptHandled =
+            ks::ui::promptForPrivilegeFailure(this, QStringLiteral("删除注册表值"), errorText);
+        kLogEvent event;
+        warn << event
+            << "[RegistryDock] 搜索结果删除值失败, keyPath="
+            << normalizedKeyPath.toStdString()
+            << ", valueName="
+            << rawValueName.toStdString()
+            << ", error="
+            << errorText.toStdString()
+            << eol;
+        if (!privilegePromptHandled)
+        {
+            QMessageBox::warning(this, QStringLiteral("删除值"), errorText);
+        }
+        return;
+    }
+
+    kLogEvent event;
+    info << event
+        << "[RegistryDock] 搜索结果删除值成功, keyPath="
+        << normalizedKeyPath.toStdString()
+        << ", valueName="
+        << rawValueName.toStdString()
+        << eol;
+
+    // 删除成功后仅移除同一精确值命中；同一个键中的其它搜索证据仍有效。
+    if (m_searchResultTable != nullptr)
+    {
+        for (int row = m_searchResultTable->rowCount() - 1; row >= 0; --row)
+        {
+            const QTableWidgetItem* pathItem = m_searchResultTable->item(row, 0);
+            const QTableWidgetItem* valueNameItem = m_searchResultTable->item(row, 1);
+            if (pathItem == nullptr || valueNameItem == nullptr
+                || pathItem->data(kSearchResultRoleTargetKind).toInt() != kSearchResultTargetValue)
+            {
+                continue;
+            }
+            if (pathItem->text().compare(normalizedKeyPath, Qt::CaseInsensitive) == 0
+                && valueNameItem->data(kSearchResultRoleRawValueName).toString() == rawValueName)
+            {
+                m_searchResultTable->removeRow(row);
+            }
+        }
+    }
+    refreshValueTable();
+}
+
 void RegistryDock::editSelectedValue()
 {
     const int row = m_valueTable->currentRow();
@@ -3367,8 +3466,18 @@ void RegistryDock::flushPendingSearchRows()
         {
             const PendingSearchRow& row = rows[static_cast<std::size_t>(index)];
             const int tableRow = firstRow + index;
-            m_searchResultTable->setItem(tableRow, 0, new QTableWidgetItem(row.keyPathText));
-            m_searchResultTable->setItem(tableRow, 1, new QTableWidgetItem(row.valueNameText));
+            QTableWidgetItem* keyPathItem = new QTableWidgetItem(row.keyPathText);
+            keyPathItem->setData(
+                kSearchResultRoleTargetKind,
+                row.isKeyResult ? kSearchResultTargetKey : kSearchResultTargetValue);
+            QTableWidgetItem* valueNameItem = new QTableWidgetItem(row.valueNameText);
+            if (!row.isKeyResult)
+            {
+                // 默认值展示文本与真实的空 Win32 名称分开保存，避免同名显示值歧义。
+                valueNameItem->setData(kSearchResultRoleRawValueName, row.rawValueName);
+            }
+            m_searchResultTable->setItem(tableRow, 0, keyPathItem);
+            m_searchResultTable->setItem(tableRow, 1, valueNameItem);
             m_searchResultTable->setItem(tableRow, 2, new QTableWidgetItem(row.valueTypeText));
             m_searchResultTable->setItem(tableRow, 3, new QTableWidgetItem(row.valueDataPreviewText));
             m_searchResultTable->setItem(tableRow, 4, new QTableWidgetItem(row.hitSourceText));
@@ -3408,6 +3517,7 @@ void RegistryDock::searchRegistryRecursive(HKEY root, const QString& subPath, co
         row.valueTypeText = QStringLiteral("<Key>");
         row.valueDataPreviewText = QStringLiteral("-");
         row.hitSourceText = QStringLiteral("KeyName");
+        row.isKeyResult = true;
         enqueuePendingSearchRow(std::move(row));
         if (hit != nullptr) *hit += 1;
     }
@@ -3453,6 +3563,7 @@ void RegistryDock::searchRegistryRecursive(HKEY root, const QString& subPath, co
         PendingSearchRow row;
         row.keyPathText = fullPath;
         row.valueNameText = valueName.isEmpty() ? QStringLiteral("(默认)") : valueName;
+        row.rawValueName = valueName;
         row.valueTypeText = valueTypeToText(valueType);
         row.valueDataPreviewText = valueText;
         row.hitSourceText = sourceText;
@@ -3541,6 +3652,7 @@ void RegistryDock::searchRegistryRecursiveByR0(
         row.valueTypeText = QStringLiteral("<Key>");
         row.valueDataPreviewText = QStringLiteral("-");
         row.hitSourceText = QStringLiteral("KeyName/R0");
+        row.isKeyResult = true;
         enqueuePendingSearchRow(std::move(row));
         if (hit != nullptr) *hit += 1;
     }
@@ -3580,6 +3692,7 @@ void RegistryDock::searchRegistryRecursiveByR0(
         PendingSearchRow row;
         row.keyPathText = displayKeyPath;
         row.valueNameText = valueName.isEmpty() ? QStringLiteral("(默认)") : valueName;
+        row.rawValueName = valueName;
         row.valueTypeText = valueTypeToText(static_cast<DWORD>(valueEntry.valueType));
         row.valueDataPreviewText = valueText;
         row.hitSourceText = sourceText;
