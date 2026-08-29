@@ -4281,6 +4281,77 @@ void NetworkFirewallPage::addBlockRuleFromEvidence(
     refreshRulesAsync(true);
 }
 
+void NetworkFirewallPage::addUdpEndpointBlockRuleFromEvidence(
+    const QString& localEndpointText,
+    const std::uint32_t observedProcessId)
+{
+    if (!ks::ui::isCurrentProcessElevated())
+    {
+        (void)ks::ui::requestAdministratorRestartForFeature(this, QStringLiteral("新增防火墙规则"));
+        return;
+    }
+
+    const QString normalizedEndpoint = localEndpointText.trimmed();
+    const int portSeparator = normalizedEndpoint.lastIndexOf(QLatin1Char(':'));
+    bool portOk = false;
+    const quint16 localPort = portSeparator > 0
+        ? normalizedEndpoint.mid(portSeparator + 1).toUShort(&portOk, 10)
+        : 0U;
+    QString localAddress = portSeparator > 0
+        ? normalizedEndpoint.left(portSeparator).trimmed()
+        : QString();
+    if (localAddress.startsWith(QLatin1Char('[')) && localAddress.endsWith(QLatin1Char(']')))
+    {
+        localAddress = localAddress.mid(1, localAddress.size() - 2);
+    }
+    if (!portOk || localPort == 0U || localAddress.isEmpty())
+    {
+        QMessageBox::warning(
+            this,
+            QStringLiteral("预填 UDP 阻断规则"),
+            QStringLiteral("所选 UDP 端点格式无效，无法安全预填防火墙规则。"));
+        return;
+    }
+
+    FirewallRuleEntry initialRule;
+    initialRule.nameText = QStringLiteral("KSword 阻断 - NSI UDP");
+    initialRule.descriptionText = QStringLiteral(
+        "由 NSI UDP 端点预填；端点不携带方向，默认出站。请在保存前核对方向和匹配范围。PID=%1")
+        .arg(observedProcessId);
+    // 0.0.0.0/:: 代表任意本地地址；保留为空才能表达跨所有本机接口的同一端口规则。
+    if (localAddress != QStringLiteral("0.0.0.0") && localAddress != QStringLiteral("::"))
+    {
+        initialRule.localAddressesText = localAddress;
+    }
+    initialRule.localPortsText = QString::number(localPort);
+    initialRule.actionValue = NET_FW_ACTION_BLOCK;
+    initialRule.directionValue = NET_FW_RULE_DIR_OUT;
+    initialRule.protocolValue = NET_FW_IP_PROTOCOL_UDP;
+    initialRule.enabled = true;
+    initialRule.profilesValue = NET_FW_PROFILE2_ALL;
+
+    FirewallRuleEditorDialog dialog(&initialRule, this);
+    if (dialog.exec() != QDialog::Accepted)
+    {
+        return;
+    }
+    const FirewallRuleEntry ruleEntry = dialog.ruleEntry();
+    QString errorText;
+    if (!addFirewallRuleEntryToSystem(ruleEntry, &errorText))
+    {
+        const bool privilegePromptHandled =
+            ks::ui::promptForPrivilegeFailure(this, QStringLiteral("新增防火墙规则"), errorText);
+        if (!privilegePromptHandled)
+        {
+            QMessageBox::warning(this, QStringLiteral("新增规则失败"), errorText);
+        }
+        setStatusText(errorText);
+        return;
+    }
+    setStatusText(QStringLiteral("已新增防火墙规则：%1").arg(ruleEntry.nameText));
+    refreshRulesAsync(true);
+}
+
 void NetworkFirewallPage::editSelectedFirewallRule()
 {
     if (!ks::ui::isCurrentProcessElevated())
