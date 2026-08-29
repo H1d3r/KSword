@@ -31411,6 +31411,9 @@
     "线程亲和性已更新。": "Thread affinity updated.",
     "线程亲和性设置失败。": "Thread affinity update failed.",
     "线程亲和性设置失败：%1": "Thread affinity update failed: %1",
-    "跟随进程 CPU Set": "Follow process CPU Set"
+    "跟随进程 CPU Set": "Follow process CPU Set",
+    "KSword 阻断 - %1": "KSword block - %1",
+    "由审计证据预填；请在保存前核对匹配范围。": "Pre-filled from audit evidence; verify the match scope before saving.",
+    "预填阻断规则": "Pre-fill block rule"
   }
 }

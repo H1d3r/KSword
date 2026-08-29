@@ -1,4 +1,5 @@
 #include "NetworkDock.InternalCommon.h"
+#include "NetworkFirewallPage.h"
 #include "../UI/VisibleTableWidget.h"
 #include "../UI/TableInteractionSupport.h"
 
@@ -273,6 +274,10 @@ void NetworkDock::initializeNidsTab()
             QIcon(QStringLiteral(":/Icon/process_details.svg")),
             QStringLiteral("转到进程详细信息"));
         openProcessDetailAction->setEnabled(hasProcessId);
+        QAction* addBlockRuleAction = menu.addAction(
+            QIcon(QStringLiteral(":/Icon/process_terminate.svg")),
+            QStringLiteral("预填阻断规则"));
+        addBlockRuleAction->setEnabled(hasRelatedPacket && m_firewallPage != nullptr);
         menu.addSeparator();
         QAction* uploadVirusTotalAction = ks::online_scan::addVirusTotalSandboxMenu(
             &menu,
@@ -313,6 +318,26 @@ void NetworkDock::initializeNidsTab()
         if (selectedAction == viewPacketDetailAction)
         {
             openPacketDetailWindowBySequenceId(relatedPacketSequenceId);
+        }
+        else if (selectedAction == addBlockRuleAction)
+        {
+            const auto alertIt = std::find_if(
+                m_nidsAlertList.cbegin(),
+                m_nidsAlertList.cend(),
+                [relatedPacketSequenceId](const ks::network::NidsAlert& alertRecord)
+                {
+                    return alertRecord.sequenceId == relatedPacketSequenceId;
+                });
+            if (alertIt != m_nidsAlertList.cend() && m_firewallPage != nullptr)
+            {
+                m_firewallPage->addBlockRuleFromEvidence(
+                    QString::fromUtf8(alertIt->remoteAddress.c_str()),
+                    QString::number(alertIt->remotePort),
+                    toQString(ks::network::PacketProtocolToString(alertIt->protocol)),
+                    alertIt->direction == ks::network::PacketDirection::Inbound
+                        ? QStringLiteral("Inbound") : QStringLiteral("Outbound"),
+                    QStringLiteral("NIDS"));
+            }
         }
         else if (selectedAction == copyCellAction)
         {
