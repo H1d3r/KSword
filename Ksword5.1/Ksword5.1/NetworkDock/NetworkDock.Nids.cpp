@@ -162,6 +162,47 @@ namespace
         sequenceIdOut = static_cast<std::uint64_t>(sequenceVariant.toULongLong());
         return sequenceIdOut != 0;
     }
+
+    // captureNidsProcessIdentity：
+    // - 作用：在 NIDS 告警生成的同一时段冻结应用级处置所需的进程身份；
+    // - 处理：创建时间前后各读取一次，只有两次一致且镜像路径可得才接受快照；
+    // - 返回：失败时保持字段为空，后续只能生成端点级阻断规则。
+    void captureNidsProcessIdentity(ks::network::NidsAlert& alertRecord)
+    {
+        if (alertRecord.processId == 0U)
+        {
+            return;
+        }
+
+        std::uint64_t creationTimeBefore = 0U;
+        if (!ks::process::QueryProcessCreationTimeByPid(
+                alertRecord.processId,
+                &creationTimeBefore,
+                nullptr) ||
+            creationTimeBefore == 0U)
+        {
+            return;
+        }
+
+        const std::string imagePath = ks::process::QueryProcessPathByPid(alertRecord.processId);
+        if (imagePath.empty())
+        {
+            return;
+        }
+
+        std::uint64_t creationTimeAfter = 0U;
+        if (!ks::process::QueryProcessCreationTimeByPid(
+                alertRecord.processId,
+                &creationTimeAfter,
+                nullptr) ||
+            creationTimeAfter != creationTimeBefore)
+        {
+            return;
+        }
+
+        alertRecord.processCreationTime100ns = creationTimeAfter;
+        alertRecord.processImagePath = imagePath;
+    }
 }
 
 void NetworkDock::initializeNidsTab()
@@ -336,7 +377,10 @@ void NetworkDock::initializeNidsTab()
                     toQString(ks::network::PacketProtocolToString(alertIt->protocol)),
                     alertIt->direction == ks::network::PacketDirection::Inbound
                         ? QStringLiteral("Inbound") : QStringLiteral("Outbound"),
-                    QStringLiteral("NIDS"));
+                    QStringLiteral("NIDS"),
+                    alertIt->processId,
+                    alertIt->processCreationTime100ns,
+                    QString::fromUtf8(alertIt->processImagePath.c_str()));
             }
         }
         else if (selectedAction == copyCellAction)
@@ -394,8 +438,9 @@ void NetworkDock::processNidsPacket(const ks::network::PacketRecord& packetRecor
     }
 
     bool trimmed = false;
-    for (const ks::network::NidsAlert& alertRecord : alertList)
+    for (ks::network::NidsAlert& alertRecord : alertList)
     {
+        captureNidsProcessIdentity(alertRecord);
         m_nidsAlertList.push_back(alertRecord);
         ++m_nidsTotalAlertCount;
         while (m_nidsAlertList.size() > kMaxNidsAlertCount)
