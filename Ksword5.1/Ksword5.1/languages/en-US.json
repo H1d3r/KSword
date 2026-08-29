@@ -31438,6 +31438,10 @@
     "审计证据未包含可信的远端地址，无法安全预填防火墙规则。": "The audit evidence has no trustworthy remote address, so a firewall rule cannot be safely pre-filled.",
     "由审计证据预填；已带入 WFP 事件的应用程序路径。请在保存前核对匹配范围。": "Pre-filled from audit evidence; the application path from the WFP event was included. Verify the match scope before saving.",
     "由审计证据预填；未能核验或提取应用程序范围。请在保存前核对匹配范围。": "Pre-filled from audit evidence; the application scope could not be verified or extracted. Verify the match scope before saving.",
-    "WFP 事件": "WFP event"
+    "WFP 事件": "WFP event",
+    "预填 UDP 阻断规则": "Pre-fill UDP block rule",
+    "所选 UDP 端点格式无效，无法安全预填防火墙规则。": "The selected UDP endpoint has an invalid format, so a firewall rule cannot be safely pre-filled.",
+    "KSword 阻断 - NSI UDP": "KSword block - NSI UDP",
+    "由 NSI UDP 端点预填；端点不携带方向，默认出站。请在保存前核对方向和匹配范围。PID=%1": "Pre-filled from an NSI UDP endpoint. The endpoint does not carry direction, so outbound is the default. Verify direction and match scope before saving. PID=%1"
   }
 }
