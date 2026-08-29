@@ -73,9 +73,11 @@ private:
     {
         QString keyPathText;            // 命中的键完整路径。
         QString valueNameText;          // 命中的值名（键命中时可为空）。
+        QString rawValueName;           // 值的原始 Win32 名称；默认值为真正的空字符串。
         QString valueTypeText;          // 值类型（键命中时为<Key>）。
         QString valueDataPreviewText;   // 值数据预览。
         QString hitSourceText;          // 命中来源（KeyName/ValueName/ValueData）。
+        bool isKeyResult = false;       // 是否为键命中；false 时为值命中。
     };
 
 private:
@@ -99,6 +101,10 @@ private:
     void createValue();
     void renameSelectedObject();
     void deleteSelectedObject();
+    // deleteSearchResultValue：
+    // - 作用：按搜索行保存的完整键路径与原始值名删除一个注册表值。
+    // - 说明：不依赖当前树选择；驱动可用时由 deleteRegistryValueAny 优先走 R0。
+    void deleteSearchResultValue(const QString& keyPath, const QString& rawValueName);
     void editSelectedValue();
     void copyCurrentPathToClipboard();
     // copyCurrentKernelPathToClipboard：
