@@ -4101,6 +4101,17 @@ void NetworkFirewallPage::addBlockRuleFromEvidence(
         return;
     }
 
+    const bool isInbound = directionText.compare(QStringLiteral("Inbound"), Qt::CaseInsensitive) == 0;
+    const bool isOutbound = directionText.compare(QStringLiteral("Outbound"), Qt::CaseInsensitive) == 0;
+    if (!isInbound && !isOutbound)
+    {
+        QMessageBox::warning(
+            this,
+            QStringLiteral("预填阻断规则"),
+            QStringLiteral("审计证据未包含可信的入站或出站方向，无法安全预填防火墙规则。"));
+        return;
+    }
+
     FirewallRuleEntry initialRule;
     initialRule.nameText = QStringLiteral("KSword 阻断 - %1").arg(sourceText);
 
@@ -4152,8 +4163,7 @@ void NetworkFirewallPage::addBlockRuleFromEvidence(
     initialRule.remoteAddressesText = remoteAddress.trimmed();
     initialRule.remotePortsText = remotePort.trimmed();
     initialRule.actionValue = NET_FW_ACTION_BLOCK;
-    initialRule.directionValue = directionText.compare(QStringLiteral("Inbound"), Qt::CaseInsensitive) == 0
-        ? NET_FW_RULE_DIR_IN : NET_FW_RULE_DIR_OUT;
+    initialRule.directionValue = isInbound ? NET_FW_RULE_DIR_IN : NET_FW_RULE_DIR_OUT;
     initialRule.protocolValue = protocolText.compare(QStringLiteral("UDP"), Qt::CaseInsensitive) == 0
         ? NET_FW_IP_PROTOCOL_UDP
         : protocolText.compare(QStringLiteral("TCP"), Qt::CaseInsensitive) == 0
