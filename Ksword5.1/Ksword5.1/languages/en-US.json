@@ -31414,6 +31414,8 @@
     "跟随进程 CPU Set": "Follow process CPU Set",
     "KSword 阻断 - %1": "KSword block - %1",
     "由审计证据预填；请在保存前核对匹配范围。": "Pre-filled from audit evidence; verify the match scope before saving.",
-    "预填阻断规则": "Pre-fill block rule"
+    "预填阻断规则": "Pre-fill block rule",
+    "由审计证据预填；已复核 PID=%1 的当前进程身份。请在保存前核对匹配范围。": "Pre-filled from audit evidence; the current identity of PID=%1 was verified. Verify the match scope before saving.",
+    "由审计证据预填；关联进程已退出、不可访问或 PID 已复用，未预填程序范围。请在保存前核对匹配范围。": "Pre-filled from audit evidence; the associated process exited, is inaccessible, or its PID was reused, so no program scope was pre-filled. Verify the match scope before saving."
   }
 }

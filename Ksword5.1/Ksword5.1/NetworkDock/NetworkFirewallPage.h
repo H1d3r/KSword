@@ -13,6 +13,7 @@
 #include <QWidget>
 
 #include <atomic> // std::atomic_bool：防止历史刷新并发。
+#include <cstdint> // std::uint32_t/std::uint64_t：审计进程身份字段。
 #include <deque>  // std::deque：实时事件队列按固定上限 O(1) 淘汰最旧项。
 #include <mutex>  // std::mutex：实时回调队列保护。
 #include <thread> // std::thread：可等待的历史/规则刷新线程。
@@ -63,7 +64,10 @@ public:
         const QString& remotePort,
         const QString& protocolText,
         const QString& directionText,
-        const QString& sourceText);
+        const QString& sourceText,
+        std::uint32_t observedProcessId = 0,
+        std::uint64_t expectedProcessCreationTime100ns = 0,
+        const QString& expectedProcessImagePath = QString());
 
     // FirewallEventEntry：
     // - 作用：保存一次 WFP net event 的展示字段；

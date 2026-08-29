@@ -16,6 +16,7 @@
 #include "../Framework/PrivilegeElevationPrompt.h"
 #include "../Internationalization/LanguageManager.h"
 #include "../UI/GlobalDialogTheme.h"
+#include "../ksword/process/process.h"
 
 #include <QAbstractItemModel>
 #include <QAbstractItemView>
@@ -4089,7 +4090,10 @@ void NetworkFirewallPage::addBlockRuleFromEvidence(
     const QString& remotePort,
     const QString& protocolText,
     const QString& directionText,
-    const QString& sourceText)
+    const QString& sourceText,
+    const std::uint32_t observedProcessId,
+    const std::uint64_t expectedProcessCreationTime100ns,
+    const QString& expectedProcessImagePath)
 {
     if (!ks::ui::isCurrentProcessElevated())
     {
@@ -4099,7 +4103,52 @@ void NetworkFirewallPage::addBlockRuleFromEvidence(
 
     FirewallRuleEntry initialRule;
     initialRule.nameText = QStringLiteral("KSword 阻断 - %1").arg(sourceText);
-    initialRule.descriptionText = QStringLiteral("由审计证据预填；请在保存前核对匹配范围。");
+
+    // 不能把历史 NIDS 行中的裸 PID 直接写进规则。只有当前创建时间和镜像路径都与
+    // 告警产生时的快照一致，才把“程序”条件预填到 Windows Firewall 规则中。
+    bool processIdentityMatches = false;
+    QString currentProcessImagePath;
+    if (observedProcessId != 0U &&
+        expectedProcessCreationTime100ns != 0U &&
+        !expectedProcessImagePath.trimmed().isEmpty())
+    {
+        std::uint64_t creationTimeBeforePathRead100ns = 0U;
+        if (ks::process::QueryProcessCreationTimeByPid(
+                observedProcessId,
+                &creationTimeBeforePathRead100ns,
+                nullptr) &&
+            creationTimeBeforePathRead100ns == expectedProcessCreationTime100ns)
+        {
+            currentProcessImagePath = QString::fromStdString(
+                ks::process::QueryProcessPathByPid(observedProcessId)).trimmed();
+            std::uint64_t creationTimeAfterPathRead100ns = 0U;
+            if (ks::process::QueryProcessCreationTimeByPid(
+                    observedProcessId,
+                    &creationTimeAfterPathRead100ns,
+                    nullptr) &&
+                creationTimeAfterPathRead100ns == expectedProcessCreationTime100ns)
+            {
+                processIdentityMatches =
+                    !currentProcessImagePath.isEmpty() &&
+                    currentProcessImagePath.compare(
+                        expectedProcessImagePath.trimmed(),
+                        Qt::CaseInsensitive) == 0;
+            }
+        }
+    }
+
+    if (processIdentityMatches)
+    {
+        initialRule.applicationText = currentProcessImagePath;
+        initialRule.descriptionText = QStringLiteral(
+            "由审计证据预填；已复核 PID=%1 的当前进程身份。请在保存前核对匹配范围。")
+            .arg(observedProcessId);
+    }
+    else
+    {
+        initialRule.descriptionText = QStringLiteral(
+            "由审计证据预填；关联进程已退出、不可访问或 PID 已复用，未预填程序范围。请在保存前核对匹配范围。");
+    }
     initialRule.remoteAddressesText = remoteAddress.trimmed();
     initialRule.remotePortsText = remotePort.trimmed();
     initialRule.actionValue = NET_FW_ACTION_BLOCK;
