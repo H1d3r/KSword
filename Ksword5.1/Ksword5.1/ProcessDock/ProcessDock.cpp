@@ -3161,7 +3161,8 @@ namespace
     }
 
     // enumerateProcessesByR0Driver 作用：
-    // - 通过 ArkDriverClient 获取内核侧进程列表；
+    // - 仅在 KswordARK 控制设备已就绪时，通过 ArkDriverClient 获取内核侧进程列表；
+    // - 驱动未加载的 R3 刷新不发送枚举 IOCTL，也不触发 R0 权限提示。
     // - 输出可用于“R3 列表 vs R0 列表”差异比对的数据。
     bool enumerateProcessesByR0Driver(
         std::vector<KernelProcessSnapshotEntry>* const processListOut,
@@ -3178,8 +3179,19 @@ namespace
         }
 
         const ksword::ark::DriverClient driverClient;
+        ksword::ark::DriverHandle driverHandle = driverClient.openSilently();
+        if (!driverHandle.isValid())
+        {
+            if (detailTextOut != nullptr)
+            {
+                *detailTextOut = "R0 driver device is not ready; kernel process comparison skipped";
+            }
+            return false;
+        }
+
         const ksword::ark::ProcessEnumResult enumResult = driverClient.enumerateProcesses(
-            KSWORD_ARK_ENUM_PROCESS_FLAG_SCAN_CID_TABLE);
+            KSWORD_ARK_ENUM_PROCESS_FLAG_SCAN_CID_TABLE,
+            &driverHandle);
         if (!enumResult.io.ok)
         {
             if (detailTextOut != nullptr)
