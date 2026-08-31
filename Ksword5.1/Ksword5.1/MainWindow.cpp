@@ -7304,8 +7304,8 @@ void MainWindow::initMenus()
     configureTitleMenuButton(m_windowMenuButton, m_windowMenu);
 
     titleActionLayout->addWidget(m_optionsMenuButton);
-    titleActionLayout->addWidget(m_githubMenuButton);
     titleActionLayout->addWidget(m_windowMenuButton);
+    titleActionLayout->addWidget(m_githubMenuButton);
     m_customTitleBar->setCustomLeftWidget(titleActionContainer);
     refreshTitleActionButtonStyles();
 }

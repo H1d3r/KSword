@@ -4557,17 +4557,24 @@ void ProcessDock::initializeTopControls()
     m_startButton->setStyleSheet(buttonStyle);
     m_pauseButton->setStyleSheet(buttonStyle);
 
-    // 第一行放“操作按钮 + 刷新间隔”。
+    // 第一行按功能分组，组间留空隙，避免同类控件被别的组隔开：
+    // ① 枚举与视图：决定“列出哪些进程、怎么组织”；
+    // ② 运行控制：开始/暂停/选择列/回调保护；
+    // ③ 搜索；
+    // ④ 活动记录：由 initializeProcessActivityPanel 插在搜索框之后；
+    // ⑤ 右侧刷新间隔组，靠 addStretch 推到最右。
     m_controlLayout->addWidget(m_strategyCombo);
     m_controlLayout->addWidget(m_friendlyViewCheck);
     m_controlLayout->addWidget(m_viewModeCombo);
+    m_controlLayout->addWidget(m_kernelCompareCheck);
+    m_controlLayout->addWidget(m_showKswordHiddenProcessCheck);
+    m_controlLayout->addSpacing(12);
     m_controlLayout->addWidget(m_startButton);
     m_controlLayout->addWidget(m_pauseButton);
     m_controlLayout->addWidget(m_columnChooserButton);
     m_controlLayout->addWidget(m_processProtectCallbackButton);
+    m_controlLayout->addSpacing(12);
     m_controlLayout->addWidget(m_processSearchLineEdit);
-    m_controlLayout->addWidget(m_kernelCompareCheck);
-    m_controlLayout->addWidget(m_showKswordHiddenProcessCheck);
     m_controlLayout->addStretch(1);
     m_controlLayout->addWidget(m_refreshLabel);
     m_controlLayout->addWidget(m_tableRefreshIntervalSpin);
@@ -4713,9 +4720,11 @@ void ProcessDock::initializeProcessActivityPanel()
         QStringLiteral("显示:"));
 
     // 活动控制项并入顶部控制行，图表面板只保留图表本身，省下一整行垂直空间。
-    // 插在搜索框之后、addStretch 之前：右侧的刷新间隔组仍靠右对齐。
-    // addWidget 会自动把这些控件从 m_activityPanelWidget 重新认父到控制行容器。
+    // 作为独立的一组插在搜索框之后、addStretch 之前：右侧刷新间隔组仍靠右对齐，
+    // 而枚举类开关留在最左边那一组，不会被这一组隔开。
+    // insertWidget 会自动把这些控件从 m_activityPanelWidget 重新认父到控制行容器。
     int topControlInsertIndex = m_controlLayout->indexOf(m_processSearchLineEdit) + 1;
+    m_controlLayout->insertSpacing(topControlInsertIndex++, 12);
     for (QWidget* const activityControlWidget : {
              static_cast<QWidget*>(m_activityClearButton),
              static_cast<QWidget*>(m_activityBackgroundRecordCheck),
