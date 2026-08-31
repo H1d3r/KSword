@@ -1121,6 +1121,342 @@ KswordARKDriverResolveProcessSectionSignatureLevelOffset(
     return sectionOffset;
 }
 
+//
+// ============================================================================
+// EPROCESS.SectionObject / EPROCESS.ObjectTable 的运行时解析
+// ----------------------------------------------------------------------------
+// 这两个偏移原本只有 System Informer 偏移表一个来源，而该表按 ntoskrnl 的
+// TimeDateStamp + SizeOfImage 精确匹配，新内核往往不在表内，于是进程列表的
+// 「HandleTable」「SectionObject」两列恒为 Unavailable。这里补一条不依赖
+// PDB、不依赖打包 profile 的运行时来源。
+//
+// 手法与既有的 EpProtection/EpSignatureLevel 解析一致：反汇编导出访问器取
+// 偏移，再回读校验；不做无锚点的内核内存扫描。
+// ============================================================================
+//
+
+// ntifs.h 未导出这两个符号的声明，按本代码库既有做法就地声明。
+NTKERNELAPI
+POBJECT_TYPE
+NTAPI
+ObGetObjectType(
+    _In_ PVOID Object
+    );
+
+extern POBJECT_TYPE* MmSectionObjectType;
+
+// KswordARKDriverDecodeSingleFieldAccessorOffset 作用：
+// - 输入：一个形如 `mov rax, [rcx+disp32]; ret` 的导出访问器名；
+// - 处理：取其前 8 字节并校验 48 8B 81 <disp32> C3 编码；
+// - 返回：disp32；编码不符或超出合理范围时返回 -1。
+static LONG
+KswordARKDriverDecodeSingleFieldAccessorOffset(
+    _In_z_ const WCHAR* RoutineName
+    )
+{
+    UNICODE_STRING routineName;
+    const UCHAR* routineAddress = NULL;
+    UCHAR code[8];
+    LONG offset = -1;
+
+    RtlInitUnicodeString(&routineName, (PWSTR)RoutineName);
+    routineAddress = (const UCHAR*)MmGetSystemRoutineAddress(&routineName);
+    if (routineAddress == NULL) {
+        return -1;
+    }
+
+    RtlZeroMemory(code, sizeof(code));
+    __try {
+        RtlCopyMemory(code, routineAddress, sizeof(code));
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        return -1;
+    }
+
+    // 48 8B 81 <disp32> C3 = mov rax, [rcx+disp32] / ret
+    if (code[0] != 0x48U || code[1] != 0x8BU || code[2] != 0x81U || code[7] != 0xC3U) {
+        return -1;
+    }
+    RtlCopyMemory(&offset, code + 3, sizeof(offset));
+    if (offset <= 0 || offset > 0x0FFF) {
+        return -1;
+    }
+    return offset;
+}
+
+// KswordARKDriverIsProbableKernelPointer 作用：
+// - 输入：候选内核指针与需要试读的字节数；
+// - 处理：只接受 8 字节对齐的规范内核地址，并要求首尾字节当前均已驻留；
+// - 返回：可以在 __try 保护下试读时为 TRUE。
+// 说明：MmIsAddressValid 只降低触发概率，真正的兜底仍是调用方的 __try。
+static BOOLEAN
+KswordARKDriverIsProbableKernelPointer(
+    _In_opt_ const VOID* Pointer,
+    _In_ ULONG RequiredBytes
+    )
+{
+    const ULONG_PTR value = (ULONG_PTR)Pointer;
+
+    if (Pointer == NULL || (value & 0x7ULL) != 0ULL) {
+        return FALSE;
+    }
+    if (value < 0xFFFF800000000000ULL) {
+        return FALSE;
+    }
+    if (!MmIsAddressValid((PVOID)Pointer)) {
+        return FALSE;
+    }
+    if (!MmIsAddressValid((PVOID)(value + RequiredBytes - 1ULL))) {
+        return FALSE;
+    }
+    return TRUE;
+}
+
+LONG
+KswordARKDriverResolveProcessSectionObjectOffset(
+    VOID
+    )
+/*++
+
+Routine Description:
+
+    解析 EPROCESS.SectionObject 偏移。
+
+    PsReferenceProcessFilePointer 先对 Process->RundownProtect 取地址（lea，
+    48 8D），拿到 rundown 保护后立刻加载 Process->SectionObject 并判空。因此在
+    其前若干字节里第一条带 disp32 的 REX.W 内存加载（48 8B）就是 SectionObject。
+
+    候选偏移必须通过对象类型校验：读出的指针须是一个 MmSectionObjectType 对象。
+    这一步让错误解码几乎不可能通过。
+
+Return Value:
+
+    成功返回偏移；无法确定时返回 -1，调用方据此保持该字段不可用。
+
+--*/
+{
+    UNICODE_STRING routineName;
+    const UCHAR* routineAddress = NULL;
+    PEPROCESS process = PsGetCurrentProcess();
+    UCHAR code[64];
+    SIZE_T index = 0U;
+
+    if (process == NULL || MmSectionObjectType == NULL) {
+        return -1;
+    }
+
+    RtlInitUnicodeString(&routineName, L"PsReferenceProcessFilePointer");
+    routineAddress = (const UCHAR*)MmGetSystemRoutineAddress(&routineName);
+    if (routineAddress == NULL) {
+        return -1;
+    }
+
+    RtlZeroMemory(code, sizeof(code));
+    __try {
+        RtlCopyMemory(code, routineAddress, sizeof(code));
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) {
+        return -1;
+    }
+
+    for (index = 0U; index + 7U <= sizeof(code); ++index) {
+        LONG candidateOffset = -1;
+        const VOID* candidateObject = NULL;
+        POBJECT_TYPE candidateType = NULL;
+
+        // REX.W + 8B /r，要求 modrm.mod == 10b（disp32）。
+        if (code[index] != 0x48U || code[index + 1U] != 0x8BU) {
+            continue;
+        }
+        if ((code[index + 2U] & 0xC0U) != 0x80U) {
+            continue;
+        }
+        if ((code[index + 2U] & 0x07U) == 0x04U) {
+            // r/m == 100b 表示后随 SIB 字节，disp32 位置不同，跳过不做猜测。
+            continue;
+        }
+        RtlCopyMemory(&candidateOffset, code + index + 3U, sizeof(candidateOffset));
+        if (candidateOffset < 0x100 || candidateOffset > 0x0FFF) {
+            continue;
+        }
+
+        __try {
+            candidateObject = *(const VOID* const volatile*)
+                ((const UCHAR*)process + candidateOffset);
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) {
+            continue;
+        }
+        if (!KswordARKDriverIsProbableKernelPointer(candidateObject, (ULONG)sizeof(VOID*))) {
+            continue;
+        }
+
+        __try {
+            candidateType = ObGetObjectType((PVOID)candidateObject);
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) {
+            continue;
+        }
+        if (candidateType != *MmSectionObjectType) {
+            continue;
+        }
+        return candidateOffset;
+    }
+    return -1;
+}
+
+LONG
+KswordARKDriverResolveProcessObjectTableOffset(
+    VOID
+    )
+/*++
+
+Routine Description:
+
+    解析 EPROCESS.ObjectTable 偏移。
+
+    没有任何导出例程直接返回该字段，因此改为「已知锚点之间的受限搜索 +
+    跨进程一致性校验」：
+
+    - 锚点取 PsGetProcessId 解出的 UniqueProcessId 偏移，向后覆盖 0x600 字节；
+      不假设 ObjectTable 与 Win32Process/SectionObject 等字段的先后顺序，
+      因为不同版本的 EPROCESS 会重排字段。
+    - 判据：该槽位的指针指向的 _HANDLE_TABLE 内含一个等于本进程 PID 的 ULONG。
+      要求同一个槽位偏移与同一个表内偏移在多个采样进程上同时成立，
+      并且整个窗口内解唯一；出现第二个自洽解即判为不可信并放弃。
+
+    两个边界都由运行时解码得到，不写死任何版本相关常量。
+
+Return Value:
+
+    成功返回偏移；窗口内无解或解不唯一时返回 -1。
+
+--*/
+{
+    // 采样进程越多误判概率越低；解析只在初始化时跑一次，取够用即可。
+    enum {
+        kSampleProcessCapacity = 6,
+        kHandleTableProbeBytes = 0x60,
+        // 以 UniqueProcessId 为锚点向后覆盖 EPROCESS 主体；窗口内解唯一才采信，
+        // 因此宁可放宽范围，也不去假设某个版本的字段先后顺序。
+        kObjectTableSearchWindowBytes = 0x600
+    };
+
+    PEPROCESS sampleProcesses[kSampleProcessCapacity];
+    ULONG samplePids[kSampleProcessCapacity];
+    ULONG sampleCount = 0UL;
+    ULONG scanPid = 0UL;
+    LONG lowerBound = KswordARKDriverDecodeSingleFieldAccessorOffset(L"PsGetProcessId");
+    LONG upperBound = 0;
+    LONG candidateOffset = -1;
+    LONG resolvedOffset = -1;
+    ULONG sampleIndex = 0UL;
+
+    if (lowerBound <= 0) {
+        return -1;
+    }
+    lowerBound += (LONG)sizeof(VOID*);
+    upperBound = lowerBound + (LONG)kObjectTableSearchWindowBytes;
+
+    RtlZeroMemory(sampleProcesses, sizeof(sampleProcesses));
+    RtlZeroMemory(samplePids, sizeof(samplePids));
+
+    // 采样：逐 PID 查找，取到足够数量即停。PID 按 4 的粒度分配。
+    for (scanPid = 4UL;
+         scanPid <= 0x4000UL && sampleCount < (ULONG)kSampleProcessCapacity;
+         scanPid += 4UL) {
+        PEPROCESS candidateProcess = NULL;
+
+        if (!NT_SUCCESS(PsLookupProcessByProcessId(ULongToHandle(scanPid), &candidateProcess))) {
+            continue;
+        }
+        if (PsGetProcessExitStatus(candidateProcess) != STATUS_PENDING) {
+            // 已退出进程的 ObjectTable 已被置空，无法用于判据。
+            ObDereferenceObject(candidateProcess);
+            continue;
+        }
+        sampleProcesses[sampleCount] = candidateProcess;
+        samplePids[sampleCount] = scanPid;
+        ++sampleCount;
+    }
+
+    // 少于两个样本时跨进程一致性校验失去意义，宁可放弃。
+    if (sampleCount < 2UL) {
+        goto Cleanup;
+    }
+
+    for (candidateOffset = lowerBound;
+         candidateOffset + (LONG)sizeof(VOID*) <= upperBound;
+         candidateOffset += (LONG)sizeof(VOID*)) {
+        LONG agreedTableOffset = -1;
+        BOOLEAN candidateOk = TRUE;
+
+        for (sampleIndex = 0UL; sampleIndex < sampleCount && candidateOk; ++sampleIndex) {
+            const UCHAR* handleTable = NULL;
+            LONG tableOffset = 0;
+            BOOLEAN matched = FALSE;
+
+            __try {
+                handleTable = *(const UCHAR* const volatile*)
+                    ((const UCHAR*)sampleProcesses[sampleIndex] + candidateOffset);
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER) {
+                candidateOk = FALSE;
+                break;
+            }
+            if (!KswordARKDriverIsProbableKernelPointer(handleTable, (ULONG)kHandleTableProbeBytes)) {
+                candidateOk = FALSE;
+                break;
+            }
+
+            // _HANDLE_TABLE 头部含 UniqueProcessId；不写死它的位置，
+            // 而是要求同一个表内偏移在所有采样进程上都命中各自的 PID。
+            for (tableOffset = 0;
+                 tableOffset + (LONG)sizeof(ULONG) <= (LONG)kHandleTableProbeBytes;
+                 tableOffset += (LONG)sizeof(ULONG)) {
+                ULONG tableValue = 0UL;
+
+                if (agreedTableOffset >= 0 && tableOffset != agreedTableOffset) {
+                    continue;
+                }
+                __try {
+                    tableValue = *(const volatile ULONG*)(handleTable + tableOffset);
+                }
+                __except (EXCEPTION_EXECUTE_HANDLER) {
+                    continue;
+                }
+                if (tableValue != samplePids[sampleIndex]) {
+                    continue;
+                }
+                agreedTableOffset = tableOffset;
+                matched = TRUE;
+                break;
+            }
+            if (!matched) {
+                candidateOk = FALSE;
+            }
+        }
+
+        if (!candidateOk) {
+            continue;
+        }
+        if (resolvedOffset >= 0) {
+            // 窗口内出现第二个自洽解，说明判据不足以区分，放弃而不是赌一个。
+            resolvedOffset = -1;
+            goto Cleanup;
+        }
+        resolvedOffset = candidateOffset;
+    }
+
+Cleanup:
+    for (sampleIndex = 0UL; sampleIndex < sampleCount; ++sampleIndex) {
+        if (sampleProcesses[sampleIndex] != NULL) {
+            ObDereferenceObject(sampleProcesses[sampleIndex]);
+        }
+    }
+    return resolvedOffset;
+}
+
 // Resolve ZwSetInformationProcess dynamically for broad WDK compatibility.
 KSWORD_ZW_SET_INFORMATION_PROCESS_FN
 KswordARKDriverResolveZwSetInformationProcess(

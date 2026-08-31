@@ -1288,6 +1288,21 @@ Return Value:
         &State->Kernel.EpSectionSignatureLevel,
         &State->KernelSources.EpSectionSignatureLevel);
 
+    //
+    // EpObjectTable / EpSectionObject 原本只有 System Informer 偏移表一个来源，
+    // 该表按 ntoskrnl 的 TimeDateStamp + SizeOfImage 精确匹配，新内核往往不在表内。
+    // 这两条运行时解析只在偏移仍然缺失时才会写入（StoreRuntimeOffset 自带该判断），
+    // 解析失败时保持原样不可用，不会覆盖打包 profile 的结果，也不会造成回退。
+    //
+    (VOID)KswordARKDynDataStoreRuntimeOffset(
+        KswordARKDriverResolveProcessSectionObjectOffset(),
+        &State->Kernel.EpSectionObject,
+        &State->KernelSources.EpSectionObject);
+    (VOID)KswordARKDynDataStoreRuntimeOffset(
+        KswordARKDriverResolveProcessObjectTableOffset(),
+        &State->Kernel.EpObjectTable,
+        &State->KernelSources.EpObjectTable);
+
     State->ExtraActive = (protectionPresent && signaturePresent && sectionSignaturePresent) ? TRUE : FALSE;
 }
 

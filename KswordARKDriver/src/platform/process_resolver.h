@@ -103,6 +103,16 @@ KswordARKDriverResolveProcessFlagsOffset(
     _In_ PEPROCESS Process
     );
 
+LONG
+KswordARKDriverResolveProcessSectionObjectOffset(
+    VOID
+    );
+
+LONG
+KswordARKDriverResolveProcessObjectTableOffset(
+    VOID
+    );
+
 VOID
 KswordARKDriverResolveReadOnlyDynDataOffsets(
     _Out_ PKSWORD_RUNTIME_DYNDATA_OFFSETS Offsets
