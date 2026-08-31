@@ -233,13 +233,6 @@ namespace ks::ui
         // - 传出：无。
         void restoreWindowFromMaximizedForDrag(QWidget* hostWindowWidget, const QPoint& globalPoint);
 
-        // resolveCompileDateText：
-        // - 作用：把编译日期格式化为 yyyy-MM-dd；
-        // - 调用：初始化左侧标题文本时调用；
-        // - 传入：无；
-        // - 传出：格式化日期字符串。
-        QString resolveCompileDateText() const;
-
         // resolveWindowsVersionText：
         // - 作用：读取当前 Windows 发布版本和完整内核版本号；
         // - 调用：初始化右侧系统版本标签时调用；
@@ -251,7 +244,7 @@ namespace ks::ui
         QWidget* m_leftWidget = nullptr;          // m_leftWidget：左侧信息区容器（图标 + 标题）。
         QHBoxLayout* m_leftLayout = nullptr;      // m_leftLayout：左侧信息区布局。
         QLabel* m_appIconLabel = nullptr;         // m_appIconLabel：程序图标标签。
-        QLabel* m_titleTextLabel = nullptr;       // m_titleTextLabel：标题文本（含编译日期）。
+        QLabel* m_titleTextLabel = nullptr;       // m_titleTextLabel：标题文本。
 
         QWidget* m_centerInputGroup = nullptr;    // m_centerInputGroup：中间输入组容器（模式按钮+输入框）。
         QHBoxLayout* m_centerInputLayout = nullptr; // m_centerInputLayout：中间输入组水平布局。

@@ -6,7 +6,6 @@
 #include <QAction>
 #include <QApplication>
 #include <QCoreApplication>
-#include <QDate>
 #include <QFileIconProvider>
 #include <QFileInfo>
 #include <QGuiApplication>
@@ -20,7 +19,6 @@
 #include <QPushButton>
 #include <QResizeEvent>
 #include <QScreen>
-#include <QStringList>
 #include <QToolButton>
 #include <QWidget>
 #include <QWindow>
@@ -576,7 +574,7 @@ namespace ks::ui
         m_appIconLabel->setAlignment(Qt::AlignCenter);
 
         m_titleTextLabel = new QLabel(m_leftWidget);
-        m_titleTextLabel->setText(QStringLiteral("KswordARK-5.1-Release(%1)").arg(resolveCompileDateText()));
+        m_titleTextLabel->setText(ks::i18n::sourceText(QStringLiteral("KswordARK-5.1-Release")));
         m_titleTextLabel->setAlignment(Qt::AlignVCenter | Qt::AlignLeft);
 
         m_leftLayout->addWidget(m_appIconLabel, 0);
@@ -1056,53 +1054,6 @@ namespace ks::ui
             restoredTop,
             restoredGeometry.width(),
             restoredGeometry.height());
-    }
-
-    QString CustomTitleBar::resolveCompileDateText() const
-    {
-        // __DATE__ 典型格式为 "Apr 11 2026"，这里统一转换为 yyyy-MM-dd。
-        const QString rawCompileDateText = QString::fromLatin1(__DATE__);
-        const QStringList datePartList = rawCompileDateText.split(' ', Qt::SkipEmptyParts);
-        if (datePartList.size() != 3)
-        {
-            return QDate::currentDate().toString(QStringLiteral("yyyy-MM-dd"));
-        }
-
-        const QString monthTokenText = datePartList.at(0);
-        const int dayValue = datePartList.at(1).toInt();
-        const int yearValue = datePartList.at(2).toInt();
-
-        const std::array<std::pair<const char*, int>, 12> monthMappingList = {
-            std::pair<const char*, int>{ "Jan", 1 },
-            std::pair<const char*, int>{ "Feb", 2 },
-            std::pair<const char*, int>{ "Mar", 3 },
-            std::pair<const char*, int>{ "Apr", 4 },
-            std::pair<const char*, int>{ "May", 5 },
-            std::pair<const char*, int>{ "Jun", 6 },
-            std::pair<const char*, int>{ "Jul", 7 },
-            std::pair<const char*, int>{ "Aug", 8 },
-            std::pair<const char*, int>{ "Sep", 9 },
-            std::pair<const char*, int>{ "Oct", 10 },
-            std::pair<const char*, int>{ "Nov", 11 },
-            std::pair<const char*, int>{ "Dec", 12 }
-        };
-
-        int monthValue = 0;
-        for (const auto& monthEntry : monthMappingList)
-        {
-            if (monthTokenText.compare(QString::fromLatin1(monthEntry.first), Qt::CaseInsensitive) == 0)
-            {
-                monthValue = monthEntry.second;
-                break;
-            }
-        }
-
-        const QDate compileDateValue(yearValue, monthValue, dayValue);
-        if (!compileDateValue.isValid())
-        {
-            return QDate::currentDate().toString(QStringLiteral("yyyy-MM-dd"));
-        }
-        return compileDateValue.toString(QStringLiteral("yyyy-MM-dd"));
     }
 
     QString CustomTitleBar::resolveWindowsVersionText() const
