@@ -1258,6 +1258,16 @@ Return Value:
     if (Entry->Referenced && Entry->Object != NULL) {
         PEPROCESS processObject = (PEPROCESS)Entry->Object;
         if (KswordARKDriverShouldSkipTerminatingProcess(processObject, enumContext->DynState)) {
+            //
+            // 已退出但仍被父进程句柄引用的 EPROCESS 会从 ActiveProcessLinks 摘除，
+            // 却继续留在 PspCidTable 中。CID 扫描的目的是找“对活动链表隐身的存活进程”，
+            // 把这些残骸当隐藏项上报会在 R3 列表里堆出一批指标恒为 0 的幽灵行；
+            // 短命进程（conhost 等）每轮换一批 PID，行数只增不减。
+            // 本程序自己摘链隐藏的进程例外，必须继续上报以便用户取消隐藏。
+            //
+            if ((processFlags & KSWORD_ARK_PROCESS_FLAG_HIDDEN_BY_KSWORD_UI) == 0UL) {
+                return;
+            }
             processFlags |= KSWORD_ARK_PROCESS_FLAG_TERMINATING_OR_EXITED;
         }
         parentProcessId = HandleToULong(PsGetProcessInheritedFromUniqueProcessId(processObject));
@@ -2786,14 +2796,21 @@ KswordARKDriverEnumerateProcesses(
                         processFlags |= KSWORD_ARK_PROCESS_FLAG_HIDDEN_BY_KSWORD_UI;
                     }
 
-                    KswordARKDriverAppendProcessEntry(
-                        response,
-                        entryCapacity,
-                        scanPid,
-                        parentProcessId,
-                        processFlags,
-                        imageName,
-                        hiddenProcessObject);
+                    //
+                    // 与 CID 扫描同理：这里查的是“不在活动链表里的 PID”，
+                    // 已退出但对象仍存活的进程残骸不是隐藏进程，上报只会制造幽灵行。
+                    //
+                    if (!terminatingProcess ||
+                        (processFlags & KSWORD_ARK_PROCESS_FLAG_HIDDEN_BY_KSWORD_UI) != 0UL) {
+                        KswordARKDriverAppendProcessEntry(
+                            response,
+                            entryCapacity,
+                            scanPid,
+                            parentProcessId,
+                            processFlags,
+                            imageName,
+                            hiddenProcessObject);
+                    }
                     ObDereferenceObject(hiddenProcessObject);
                 }
             }
