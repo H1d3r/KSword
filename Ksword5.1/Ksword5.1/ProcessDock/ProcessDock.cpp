@@ -4489,9 +4489,13 @@ void ProcessDock::initializeTopControls()
 
     // 内核对比开关：
     // - 勾选后每轮刷新额外请求 R0 进程列表；
-    // - UI 会把“R0 有、R3 无”的进程按红色高亮显示。
+    // - UI 会把“R0 有、R3 无”的进程按红色高亮显示；
+    // - 默认开启：查隐藏是 ARK 的主用途，不该要求用户先找到这个开关。
+    //   驱动未加载时 enumerateProcessesByR0Driver 走 openSilently 静默跳过，
+    //   不会每轮触发 R0 权限提示；已退出进程的 CID 残骸也已在驱动侧过滤。
+    //   开关保留，用户仍可关掉以省下每轮一次枚举 IOCTL。
     m_kernelCompareCheck = new QCheckBox("刷新时对比内核进程（查隐藏）", this);
-    m_kernelCompareCheck->setChecked(false);
+    m_kernelCompareCheck->setChecked(true);
     m_kernelCompareCheck->setToolTip("勾选后刷新会额外请求驱动进程列表，并显示仅内核可见的进程。");
     languageManager.bindText(
         m_kernelCompareCheck,
