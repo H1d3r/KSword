@@ -312,6 +312,39 @@ namespace ks::ui
         updateVisualState();
     }
 
+    void CustomTitleBar::setCustomLeftWidget(QWidget* customLeftWidget)
+    {
+        if (m_leftLayout == nullptr || m_leftWidget == nullptr)
+        {
+            return;
+        }
+
+        if (m_customLeftWidget == customLeftWidget)
+        {
+            return;
+        }
+
+        if (m_customLeftWidget != nullptr)
+        {
+            m_leftLayout->removeWidget(m_customLeftWidget);
+            m_customLeftWidget->hide();
+        }
+
+        // m_customLeftWidget 用途：保存标题文本后的功能入口容器，便于后续替换或移除。
+        m_customLeftWidget = customLeftWidget;
+        if (m_customLeftWidget == nullptr)
+        {
+            return;
+        }
+
+        if (m_customLeftWidget->parentWidget() != m_leftWidget)
+        {
+            m_customLeftWidget->setParent(m_leftWidget);
+        }
+        m_customLeftWidget->setVisible(true);
+        m_leftLayout->addWidget(m_customLeftWidget, 0);
+    }
+
     void CustomTitleBar::setCustomRightWidget(QWidget* customRightWidget)
     {
         if (m_rightLayout == nullptr)
@@ -360,6 +393,10 @@ namespace ks::ui
         }
 
         if (widgetBelongsTo(hitWidget, m_centerInputGroup))
+        {
+            return false;
+        }
+        if (widgetBelongsTo(hitWidget, m_customLeftWidget))
         {
             return false;
         }

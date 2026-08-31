@@ -3,7 +3,7 @@
 // ============================================================
 // CustomTitleBar.h
 // 作用说明：
-// 1) 提供主窗口自绘标题栏（左信息、中“搜索/CMD”双模式输入、右控制按钮）；
+// 1) 提供主窗口自绘标题栏（左侧应用标识与功能入口、中“搜索/CMD”双模式输入、右控制按钮）；
 // 2) 提供置顶/最小化/最大化/关闭等交互信号；
 // 3) 中间输入框默认为“搜索”模式（全局页面文本搜索），
 //    点击左侧模式按钮可切换为 CMD 模式（cmd /K 新控制台执行）；
@@ -89,6 +89,9 @@ namespace ks::ui
         // titleBarHeight：
         // - 作用：返回标题栏固定高度，供主窗口命中测试复用。
         int titleBarHeight() const;
+
+        // setCustomLeftWidget：在应用图标和标题文本之后挂载自定义功能入口控件。
+        void setCustomLeftWidget(QWidget* customLeftWidget);
 
         // setCustomRightWidget：
         // - 作用：在右侧控制按钮前插入一个自定义控件（例如权限状态按钮组）；
@@ -256,6 +259,7 @@ namespace ks::ui
         QHBoxLayout* m_leftLayout = nullptr;      // m_leftLayout：左侧信息区布局。
         QLabel* m_appIconLabel = nullptr;         // m_appIconLabel：程序图标标签。
         QLabel* m_titleTextLabel = nullptr;       // m_titleTextLabel：标题文本。
+        QWidget* m_customLeftWidget = nullptr;    // m_customLeftWidget：标题文本后的自定义功能入口容器。
 
         QWidget* m_centerInputGroup = nullptr;    // m_centerInputGroup：中间输入组容器（模式按钮+输入框）。
         QHBoxLayout* m_centerInputLayout = nullptr; // m_centerInputLayout：中间输入组水平布局。
