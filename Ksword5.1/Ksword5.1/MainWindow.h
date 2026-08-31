@@ -357,7 +357,7 @@ private:
     QString buildTitleActionButtonStyle() const;
 
     // refreshTitleActionButtonStyles 作用：
-    // - 根据当前主题刷新“设置/GitHub/窗口”三个标题栏顶级菜单按钮；
+    // - 根据当前主题刷新“选项/GitHub/窗口”三个标题栏顶级菜单按钮；
     // - 解决深色模式切换后旧浅色样式残留的问题。
     void refreshTitleActionButtonStyles();
 
@@ -691,8 +691,8 @@ private:
     // - System：是否 LocalSystem 身份；
     // - R0：驱动服务快捷开关。
     QWidget* m_privilegeButtonContainer = nullptr;
-    QToolButton* m_settingsMenuButton = nullptr; // m_settingsMenuButton：标题栏“设置”顶级菜单。
-    QMenu* m_settingsMenu = nullptr;             // m_settingsMenu：首选项/插件管理/许可证/退出。
+    QToolButton* m_optionsMenuButton = nullptr;  // m_optionsMenuButton：标题栏“选项”顶级菜单。
+    QMenu* m_optionsMenu = nullptr;              // m_optionsMenu：设置/插件管理/许可证/退出。
     QToolButton* m_githubMenuButton = nullptr;   // m_githubMenuButton：标题栏“GitHub”顶级菜单。
     QMenu* m_githubMenu = nullptr;               // m_githubMenu：项目主页/发行版/问题反馈。
     QToolButton* m_windowMenuButton = nullptr;   // m_windowMenuButton：标题栏“窗口”顶级菜单。

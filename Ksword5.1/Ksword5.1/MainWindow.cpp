@@ -7196,7 +7196,7 @@ void MainWindow::executeCommandWithOptions(
 
 void MainWindow::initMenus()
 {
-    if (m_settingsMenuButton != nullptr || m_customTitleBar == nullptr)
+    if (m_optionsMenuButton != nullptr || m_customTitleBar == nullptr)
     {
         return;
     }
@@ -7224,32 +7224,33 @@ void MainWindow::initMenus()
         button->setMenu(menu);
     };
 
-    // ======== 设置 ========
-    m_settingsMenuButton = new QToolButton(titleActionContainer);
-    m_settingsMenuButton->setObjectName(QStringLiteral("ksSettingsMenuButton"));
-    m_settingsMenuButton->setText(QStringLiteral("设置"));
-    m_settingsMenuButton->setToolTip(QStringLiteral("界面、插件与许可证"));
-    languageManager.bindText(m_settingsMenuButton, QStringLiteral("menu.settings"), QStringLiteral("设置"));
-    languageManager.bindToolTip(m_settingsMenuButton, QStringLiteral("menu.settings.tooltip"), QStringLiteral("界面、插件与许可证"));
-    m_settingsMenu = new QMenu(m_settingsMenuButton);
-    m_settingsMenu->setObjectName(QStringLiteral("ksSettingsMenu"));
-    configureTitleMenuButton(m_settingsMenuButton, m_settingsMenu);
+    // ======== 选项 ========
+    // 顶级项叫“选项”，真正打开设置面板的那条菜单项才叫“设置”。
+    m_optionsMenuButton = new QToolButton(titleActionContainer);
+    m_optionsMenuButton->setObjectName(QStringLiteral("ksOptionsMenuButton"));
+    m_optionsMenuButton->setText(QStringLiteral("选项"));
+    m_optionsMenuButton->setToolTip(QStringLiteral("界面、插件与许可证"));
+    languageManager.bindText(m_optionsMenuButton, QStringLiteral("menu.options"), QStringLiteral("选项"));
+    languageManager.bindToolTip(m_optionsMenuButton, QStringLiteral("menu.options.tooltip"), QStringLiteral("界面、插件与许可证"));
+    m_optionsMenu = new QMenu(m_optionsMenuButton);
+    m_optionsMenu->setObjectName(QStringLiteral("ksOptionsMenu"));
+    configureTitleMenuButton(m_optionsMenuButton, m_optionsMenu);
 
-    QAction* const preferencesAction = m_settingsMenu->addAction(QStringLiteral("首选项"));
-    languageManager.bindText(preferencesAction, QStringLiteral("menu.settings.preferences"), QStringLiteral("首选项"));
-    connect(preferencesAction, &QAction::triggered, this, [this]() { showSettingsPanelFromMenu(); });
+    QAction* const settingsAction = m_optionsMenu->addAction(QStringLiteral("设置"));
+    languageManager.bindText(settingsAction, QStringLiteral("menu.settings"), QStringLiteral("设置"));
+    connect(settingsAction, &QAction::triggered, this, [this]() { showSettingsPanelFromMenu(); });
 
-    QAction* const pluginAction = m_settingsMenu->addAction(QStringLiteral("插件管理"));
+    QAction* const pluginAction = m_optionsMenu->addAction(QStringLiteral("插件管理"));
     languageManager.bindText(pluginAction, QStringLiteral("menu.plugins"), QStringLiteral("插件管理"));
     connect(pluginAction, &QAction::triggered, this, [this]() { ks::plugin_host::showPluginManager(this); });
 
-    m_settingsMenu->addSeparator();
+    m_optionsMenu->addSeparator();
 
-    QAction* const licenseAction = m_settingsMenu->addAction(QStringLiteral("许可证"));
+    QAction* const licenseAction = m_optionsMenu->addAction(QStringLiteral("许可证"));
     languageManager.bindText(licenseAction, QStringLiteral("menu.license"), QStringLiteral("许可证"));
     connect(licenseAction, &QAction::triggered, this, &MainWindow::showLicenseFromMenu);
 
-    QAction* const exitAction = m_settingsMenu->addAction(QStringLiteral("退出"));
+    QAction* const exitAction = m_optionsMenu->addAction(QStringLiteral("退出"));
     languageManager.bindText(exitAction, QStringLiteral("menu.exit"), QStringLiteral("退出"));
     exitAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+Q")));
     exitAction->setShortcutContext(Qt::WindowShortcut);
@@ -7302,7 +7303,7 @@ void MainWindow::initMenus()
     m_windowMenu->setObjectName(QStringLiteral("ksWindowMenu"));
     configureTitleMenuButton(m_windowMenuButton, m_windowMenu);
 
-    titleActionLayout->addWidget(m_settingsMenuButton);
+    titleActionLayout->addWidget(m_optionsMenuButton);
     titleActionLayout->addWidget(m_githubMenuButton);
     titleActionLayout->addWidget(m_windowMenuButton);
     m_customTitleBar->setCustomLeftWidget(titleActionContainer);
@@ -7404,7 +7405,7 @@ void MainWindow::refreshTitleActionButtonStyles()
     // 标题栏功能按钮刷新：主题切换后所有按钮都重新套用同一份 QSS。
     const QString topActionButtonStyle = buildTitleActionButtonStyle();
     const QList<QToolButton*> topActionButtonList{
-        m_settingsMenuButton,
+        m_optionsMenuButton,
         m_githubMenuButton,
         m_windowMenuButton
     };
