@@ -7898,22 +7898,31 @@ void ProcessDock::rebuildTable()
 
     const std::vector<DisplayRow> displayRows = buildDisplayOrder();
 
-    // 先预计算 RAM/DISK/NET/句柄数的本轮最大值，用于把绝对值映射成“占用比例高亮”。
-    double maxRamMB = 0.0;
-    double maxDiskMBps = 0.0;
-    double maxNetKBps = 0.0;
-    std::uint32_t maxHandleCount = 0;
+    // 预计算所有资源/工作量列的本轮最大幅值，供单元格强度染色共用。
+    // CPU/GPU 是 0~100 的绝对百分比；其它指标按当前可见进程中的同列最大幅值归一化。
+    m_processUsageHighlightMaximums.fill(0.0);
     for (const DisplayRow& displayRow : displayRows)
     {
         if (displayRow.record == nullptr || displayRow.rowKind == ProcessTableRowKind::GroupHeader)
         {
             continue;
         }
-        maxRamMB = std::max(maxRamMB, displayRow.record->workingSetMB);
-        maxDiskMBps = std::max(maxDiskMBps, displayRow.record->diskMBps);
-        maxNetKBps = std::max(maxNetKBps, displayRow.record->netKBps);
-        maxHandleCount = std::max(maxHandleCount, displayRow.record->handleCount);
+
+        for (int columnIndex = 0; columnIndex < static_cast<int>(TableColumn::Count); ++columnIndex)
+        {
+            const TableColumn tableColumn = static_cast<TableColumn>(columnIndex);
+            double highlightValue = 0.0;
+            if (!processUsageHighlightValue(*displayRow.record, tableColumn, &highlightValue))
+            {
+                continue;
+            }
+            double& maximumValue = m_processUsageHighlightMaximums[static_cast<std::size_t>(columnIndex)];
+            maximumValue = std::max(maximumValue, highlightValue);
+        }
     }
+    // 应用聚合行会求和成员百分比，可能超过 100；单进程 CPU/GPU 染色仍必须保持绝对 0~100 标尺。
+    m_processUsageHighlightMaximums[static_cast<std::size_t>(TableColumn::Cpu)] = 100.0;
+    m_processUsageHighlightMaximums[static_cast<std::size_t>(TableColumn::Gpu)] = 100.0;
 
     // tableRows 作用：
     // - 把 DisplayRow 转成 FlatTableModel 可直接持有的轻量行快照；
@@ -7983,23 +7992,6 @@ void ProcessDock::rebuildTable()
         tableRow.isKernelOnly = displayRow.isKernelOnly;
         tableRow.activitySnapshotActive = activitySnapshotActive;
         // 逐核心 ETW 快照由 ProcessDock 全部实时行共享，不进入每行对象，避免行数级 shared_ptr 增减。
-        tableRow.cpuUsageRatio = std::clamp(processRecord.cpuPercent / 100.0, 0.0, 1.0);
-        tableRow.ramUsageRatio = (maxRamMB > 0.0)
-            ? std::clamp(processRecord.workingSetMB / maxRamMB, 0.0, 1.0)
-            : 0.0;
-        tableRow.diskUsageRatio = (maxDiskMBps > 0.0)
-            ? std::clamp(processRecord.diskMBps / maxDiskMBps, 0.0, 1.0)
-            : 0.0;
-        tableRow.gpuUsageRatio = std::clamp(processRecord.gpuPercent / 100.0, 0.0, 1.0);
-        tableRow.netUsageRatio = (maxNetKBps > 0.0)
-            ? std::clamp(processRecord.netKBps / maxNetKBps, 0.0, 1.0)
-            : 0.0;
-        tableRow.handleUsageRatio = (maxHandleCount > 0U)
-            ? std::clamp(
-                static_cast<double>(processRecord.handleCount) / static_cast<double>(maxHandleCount),
-                0.0,
-                1.0)
-            : 0.0;
         tableRows.push_back(std::move(tableRow));
     }
 
@@ -9113,6 +9105,254 @@ std::vector<std::string> ProcessDock::currentProcessActivitySelectionKeys() cons
 }
 
 
+QVariant ProcessDock::processNumericSortValue(
+    const ks::process::ProcessRecord& processRecord,
+    const TableColumn column)
+{
+    // 排序键使用原始数值：展示文本可以带单位，但排序必须按真实大小比较。
+    switch (column)
+    {
+    case TableColumn::Pid:
+        return static_cast<double>(processRecord.pid);
+    case TableColumn::Cpu:
+        return processRecord.cpuPercent;
+    case TableColumn::CpuCore:
+        return processRecord.cpuCorePercent;
+    case TableColumn::Ram:
+        return processRecord.workingSetMB;
+    case TableColumn::Disk:
+        return processRecord.diskMBps;
+    case TableColumn::Gpu:
+        return processRecord.gpuPercent;
+    case TableColumn::Net:
+        return processRecord.netKBps;
+    case TableColumn::ParentPid:
+        return static_cast<double>(processRecord.parentPid);
+    case TableColumn::StartTime:
+        return static_cast<double>(processRecord.creationTime100ns);
+    case TableColumn::IsAdmin:
+        return processRecord.isAdmin ? 1.0 : 0.0;
+    case TableColumn::PplLevel:
+        return processRecord.protectionLevelKnown ? static_cast<double>(processRecord.protectionLevel) : -1.0;
+    case TableColumn::Protection:
+    case TableColumn::Ppl:
+        return static_cast<double>(processRecord.r0Protection);
+    case TableColumn::HandleCount:
+        return static_cast<double>(processRecord.handleCount);
+    case TableColumn::HandleTable:
+        return ((processRecord.r0FieldFlags & KSWORD_ARK_PROCESS_FIELD_OBJECT_TABLE_AVAILABLE) != 0U) ? 1.0 : 0.0;
+    case TableColumn::SectionObject:
+        return ((processRecord.r0FieldFlags & KSWORD_ARK_PROCESS_FIELD_SECTION_OBJECT_AVAILABLE) != 0U) ? 1.0 : 0.0;
+    case TableColumn::R0Status:
+        return static_cast<double>(processRecord.r0Status);
+
+    // ======== 任务管理器对齐列的数值排序键 ========
+    // 展示文本带单位或千位分隔符，排序必须回到原始数值，否则 "9 K" 会排在 "10,240 K" 之后。
+    case TableColumn::Status:
+        return processRecord.processStateKnown
+            ? (processRecord.processSuspended ? 1.0 : 0.0)
+            : -1.0;
+    case TableColumn::SessionId:
+        return static_cast<double>(processRecord.sessionId);
+    case TableColumn::JobObject:
+        return processRecord.jobObjectKnown
+            ? (processRecord.inJobObject ? 1.0 : 0.0)
+            : -1.0;
+    case TableColumn::CpuTime:
+        return static_cast<double>(processRecord.rawCpuTime100ns);
+    case TableColumn::CycleTime:
+        return processRecord.cycleTimeKnown ? static_cast<double>(processRecord.cycleTime) : -1.0;
+    case TableColumn::WorkingSet:
+        return static_cast<double>(processRecord.rawWorkingSetBytes);
+    case TableColumn::PeakWorkingSet:
+        return static_cast<double>(processRecord.peakWorkingSetBytes);
+    case TableColumn::WorkingSetDelta:
+        return static_cast<double>(processRecord.workingSetDeltaBytes);
+    case TableColumn::ActivePrivateWorkingSet:
+        return static_cast<double>(processRecord.activePrivateWorkingSetBytes);
+    case TableColumn::PrivateWorkingSet:
+        return static_cast<double>(processRecord.privateWorkingSetBytes);
+    case TableColumn::SharedWorkingSet:
+        return static_cast<double>(processRecord.sharedWorkingSetBytes);
+    case TableColumn::CommitSize:
+        return static_cast<double>(processRecord.commitSizeBytes);
+    case TableColumn::PagedPool:
+        return static_cast<double>(processRecord.pagedPoolBytes);
+    case TableColumn::NonPagedPool:
+        return static_cast<double>(processRecord.nonPagedPoolBytes);
+    case TableColumn::PageFaults:
+        return static_cast<double>(processRecord.pageFaultCount);
+    case TableColumn::PageFaultDelta:
+        return static_cast<double>(processRecord.pageFaultDeltaCount);
+    case TableColumn::BasePriority:
+        return static_cast<double>(processRecord.basePriority);
+    case TableColumn::ThreadCount:
+        return static_cast<double>(processRecord.threadCount);
+    case TableColumn::UserObjects:
+        return processRecord.guiResourceKnown ? static_cast<double>(processRecord.userObjectCount) : -1.0;
+    case TableColumn::GdiObjects:
+        return processRecord.guiResourceKnown ? static_cast<double>(processRecord.gdiObjectCount) : -1.0;
+    case TableColumn::IoReads:
+        return static_cast<double>(processRecord.ioReadOperationCount);
+    case TableColumn::IoWrites:
+        return static_cast<double>(processRecord.ioWriteOperationCount);
+    case TableColumn::IoOther:
+        return static_cast<double>(processRecord.ioOtherOperationCount);
+    case TableColumn::IoReadBytes:
+        return static_cast<double>(processRecord.ioReadTransferBytes);
+    case TableColumn::IoWriteBytes:
+        return static_cast<double>(processRecord.ioWriteTransferBytes);
+    case TableColumn::IoOtherBytes:
+        return static_cast<double>(processRecord.ioOtherTransferBytes);
+    case TableColumn::UacVirtualization:
+        return processFeatureStateSortValue(processRecord.uacVirtualizationState);
+    case TableColumn::DataExecutionPrevention:
+        return processFeatureStateSortValue(processRecord.dataExecutionPreventionState);
+    case TableColumn::ControlFlowGuard:
+        return processFeatureStateSortValue(processRecord.controlFlowGuardState);
+    case TableColumn::HardwareStackProtection:
+        return processFeatureStateSortValue(processRecord.hardwareStackProtectionState);
+    case TableColumn::DpiAwareness:
+        return (processRecord.dpiAwarenessLevel == ks::process::ProcessDpiAwarenessLevel::Unknown)
+            ? -1.0
+            : static_cast<double>(static_cast<std::uint32_t>(processRecord.dpiAwarenessLevel));
+    case TableColumn::PowerThrottling:
+        return processRecord.efficiencyModeSupported
+            ? (processRecord.efficiencyModeEnabled ? 1.0 : 0.0)
+            : -1.0;
+    case TableColumn::GpuDedicatedMemory:
+        return processRecord.gpuMemoryKnown
+            ? static_cast<double>(processRecord.gpuDedicatedMemoryBytes)
+            : -1.0;
+    case TableColumn::GpuSharedMemory:
+        return processRecord.gpuMemoryKnown
+            ? static_cast<double>(processRecord.gpuSharedMemoryBytes)
+            : -1.0;
+    default:
+        return {};
+    }
+}
+
+bool ProcessDock::processUsageHighlightValue(
+    const ks::process::ProcessRecord& processRecord,
+    const TableColumn column,
+    double* const valueOut)
+{
+    if (valueOut == nullptr)
+    {
+        return false;
+    }
+
+    // 只对表示资源占用、累计工作量或对象数量的列做强度染色。
+    // PID、会话 ID、优先级、布尔状态等虽然可排序，但数值大小不表示“占用更高”。
+    switch (column)
+    {
+    case TableColumn::Cpu:
+    case TableColumn::Ram:
+    case TableColumn::Disk:
+    case TableColumn::Gpu:
+    case TableColumn::Net:
+    case TableColumn::HandleCount:
+    case TableColumn::CpuTime:
+    case TableColumn::WorkingSet:
+    case TableColumn::WorkingSetDelta:
+    case TableColumn::ThreadCount:
+        break;
+    case TableColumn::CycleTime:
+        if (!processRecord.cycleTimeKnown)
+        {
+            return false;
+        }
+        break;
+    case TableColumn::PeakWorkingSet:
+    case TableColumn::CommitSize:
+    case TableColumn::PagedPool:
+    case TableColumn::NonPagedPool:
+    case TableColumn::PageFaults:
+    case TableColumn::PageFaultDelta:
+        if (!processRecord.memoryDetailKnown)
+        {
+            return false;
+        }
+        break;
+    case TableColumn::ActivePrivateWorkingSet:
+    case TableColumn::PrivateWorkingSet:
+    case TableColumn::SharedWorkingSet:
+        if (!processRecord.privateWorkingSetKnown)
+        {
+            return false;
+        }
+        break;
+    case TableColumn::UserObjects:
+    case TableColumn::GdiObjects:
+        if (!processRecord.guiResourceKnown)
+        {
+            return false;
+        }
+        break;
+    case TableColumn::IoReads:
+    case TableColumn::IoWrites:
+    case TableColumn::IoOther:
+    case TableColumn::IoReadBytes:
+    case TableColumn::IoWriteBytes:
+    case TableColumn::IoOtherBytes:
+        if (!processRecord.ioDetailKnown)
+        {
+            return false;
+        }
+        break;
+    case TableColumn::GpuDedicatedMemory:
+    case TableColumn::GpuSharedMemory:
+        if (!processRecord.gpuMemoryKnown)
+        {
+            return false;
+        }
+        break;
+    default:
+        return false;
+    }
+
+    bool numericValueOk = false;
+    const double numericValue = processNumericSortValue(processRecord, column)
+        .toDouble(&numericValueOk);
+    if (!numericValueOk || !std::isfinite(numericValue))
+    {
+        return false;
+    }
+
+    // 增量列可以为负；染色表达变化幅度，正负方向仍由单元格文本保留。
+    *valueOut = std::fabs(numericValue);
+    return true;
+}
+
+bool ProcessDock::processUsageHighlightRatio(
+    const ks::process::ProcessRecord& processRecord,
+    const TableColumn column,
+    double* const ratioOut) const
+{
+    if (ratioOut == nullptr)
+    {
+        return false;
+    }
+
+    double value = 0.0;
+    if (!processUsageHighlightValue(processRecord, column, &value))
+    {
+        return false;
+    }
+
+    const std::size_t columnIndex = static_cast<std::size_t>(column);
+    if (columnIndex >= m_processUsageHighlightMaximums.size())
+    {
+        return false;
+    }
+    const double maximumValue = m_processUsageHighlightMaximums[columnIndex];
+    *ratioOut = maximumValue > 0.0
+        ? std::clamp(value / maximumValue, 0.0, 1.0)
+        : 0.0;
+    return true;
+}
+
 QVariant ProcessDock::processTableData(const ProcessTableRow& tableRow, const int column, const int role)
 {
     // 参数和记录检查：模型可能在 reset 期间请求旧索引数据，空记录直接返回空值。
@@ -9320,128 +9560,7 @@ QVariant ProcessDock::processTableData(const ProcessTableRow& tableRow, const in
     }
     if (role == ProcessNumericSortRole)
     {
-        // 排序键使用原始数值：展示文本可以带单位，但排序必须按真实大小比较。
-        switch (tableColumn)
-        {
-        case TableColumn::Pid:
-            return static_cast<double>(processRecord.pid);
-        case TableColumn::Cpu:
-            return processRecord.cpuPercent;
-        case TableColumn::CpuCore:
-            return processRecord.cpuCorePercent;
-        case TableColumn::Ram:
-            return processRecord.workingSetMB;
-        case TableColumn::Disk:
-            return processRecord.diskMBps;
-        case TableColumn::Gpu:
-            return processRecord.gpuPercent;
-        case TableColumn::Net:
-            return processRecord.netKBps;
-        case TableColumn::ParentPid:
-            return static_cast<double>(processRecord.parentPid);
-        case TableColumn::StartTime:
-            return static_cast<double>(processRecord.creationTime100ns);
-        case TableColumn::IsAdmin:
-            return processRecord.isAdmin ? 1.0 : 0.0;
-        case TableColumn::PplLevel:
-            return processRecord.protectionLevelKnown ? static_cast<double>(processRecord.protectionLevel) : -1.0;
-        case TableColumn::Protection:
-        case TableColumn::Ppl:
-            return static_cast<double>(processRecord.r0Protection);
-        case TableColumn::HandleCount:
-            return static_cast<double>(processRecord.handleCount);
-        case TableColumn::HandleTable:
-            return ((processRecord.r0FieldFlags & KSWORD_ARK_PROCESS_FIELD_OBJECT_TABLE_AVAILABLE) != 0U) ? 1.0 : 0.0;
-        case TableColumn::SectionObject:
-            return ((processRecord.r0FieldFlags & KSWORD_ARK_PROCESS_FIELD_SECTION_OBJECT_AVAILABLE) != 0U) ? 1.0 : 0.0;
-        case TableColumn::R0Status:
-            return static_cast<double>(processRecord.r0Status);
-
-        // ======== 任务管理器对齐列的数值排序键 ========
-        // 展示文本带单位或千位分隔符，排序必须回到原始数值，否则 "9 K" 会排在 "10,240 K" 之后。
-        case TableColumn::Status:
-            return processRecord.processStateKnown
-                ? (processRecord.processSuspended ? 1.0 : 0.0)
-                : -1.0;
-        case TableColumn::SessionId:
-            return static_cast<double>(processRecord.sessionId);
-        case TableColumn::JobObject:
-            return processRecord.jobObjectKnown
-                ? (processRecord.inJobObject ? 1.0 : 0.0)
-                : -1.0;
-        case TableColumn::CpuTime:
-            return static_cast<double>(processRecord.rawCpuTime100ns);
-        case TableColumn::CycleTime:
-            return processRecord.cycleTimeKnown ? static_cast<double>(processRecord.cycleTime) : -1.0;
-        case TableColumn::WorkingSet:
-            return static_cast<double>(processRecord.rawWorkingSetBytes);
-        case TableColumn::PeakWorkingSet:
-            return static_cast<double>(processRecord.peakWorkingSetBytes);
-        case TableColumn::WorkingSetDelta:
-            return static_cast<double>(processRecord.workingSetDeltaBytes);
-        case TableColumn::ActivePrivateWorkingSet:
-            return static_cast<double>(processRecord.activePrivateWorkingSetBytes);
-        case TableColumn::PrivateWorkingSet:
-            return static_cast<double>(processRecord.privateWorkingSetBytes);
-        case TableColumn::SharedWorkingSet:
-            return static_cast<double>(processRecord.sharedWorkingSetBytes);
-        case TableColumn::CommitSize:
-            return static_cast<double>(processRecord.commitSizeBytes);
-        case TableColumn::PagedPool:
-            return static_cast<double>(processRecord.pagedPoolBytes);
-        case TableColumn::NonPagedPool:
-            return static_cast<double>(processRecord.nonPagedPoolBytes);
-        case TableColumn::PageFaults:
-            return static_cast<double>(processRecord.pageFaultCount);
-        case TableColumn::PageFaultDelta:
-            return static_cast<double>(processRecord.pageFaultDeltaCount);
-        case TableColumn::BasePriority:
-            return static_cast<double>(processRecord.basePriority);
-        case TableColumn::ThreadCount:
-            return static_cast<double>(processRecord.threadCount);
-        case TableColumn::UserObjects:
-            return processRecord.guiResourceKnown ? static_cast<double>(processRecord.userObjectCount) : -1.0;
-        case TableColumn::GdiObjects:
-            return processRecord.guiResourceKnown ? static_cast<double>(processRecord.gdiObjectCount) : -1.0;
-        case TableColumn::IoReads:
-            return static_cast<double>(processRecord.ioReadOperationCount);
-        case TableColumn::IoWrites:
-            return static_cast<double>(processRecord.ioWriteOperationCount);
-        case TableColumn::IoOther:
-            return static_cast<double>(processRecord.ioOtherOperationCount);
-        case TableColumn::IoReadBytes:
-            return static_cast<double>(processRecord.ioReadTransferBytes);
-        case TableColumn::IoWriteBytes:
-            return static_cast<double>(processRecord.ioWriteTransferBytes);
-        case TableColumn::IoOtherBytes:
-            return static_cast<double>(processRecord.ioOtherTransferBytes);
-        case TableColumn::UacVirtualization:
-            return processFeatureStateSortValue(processRecord.uacVirtualizationState);
-        case TableColumn::DataExecutionPrevention:
-            return processFeatureStateSortValue(processRecord.dataExecutionPreventionState);
-        case TableColumn::ControlFlowGuard:
-            return processFeatureStateSortValue(processRecord.controlFlowGuardState);
-        case TableColumn::HardwareStackProtection:
-            return processFeatureStateSortValue(processRecord.hardwareStackProtectionState);
-        case TableColumn::DpiAwareness:
-            return (processRecord.dpiAwarenessLevel == ks::process::ProcessDpiAwarenessLevel::Unknown)
-                ? -1.0
-                : static_cast<double>(static_cast<std::uint32_t>(processRecord.dpiAwarenessLevel));
-        case TableColumn::PowerThrottling:
-            return processRecord.efficiencyModeSupported
-                ? (processRecord.efficiencyModeEnabled ? 1.0 : 0.0)
-                : -1.0;
-        case TableColumn::GpuDedicatedMemory:
-            return processRecord.gpuMemoryKnown
-                ? static_cast<double>(processRecord.gpuDedicatedMemoryBytes)
-                : -1.0;
-        case TableColumn::GpuSharedMemory:
-            return processRecord.gpuMemoryKnown
-                ? static_cast<double>(processRecord.gpuSharedMemoryBytes)
-                : -1.0;
-        default:
-            return {};
-        }
+        return processNumericSortValue(processRecord, tableColumn);
     }
     if (role != Qt::BackgroundRole && role != Qt::ForegroundRole)
     {
@@ -9482,6 +9601,12 @@ QVariant ProcessDock::processTableData(const ProcessTableRow& tableRow, const in
         return QBrush(KswordTheme::NewRowBackgroundColor());
     }
 
+    double usageHighlightRatio = 0.0;
+    const bool hasUsageHighlight = processUsageHighlightRatio(
+        processRecord,
+        tableColumn,
+        &usageHighlightRatio);
+
     if (role == Qt::ForegroundRole)
     {
         // 管理员列：按要求使用“绿色/红色方块”直观显示状态。
@@ -9502,52 +9627,18 @@ QVariant ProcessDock::processTableData(const ProcessTableRow& tableRow, const in
             }
         }
 
-        const auto highUsageForeground = [](const double usageRatio) -> QVariant
+        if (hasUsageHighlight && usageHighlightRatio >= 0.70)
         {
-            return usageRatio >= 0.70
-                ? QVariant(QBrush(KswordTheme::OnAccentColor()))
-                : QVariant();
-        };
-        switch (tableColumn)
-        {
-        case TableColumn::Cpu:
-            return highUsageForeground(tableRow.cpuUsageRatio);
-        case TableColumn::Ram:
-            return highUsageForeground(tableRow.ramUsageRatio);
-        case TableColumn::Disk:
-            return highUsageForeground(tableRow.diskUsageRatio);
-        case TableColumn::Gpu:
-            return highUsageForeground(tableRow.gpuUsageRatio);
-        case TableColumn::Net:
-            return highUsageForeground(tableRow.netUsageRatio);
-        case TableColumn::HandleCount:
-            return highUsageForeground(tableRow.handleUsageRatio);
-        default:
-            return {};
+            return QBrush(KswordTheme::OnAccentColor());
         }
-    }
-
-    const auto usageBackground = [](const double usageRatio) -> QVariant
-    {
-        return QBrush(usageRatioToHighlightColor(usageRatio));
-    };
-    switch (tableColumn)
-    {
-    case TableColumn::Cpu:
-        return usageBackground(tableRow.cpuUsageRatio);
-    case TableColumn::Ram:
-        return usageBackground(tableRow.ramUsageRatio);
-    case TableColumn::Disk:
-        return usageBackground(tableRow.diskUsageRatio);
-    case TableColumn::Gpu:
-        return usageBackground(tableRow.gpuUsageRatio);
-    case TableColumn::Net:
-        return usageBackground(tableRow.netUsageRatio);
-    case TableColumn::HandleCount:
-        return usageBackground(tableRow.handleUsageRatio);
-    default:
         return {};
     }
+
+    if (hasUsageHighlight)
+    {
+        return QBrush(usageRatioToHighlightColor(usageHighlightRatio));
+    }
+    return {};
 }
 
 const ProcessDock::ProcessTableRow* ProcessDock::processTableRowForViewIndex(const QModelIndex& viewIndex) const
@@ -10092,126 +10183,36 @@ std::vector<ProcessDock::DisplayRow> ProcessDock::buildFriendlyDisplayOrder() co
         static_cast<int>(TableColumn::Count) - 1);
     const Qt::SortOrder friendlySortOrder = m_friendlySortOrder;
     const auto compareRecordByFriendlySort =
-        [friendlySortColumn, friendlySortOrder](
+        [this, friendlySortColumn, friendlySortOrder](
             const ks::process::ProcessRecord& leftRecord,
             const ks::process::ProcessRecord& rightRecord) -> bool
         {
             // Inputs: two process records and the active friendly-view sort column/order.
-            // Processing: compare only the primary selected column with the selected direction,
+            // Processing: reuse the model's numeric sort key or displayed text with the selected direction,
             // then use name/PID/creation time as ascending tie breakers so rows do not jitter.
             // Return: true when left should be displayed before right.
             const auto compareText = [](const QString& leftText, const QString& rightText) -> int
             {
-                const int caseInsensitiveResult = leftText.compare(rightText, Qt::CaseInsensitive);
-                if (caseInsensitiveResult != 0)
-                {
-                    return caseInsensitiveResult;
-                }
-                return leftText.compare(rightText, Qt::CaseSensitive);
-            };
-            const auto compareDouble = [](const double leftValue, const double rightValue) -> int
-            {
-                if (std::fabs(leftValue - rightValue) <= 0.001)
-                {
-                    return 0;
-                }
-                return leftValue < rightValue ? -1 : 1;
-            };
-            const auto compareUInt64 = [](const std::uint64_t leftValue, const std::uint64_t rightValue) -> int
-            {
-                if (leftValue == rightValue)
-                {
-                    return 0;
-                }
-                return leftValue < rightValue ? -1 : 1;
+                return leftText.localeAwareCompare(rightText);
             };
 
             int primaryResult = 0;
-            switch (static_cast<TableColumn>(friendlySortColumn))
+            const TableColumn tableColumn = static_cast<TableColumn>(friendlySortColumn);
+            bool leftNumericOk = false;
+            bool rightNumericOk = false;
+            const double leftNumericValue = processNumericSortValue(leftRecord, tableColumn)
+                .toDouble(&leftNumericOk);
+            const double rightNumericValue = processNumericSortValue(rightRecord, tableColumn)
+                .toDouble(&rightNumericOk);
+            if (leftNumericOk && rightNumericOk && leftNumericValue != rightNumericValue)
             {
-            case TableColumn::Name:
+                primaryResult = leftNumericValue < rightNumericValue ? -1 : 1;
+            }
+            else
+            {
                 primaryResult = compareText(
-                    QString::fromStdString(leftRecord.processName),
-                    QString::fromStdString(rightRecord.processName));
-                break;
-            case TableColumn::Pid:
-                primaryResult = compareUInt64(leftRecord.pid, rightRecord.pid);
-                break;
-            case TableColumn::Cpu:
-                primaryResult = compareDouble(leftRecord.cpuPercent, rightRecord.cpuPercent);
-                break;
-            case TableColumn::CpuCore:
-                primaryResult = compareDouble(
-                    leftRecord.cpuCorePercent,
-                    rightRecord.cpuCorePercent);
-                break;
-            case TableColumn::Ram:
-                primaryResult = compareDouble(leftRecord.workingSetMB, rightRecord.workingSetMB);
-                break;
-            case TableColumn::Disk:
-                primaryResult = compareDouble(leftRecord.diskMBps, rightRecord.diskMBps);
-                break;
-            case TableColumn::Gpu:
-                primaryResult = compareDouble(leftRecord.gpuPercent, rightRecord.gpuPercent);
-                break;
-            case TableColumn::Net:
-                primaryResult = compareDouble(leftRecord.netKBps, rightRecord.netKBps);
-                break;
-            case TableColumn::Signature:
-                primaryResult = compareText(
-                    QString::fromStdString(leftRecord.signatureState),
-                    QString::fromStdString(rightRecord.signatureState));
-                break;
-            case TableColumn::Path:
-                primaryResult = compareText(
-                    QString::fromStdString(leftRecord.imagePath),
-                    QString::fromStdString(rightRecord.imagePath));
-                break;
-            case TableColumn::ParentPid:
-                primaryResult = compareUInt64(leftRecord.parentPid, rightRecord.parentPid);
-                break;
-            case TableColumn::CommandLine:
-                primaryResult = compareText(
-                    QString::fromStdString(leftRecord.commandLine),
-                    QString::fromStdString(rightRecord.commandLine));
-                break;
-            case TableColumn::User:
-                primaryResult = compareText(
-                    QString::fromStdString(leftRecord.userName),
-                    QString::fromStdString(rightRecord.userName));
-                break;
-            case TableColumn::StartTime:
-                primaryResult = compareUInt64(leftRecord.creationTime100ns, rightRecord.creationTime100ns);
-                break;
-            case TableColumn::IsAdmin:
-                primaryResult = compareUInt64(leftRecord.isAdmin ? 1U : 0U, rightRecord.isAdmin ? 1U : 0U);
-                break;
-            case TableColumn::PplLevel:
-                primaryResult = compareUInt64(leftRecord.protectionLevel, rightRecord.protectionLevel);
-                break;
-            case TableColumn::Protection:
-            case TableColumn::Ppl:
-                primaryResult = compareUInt64(leftRecord.r0Protection, rightRecord.r0Protection);
-                break;
-            case TableColumn::HandleCount:
-                primaryResult = compareUInt64(leftRecord.handleCount, rightRecord.handleCount);
-                break;
-            case TableColumn::HandleTable:
-                primaryResult = compareUInt64(
-                    (leftRecord.r0FieldFlags & KSWORD_ARK_PROCESS_FIELD_OBJECT_TABLE_AVAILABLE) != 0U ? 1U : 0U,
-                    (rightRecord.r0FieldFlags & KSWORD_ARK_PROCESS_FIELD_OBJECT_TABLE_AVAILABLE) != 0U ? 1U : 0U);
-                break;
-            case TableColumn::SectionObject:
-                primaryResult = compareUInt64(
-                    (leftRecord.r0FieldFlags & KSWORD_ARK_PROCESS_FIELD_SECTION_OBJECT_AVAILABLE) != 0U ? 1U : 0U,
-                    (rightRecord.r0FieldFlags & KSWORD_ARK_PROCESS_FIELD_SECTION_OBJECT_AVAILABLE) != 0U ? 1U : 0U);
-                break;
-            case TableColumn::R0Status:
-                primaryResult = compareUInt64(leftRecord.r0Status, rightRecord.r0Status);
-                break;
-            default:
-                primaryResult = 0;
-                break;
+                    formatColumnText(leftRecord, tableColumn, 0),
+                    formatColumnText(rightRecord, tableColumn, 0));
             }
 
             if (primaryResult != 0)

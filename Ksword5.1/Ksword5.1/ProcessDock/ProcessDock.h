@@ -25,6 +25,7 @@
 #include <QWidget>
 
 #include <atomic>
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <deque>
@@ -382,12 +383,6 @@ private:
         bool isExited = false;                        // isExited：退出保留行高亮标记。
         bool isKernelOnly = false;                    // isKernelOnly：仅内核可见进程高亮标记。
         bool activitySnapshotActive = false;          // activitySnapshotActive：该行是否来自历史时间轴快照。
-        double cpuUsageRatio = 0.0;                   // cpuUsageRatio：CPU 单元格蓝色占比高亮比例。
-        double ramUsageRatio = 0.0;                   // ramUsageRatio：RAM 单元格蓝色占比高亮比例。
-        double diskUsageRatio = 0.0;                  // diskUsageRatio：DISK 单元格蓝色占比高亮比例。
-        double gpuUsageRatio = 0.0;                   // gpuUsageRatio：GPU 单元格蓝色占比高亮比例。
-        double netUsageRatio = 0.0;                   // netUsageRatio：Net 单元格蓝色占比高亮比例。
-        double handleUsageRatio = 0.0;                // handleUsageRatio：句柄数单元格蓝色占比高亮比例。
     };
 
     using ProcessTableModel = ks::ui::FlatTableModel<ProcessTableRow>;
@@ -915,6 +910,23 @@ private:
     std::vector<ProcessActionTarget> processTreeActionTargets() const;
     void clearProcessTableSelection();
     void syncTrackedSelectionFromTable();
+    // processNumericSortValue 作用：
+    // - 为普通列表代理与友好视图提供唯一的原始数值排序键；
+    // - 新增带单位的数值列时只需在此处登记，避免两套列比较器漂移。
+    // 返回：有效 QVariant 表示数值列；无效 QVariant 表示按展示文本排序。
+    static QVariant processNumericSortValue(
+        const ks::process::ProcessRecord& processRecord,
+        TableColumn column);
+    // processUsageHighlightValue 作用：返回需要占用强度染色的非负幅值，未采集或非指标列返回 false。
+    static bool processUsageHighlightValue(
+        const ks::process::ProcessRecord& processRecord,
+        TableColumn column,
+        double* valueOut);
+    // processUsageHighlightRatio 作用：把单元格幅值按当前表格同列最大值归一化到 0~1。
+    bool processUsageHighlightRatio(
+        const ks::process::ProcessRecord& processRecord,
+        TableColumn column,
+        double* ratioOut) const;
     QVariant processTableData(const ProcessTableRow& tableRow, int column, int role);
     const ProcessTableRow* processTableRowForViewIndex(const QModelIndex& viewIndex) const;
     QModelIndex processTableViewIndexForIdentityKey(const std::string& identityKey, int column) const;
@@ -1099,6 +1111,7 @@ private:
     QTableView* m_processTable = nullptr;     // 进程列表表格视图（支持列拖动/排序/右键）。
     ProcessTableModel* m_processTableModel = nullptr; // 进程列表轻量模型，避免刷新时重建 item。
     QSortFilterProxyModel* m_processSortProxy = nullptr; // 进程列表排序代理，保持数值列排序行为。
+    std::array<double, static_cast<std::size_t>(TableColumn::Count)> m_processUsageHighlightMaximums{}; // 当前进程表各占用指标列的强度上限。
     QHash<int, bool> m_userColumnVisibilityOverride; // 用户逐列显隐选择；键为列逻辑索引，缺省表示跟随视图默认。
     std::vector<ProcessCustomView> m_customViews;    // 用户自定义视图列表，持久化在 QSettings。
     bool m_viewModeComboUpdating = false;            // 程序重建下拉项期间屏蔽用户切换处理。
