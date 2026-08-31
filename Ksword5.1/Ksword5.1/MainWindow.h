@@ -345,8 +345,8 @@ private:
     void toggleLogOutputWindow();
     void persistLogOutputWindowGeometry();
     void restoreLogOutputWindowGeometry();
-    // openGitHubRepositoryFromMenu 作用：从标题栏功能入口打开项目 GitHub 仓库主页。
-    void openGitHubRepositoryFromMenu();
+    // openProjectPageFromMenu 作用：打开一个项目相关外链，失败时按 failureTitle 提示。
+    void openProjectPageFromMenu(const QString& urlText, const QString& failureTitle);
     // showLicenseFromMenu 作用：读取程序同目录 LICENSE 文件并展示许可证内容。
     void showLicenseFromMenu();
 
@@ -357,7 +357,7 @@ private:
     QString buildTitleActionButtonStyle() const;
 
     // refreshTitleActionButtonStyles 作用：
-    // - 根据当前主题刷新“许可证/GitHub/插件/窗口/日志/设置”标题栏功能按钮；
+    // - 根据当前主题刷新“设置/GitHub/窗口”三个标题栏顶级菜单按钮；
     // - 解决深色模式切换后旧浅色样式残留的问题。
     void refreshTitleActionButtonStyles();
 
@@ -691,13 +691,12 @@ private:
     // - System：是否 LocalSystem 身份；
     // - R0：驱动服务快捷开关。
     QWidget* m_privilegeButtonContainer = nullptr;
-    QToolButton* m_githubMenuButton = nullptr;   // m_githubMenuButton：标题栏“GitHub”仓库按钮。
-    QToolButton* m_licenseMenuButton = nullptr;  // m_licenseMenuButton：标题栏“许可证”按钮。
-    QToolButton* m_pluginMenuButton = nullptr;   // m_pluginMenuButton：标题栏“插件管理”入口按钮。
-    QToolButton* m_windowMenuButton = nullptr;   // m_windowMenuButton：标题栏“窗口”下拉菜单入口。
-    QMenu* m_windowMenu = nullptr;               // m_windowMenu：辅助 Dock 显示/隐藏复选菜单。
-    QToolButton* m_logMenuButton = nullptr;      // m_logMenuButton：标题栏“日志输出”窗口切换入口。
-    QToolButton* m_settingsMenuButton = nullptr; // m_settingsMenuButton：标题栏“设置”入口按钮。
+    QToolButton* m_settingsMenuButton = nullptr; // m_settingsMenuButton：标题栏“设置”顶级菜单。
+    QMenu* m_settingsMenu = nullptr;             // m_settingsMenu：首选项/插件管理/许可证/退出。
+    QToolButton* m_githubMenuButton = nullptr;   // m_githubMenuButton：标题栏“GitHub”顶级菜单。
+    QMenu* m_githubMenu = nullptr;               // m_githubMenu：项目主页/发行版/问题反馈。
+    QToolButton* m_windowMenuButton = nullptr;   // m_windowMenuButton：标题栏“窗口”顶级菜单。
+    QMenu* m_windowMenu = nullptr;               // m_windowMenu：辅助 Dock 显示/隐藏复选菜单与日志输出窗口。
     QPushButton* m_uiAccessStatusButton = nullptr; // m_uiAccessStatusButton：触发 UIAccess fallback 或降级回普通实例的入口。
     QPushButton* m_adminStatusButton = nullptr;
     QPushButton* m_debugStatusButton = nullptr;

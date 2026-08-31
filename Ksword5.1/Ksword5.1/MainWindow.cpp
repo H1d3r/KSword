@@ -7196,12 +7196,16 @@ void MainWindow::executeCommandWithOptions(
 
 void MainWindow::initMenus()
 {
-    if (m_licenseMenuButton != nullptr || m_customTitleBar == nullptr)
+    if (m_settingsMenuButton != nullptr || m_customTitleBar == nullptr)
     {
         return;
     }
 
-    // 功能入口容器：挂在标题栏的应用标识之后，不再单独占用标题栏下方一整行。
+    ks::i18n::LanguageManager& languageManager = ks::i18n::LanguageManager::instance();
+
+    // 功能入口容器：挂在标题栏的应用标识之后。
+    // 采用 Windows 常规菜单栏形态——少数几个顶级项，每项展开为下拉菜单，
+    // 而不是把每个功能都平铺成一个按钮，否则标题栏会被挤没。
     QWidget* const titleActionContainer = new QWidget(m_customTitleBar);
     titleActionContainer->setObjectName(QStringLiteral("ksTitleActionRow"));
     titleActionContainer->setFixedHeight(22);
@@ -7209,95 +7213,98 @@ void MainWindow::initMenus()
     titleActionLayout->setContentsMargins(2, 0, 0, 0);
     titleActionLayout->setSpacing(2);
 
-    // configureTitleActionButton 作用：统一功能入口按钮的外观与焦点策略。
-    const auto configureTitleActionButton = [](QToolButton* const button)
+    // configureTitleMenuButton 作用：统一顶级菜单按钮的外观、焦点策略与弹出方式。
+    const auto configureTitleMenuButton = [](QToolButton* const button, QMenu* const menu)
     {
         button->setToolButtonStyle(Qt::ToolButtonTextOnly);
         button->setAutoRaise(true);
         button->setFixedHeight(22);
         button->setFocusPolicy(Qt::NoFocus);
+        button->setPopupMode(QToolButton::InstantPopup);
+        button->setMenu(menu);
     };
 
+    // ======== 设置 ========
+    m_settingsMenuButton = new QToolButton(titleActionContainer);
+    m_settingsMenuButton->setObjectName(QStringLiteral("ksSettingsMenuButton"));
+    m_settingsMenuButton->setText(QStringLiteral("设置"));
+    m_settingsMenuButton->setToolTip(QStringLiteral("界面、插件与许可证"));
+    languageManager.bindText(m_settingsMenuButton, QStringLiteral("menu.settings"), QStringLiteral("设置"));
+    languageManager.bindToolTip(m_settingsMenuButton, QStringLiteral("menu.settings.tooltip"), QStringLiteral("界面、插件与许可证"));
+    m_settingsMenu = new QMenu(m_settingsMenuButton);
+    m_settingsMenu->setObjectName(QStringLiteral("ksSettingsMenu"));
+    configureTitleMenuButton(m_settingsMenuButton, m_settingsMenu);
+
+    QAction* const preferencesAction = m_settingsMenu->addAction(QStringLiteral("首选项"));
+    languageManager.bindText(preferencesAction, QStringLiteral("menu.settings.preferences"), QStringLiteral("首选项"));
+    connect(preferencesAction, &QAction::triggered, this, [this]() { showSettingsPanelFromMenu(); });
+
+    QAction* const pluginAction = m_settingsMenu->addAction(QStringLiteral("插件管理"));
+    languageManager.bindText(pluginAction, QStringLiteral("menu.plugins"), QStringLiteral("插件管理"));
+    connect(pluginAction, &QAction::triggered, this, [this]() { ks::plugin_host::showPluginManager(this); });
+
+    m_settingsMenu->addSeparator();
+
+    QAction* const licenseAction = m_settingsMenu->addAction(QStringLiteral("许可证"));
+    languageManager.bindText(licenseAction, QStringLiteral("menu.license"), QStringLiteral("许可证"));
+    connect(licenseAction, &QAction::triggered, this, &MainWindow::showLicenseFromMenu);
+
+    QAction* const exitAction = m_settingsMenu->addAction(QStringLiteral("退出"));
+    languageManager.bindText(exitAction, QStringLiteral("menu.exit"), QStringLiteral("退出"));
+    exitAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+Q")));
+    exitAction->setShortcutContext(Qt::WindowShortcut);
+    connect(exitAction, &QAction::triggered, this, &MainWindow::close);
+    addAction(exitAction);
+
+    // ======== GitHub ========
     m_githubMenuButton = new QToolButton(titleActionContainer);
     m_githubMenuButton->setObjectName(QStringLiteral("ksGitHubMenuButton"));
     m_githubMenuButton->setText(QStringLiteral("GitHub"));
-    m_githubMenuButton->setToolTip(QStringLiteral("打开项目 GitHub 仓库主页"));
-    ks::i18n::LanguageManager::instance().bindText(m_githubMenuButton, QStringLiteral("menu.github"), QStringLiteral("GitHub"));
-    ks::i18n::LanguageManager::instance().bindToolTip(m_githubMenuButton, QStringLiteral("menu.github.tooltip"), QStringLiteral("打开项目 GitHub 仓库主页"));
-    configureTitleActionButton(m_githubMenuButton);
-    connect(m_githubMenuButton, &QToolButton::clicked, this, &MainWindow::openGitHubRepositoryFromMenu);
+    m_githubMenuButton->setToolTip(QStringLiteral("项目主页、发行版与问题反馈"));
+    languageManager.bindText(m_githubMenuButton, QStringLiteral("menu.github"), QStringLiteral("GitHub"));
+    languageManager.bindToolTip(m_githubMenuButton, QStringLiteral("menu.github.tooltip"), QStringLiteral("项目主页、发行版与问题反馈"));
+    m_githubMenu = new QMenu(m_githubMenuButton);
+    m_githubMenu->setObjectName(QStringLiteral("ksGitHubMenu"));
+    configureTitleMenuButton(m_githubMenuButton, m_githubMenu);
 
-    m_licenseMenuButton = new QToolButton(titleActionContainer);
-    m_licenseMenuButton->setObjectName(QStringLiteral("ksLicenseMenuButton"));
-    m_licenseMenuButton->setText(QStringLiteral("许可证"));
-    m_licenseMenuButton->setToolTip(QStringLiteral("查看软件许可证"));
-    ks::i18n::LanguageManager::instance().bindText(m_licenseMenuButton, QStringLiteral("menu.license"), QStringLiteral("许可证"));
-    ks::i18n::LanguageManager::instance().bindToolTip(m_licenseMenuButton, QStringLiteral("menu.license.tooltip"), QStringLiteral("查看软件许可证"));
-    configureTitleActionButton(m_licenseMenuButton);
-    connect(m_licenseMenuButton, &QToolButton::clicked, this, &MainWindow::showLicenseFromMenu);
-
-    // 退出入口已从功能条移除，但 Ctrl+Q 是既有习惯，改挂到主窗口上单独保留。
-    QAction* const quitAction = new QAction(this);
-    quitAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+Q")));
-    quitAction->setShortcutContext(Qt::WindowShortcut);
-    connect(quitAction, &QAction::triggered, this, &MainWindow::close);
-    addAction(quitAction);
-
-    m_pluginMenuButton = new QToolButton(titleActionContainer);
-    m_pluginMenuButton->setObjectName(QStringLiteral("ksPluginMenuButton"));
-    m_pluginMenuButton->setText(QStringLiteral("插件管理"));
-    m_pluginMenuButton->setToolTip(QStringLiteral("浏览、安装和管理插件"));
-    ks::i18n::LanguageManager::instance().bindText(m_pluginMenuButton, QStringLiteral("menu.plugins"), QStringLiteral("插件管理"));
-    ks::i18n::LanguageManager::instance().bindToolTip(m_pluginMenuButton, QStringLiteral("menu.plugins.tooltip"), QStringLiteral("浏览、安装和管理插件"));
-    configureTitleActionButton(m_pluginMenuButton);
-    connect(m_pluginMenuButton, &QToolButton::clicked, this, [this]() {
-        ks::plugin_host::showPluginManager(this);
+    QAction* const repositoryAction = m_githubMenu->addAction(QStringLiteral("项目主页"));
+    languageManager.bindText(repositoryAction, QStringLiteral("menu.github.repository"), QStringLiteral("项目主页"));
+    connect(repositoryAction, &QAction::triggered, this, [this]() {
+        openProjectPageFromMenu(
+            QStringLiteral("https://github.com/KSwordDEV/KSword"),
+            QStringLiteral("项目主页"));
     });
 
-    m_logMenuButton = new QToolButton(titleActionContainer);
-    m_logMenuButton->setObjectName(QStringLiteral("ksLogMenuButton"));
-    m_logMenuButton->setText(QStringLiteral("日志输出"));
-    m_logMenuButton->setToolTip(QStringLiteral("显示或隐藏非模态日志输出窗口"));
-    ks::i18n::LanguageManager::instance().bindText(m_logMenuButton, QStringLiteral("menu.log"), QStringLiteral("日志输出"));
-    ks::i18n::LanguageManager::instance().bindToolTip(m_logMenuButton, QStringLiteral("menu.log.tooltip"), QStringLiteral("显示或隐藏非模态日志输出窗口"));
-    configureTitleActionButton(m_logMenuButton);
-    connect(m_logMenuButton, &QToolButton::clicked, this, &MainWindow::toggleLogOutputWindow);
+    QAction* const releaseAction = m_githubMenu->addAction(QStringLiteral("发行版"));
+    languageManager.bindText(releaseAction, QStringLiteral("menu.github.releases"), QStringLiteral("发行版"));
+    connect(releaseAction, &QAction::triggered, this, [this]() {
+        openProjectPageFromMenu(
+            QStringLiteral("https://github.com/KSwordDEV/KSword/releases"),
+            QStringLiteral("发行版"));
+    });
 
+    QAction* const issueAction = m_githubMenu->addAction(QStringLiteral("问题反馈"));
+    languageManager.bindText(issueAction, QStringLiteral("menu.github.issues"), QStringLiteral("问题反馈"));
+    connect(issueAction, &QAction::triggered, this, [this]() {
+        openProjectPageFromMenu(
+            QStringLiteral("https://github.com/KSwordDEV/KSword/issues"),
+            QStringLiteral("问题反馈"));
+    });
+
+    // ======== 窗口 ========
     m_windowMenuButton = new QToolButton(titleActionContainer);
     m_windowMenuButton->setObjectName(QStringLiteral("ksWindowMenuButton"));
     m_windowMenuButton->setText(QStringLiteral("窗口"));
     m_windowMenuButton->setToolTip(QStringLiteral("显示或隐藏 Dock 窗口"));
-    ks::i18n::LanguageManager::instance().bindText(
-        m_windowMenuButton,
-        QStringLiteral("menu.window"),
-        QStringLiteral("窗口"));
-    ks::i18n::LanguageManager::instance().bindToolTip(
-        m_windowMenuButton,
-        QStringLiteral("menu.window.tooltip"),
-        QStringLiteral("显示或隐藏 Dock 窗口"));
-    configureTitleActionButton(m_windowMenuButton);
-    m_windowMenuButton->setPopupMode(QToolButton::InstantPopup);
+    languageManager.bindText(m_windowMenuButton, QStringLiteral("menu.window"), QStringLiteral("窗口"));
+    languageManager.bindToolTip(m_windowMenuButton, QStringLiteral("menu.window.tooltip"), QStringLiteral("显示或隐藏 Dock 窗口"));
     m_windowMenu = new QMenu(m_windowMenuButton);
     m_windowMenu->setObjectName(QStringLiteral("ksWindowMenu"));
-    m_windowMenuButton->setMenu(m_windowMenu);
+    configureTitleMenuButton(m_windowMenuButton, m_windowMenu);
 
-    m_settingsMenuButton = new QToolButton(titleActionContainer);
-    m_settingsMenuButton->setObjectName(QStringLiteral("ksSettingsMenuButton"));
-    m_settingsMenuButton->setText(QStringLiteral("设置"));
-    m_settingsMenuButton->setToolTip(QStringLiteral("打开界面与启动设置"));
-    ks::i18n::LanguageManager::instance().bindText(m_settingsMenuButton, QStringLiteral("menu.settings"), QStringLiteral("设置"));
-    ks::i18n::LanguageManager::instance().bindToolTip(m_settingsMenuButton, QStringLiteral("menu.settings.tooltip"), QStringLiteral("打开界面、语言与启动设置"));
-    configureTitleActionButton(m_settingsMenuButton);
-    connect(m_settingsMenuButton, &QToolButton::clicked, this, [this]() {
-        showSettingsPanelFromMenu();
-    });
-
-    titleActionLayout->addWidget(m_licenseMenuButton);
-    titleActionLayout->addWidget(m_githubMenuButton);
-    titleActionLayout->addWidget(m_pluginMenuButton);
-    titleActionLayout->addWidget(m_windowMenuButton);
-    titleActionLayout->addWidget(m_logMenuButton);
     titleActionLayout->addWidget(m_settingsMenuButton);
+    titleActionLayout->addWidget(m_githubMenuButton);
+    titleActionLayout->addWidget(m_windowMenuButton);
     m_customTitleBar->setCustomLeftWidget(titleActionContainer);
     refreshTitleActionButtonStyles();
 }
@@ -7334,6 +7341,15 @@ void MainWindow::initializeWindowDockMenuActions()
     m_windowMenu->addAction(logDockAction);
     m_windowMenu->addAction(monitorPanelAction);
     m_windowMenu->addAction(currentTasksAction);
+    m_windowMenu->addSeparator();
+
+    // 非模态日志输出窗口不是 Dock，没有 toggleViewAction，单独挂一条。
+    QAction* const logOutputAction = m_windowMenu->addAction(QStringLiteral("日志输出窗口"));
+    ks::i18n::LanguageManager::instance().bindText(
+        logOutputAction,
+        QStringLiteral("menu.log"),
+        QStringLiteral("日志输出窗口"));
+    connect(logOutputAction, &QAction::triggered, this, &MainWindow::toggleLogOutputWindow);
 }
 
 QString MainWindow::buildTitleActionButtonStyle() const
@@ -7388,12 +7404,9 @@ void MainWindow::refreshTitleActionButtonStyles()
     // 标题栏功能按钮刷新：主题切换后所有按钮都重新套用同一份 QSS。
     const QString topActionButtonStyle = buildTitleActionButtonStyle();
     const QList<QToolButton*> topActionButtonList{
-        m_licenseMenuButton,
+        m_settingsMenuButton,
         m_githubMenuButton,
-        m_pluginMenuButton,
-        m_windowMenuButton,
-        m_logMenuButton,
-        m_settingsMenuButton
+        m_windowMenuButton
     };
     for (QToolButton* button : topActionButtonList)
     {
@@ -7404,15 +7417,16 @@ void MainWindow::refreshTitleActionButtonStyles()
     }
 }
 
-void MainWindow::openGitHubRepositoryFromMenu()
+void MainWindow::openProjectPageFromMenu(const QString& urlText, const QString& failureTitle)
 {
-    const QUrl repositoryUrl(QStringLiteral("https://github.com/KSwordDEV/KSword"));
-    if (!QDesktopServices::openUrl(repositoryUrl))
+    // 三个 GitHub 菜单项共用同一条外链打开路径，失败时按各自标题提示。
+    const QUrl targetUrl(urlText);
+    if (!QDesktopServices::openUrl(targetUrl))
     {
         QMessageBox::warning(
             this,
-            QStringLiteral("GitHub"),
-            QStringLiteral("无法打开 GitHub 仓库：%1").arg(repositoryUrl.toString()));
+            failureTitle,
+            QStringLiteral("无法打开页面：%1").arg(targetUrl.toString()));
     }
 }
 
