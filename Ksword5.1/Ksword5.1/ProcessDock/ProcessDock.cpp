@@ -4600,10 +4600,6 @@ void ProcessDock::initializeProcessActivityPanel()
     panelLayout->setContentsMargins(6, 6, 6, 6);
     panelLayout->setSpacing(5);
 
-    QHBoxLayout* toolbarLayout = new QHBoxLayout();
-    toolbarLayout->setContentsMargins(0, 0, 0, 0);
-    toolbarLayout->setSpacing(6);
-
     m_activityClearButton = new QPushButton(QStringLiteral("清空"), m_activityPanelWidget);
     m_activityClearButton->setToolTip(QStringLiteral("清空当前刷新同步记录的进程活动样本。"));
     languageManager.bindText(m_activityClearButton, QStringLiteral("process.activity.clear"), QStringLiteral("清空"));
@@ -4624,12 +4620,12 @@ void ProcessDock::initializeProcessActivityPanel()
         QStringLiteral("process.activity.tooltip.background"),
         QStringLiteral("默认仅进程列表 Tab 显示时刷新和记录；勾选后切到其它 Tab 仍继续刷新并记录。"));
 
-    m_activityListOnlyRefreshCheck = new QCheckBox(QStringLiteral("只刷新列表"), m_activityPanelWidget);
+    m_activityListOnlyRefreshCheck = new QCheckBox(QStringLiteral("不记录历史"), m_activityPanelWidget);
     m_activityListOnlyRefreshCheck->setToolTip(QStringLiteral("勾选后周期刷新仍会更新进程列表，但不会向上方时间轴写入新的活动记录。"));
     languageManager.bindText(
         m_activityListOnlyRefreshCheck,
         QStringLiteral("process.activity.list_only"),
-        QStringLiteral("只刷新列表"));
+        QStringLiteral("不记录历史"));
     languageManager.bindToolTip(
         m_activityListOnlyRefreshCheck,
         QStringLiteral("process.activity.tooltip.list_only"),
@@ -4710,23 +4706,30 @@ void ProcessDock::initializeProcessActivityPanel()
     });
     m_activityProcessPickerButton = processPickerButton;
 
-    toolbarLayout->addWidget(m_activityClearButton);
-    toolbarLayout->addWidget(m_activityBackgroundRecordCheck);
-    toolbarLayout->addWidget(m_activityListOnlyRefreshCheck);
-    toolbarLayout->addSpacing(8);
     QLabel* activityDisplayLabel = new QLabel(QStringLiteral("显示:"), m_activityPanelWidget);
     languageManager.bindText(
         activityDisplayLabel,
         QStringLiteral("process.activity.display"),
         QStringLiteral("显示:"));
-    toolbarLayout->addWidget(activityDisplayLabel);
-    toolbarLayout->addWidget(m_activityCpuButton);
-    toolbarLayout->addWidget(m_activityMemoryButton);
-    toolbarLayout->addWidget(m_activityDiskButton);
-    toolbarLayout->addWidget(m_activityNetworkButton);
-    toolbarLayout->addWidget(m_activityGpuButton);
-    toolbarLayout->addWidget(m_activityProcessPickerButton);
-    toolbarLayout->addStretch(1);
+
+    // 活动控制项并入顶部控制行，图表面板只保留图表本身，省下一整行垂直空间。
+    // 插在搜索框之后、addStretch 之前：右侧的刷新间隔组仍靠右对齐。
+    // addWidget 会自动把这些控件从 m_activityPanelWidget 重新认父到控制行容器。
+    int topControlInsertIndex = m_controlLayout->indexOf(m_processSearchLineEdit) + 1;
+    for (QWidget* const activityControlWidget : {
+             static_cast<QWidget*>(m_activityClearButton),
+             static_cast<QWidget*>(m_activityBackgroundRecordCheck),
+             static_cast<QWidget*>(m_activityListOnlyRefreshCheck),
+             static_cast<QWidget*>(activityDisplayLabel),
+             static_cast<QWidget*>(m_activityCpuButton),
+             static_cast<QWidget*>(m_activityMemoryButton),
+             static_cast<QWidget*>(m_activityDiskButton),
+             static_cast<QWidget*>(m_activityNetworkButton),
+             static_cast<QWidget*>(m_activityGpuButton),
+             static_cast<QWidget*>(m_activityProcessPickerButton) })
+    {
+        m_controlLayout->insertWidget(topControlInsertIndex++, activityControlWidget);
+    }
 
     m_activityChartWidget = new ProcessActivityChartWidget(this, m_activityPanelWidget);
     m_activityChartWidget->setToolTip(QString());
@@ -4756,7 +4759,6 @@ void ProcessDock::initializeProcessActivityPanel()
         .arg(KswordTheme::TextSecondaryHex())
         .arg(KswordTheme::BorderHex()));
 
-    panelLayout->addLayout(toolbarLayout);
     panelLayout->addWidget(m_activityChartWidget);
     m_processPageLayout->addWidget(m_activityPanelWidget, 0);
 }
@@ -5712,7 +5714,7 @@ void ProcessDock::initializeConnections()
 
     // 后台保持刷新/记录：
     // - 未勾选时，进程页隐藏后周期刷新和记录都会自动暂停；
-    // - 勾选后允许后台继续刷新，除非“只刷新列表”主动禁止写记录。
+    // - 勾选后允许后台继续刷新，除非“不记录历史”主动禁止写记录。
     connect(m_activityBackgroundRecordCheck, &QCheckBox::toggled, this, [this]() {
         updateProcessActivityStatusLabel();
         if (m_refreshTimer != nullptr && m_monitoringEnabled)
@@ -5733,13 +5735,13 @@ void ProcessDock::initializeConnections()
         }
     });
 
-    // 只刷新列表：
+    // 不记录历史：
     // - 勾选时不清空历史样本，只暂停后续 append；
     // - 取消后继续沿用同一条记录时间轴，方便对比前后变化。
     connect(m_activityListOnlyRefreshCheck, &QCheckBox::toggled, this, [this](const bool checked) {
         kLogEvent logEvent;
         info << logEvent
-            << "[ProcessDock] 只刷新列表开关变更, listOnly="
+            << "[ProcessDock] 不记录历史开关变更, listOnly="
             << (checked ? "true" : "false")
             << eol;
         updateProcessActivityStatusLabel();
@@ -6649,7 +6651,7 @@ void ProcessDock::requestAsyncRefresh(const bool forceRefresh)
         // 后台保持刷新/记录约束“是否继续刷新”：
         // - 默认离开进程列表页就不再继续刷新；
         // - 勾选后允许后台继续枚举；
-        // - “只刷新列表”只影响是否写记录，不应阻断列表刷新。
+        // - “不记录历史”只影响是否写记录，不应阻断列表刷新。
         if (!isProcessActivityRefreshAllowedNow())
         {
             kLogEvent logEvent;
@@ -8489,7 +8491,7 @@ bool ProcessDock::isProcessActivityRefreshAllowedNow() const
 
 bool ProcessDock::isProcessActivityRecordingAllowedNow() const
 {
-    // 记录允许逻辑在刷新允许之上额外叠加“只刷新列表”：
+    // 记录允许逻辑在刷新允许之上额外叠加“不记录历史”：
     // - 这样可以继续更新下方列表；
     // - 同时不污染上方时间轴样本。
     if (!isProcessActivityRefreshAllowedNow())
