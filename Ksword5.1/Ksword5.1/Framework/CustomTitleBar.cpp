@@ -6,6 +6,7 @@
 #include <QAction>
 #include <QApplication>
 #include <QCoreApplication>
+#include <QDateTime>
 #include <QFileIconProvider>
 #include <QFileInfo>
 #include <QGuiApplication>
@@ -19,6 +20,7 @@
 #include <QPushButton>
 #include <QResizeEvent>
 #include <QScreen>
+#include <QTimer>
 #include <QToolButton>
 #include <QWidget>
 #include <QWindow>
@@ -279,6 +281,8 @@ namespace ks::ui
     CustomTitleBar::CustomTitleBar(QWidget* parentWidget)
         : QWidget(parentWidget)
     {
+        m_processStartTickMilliseconds =
+            resolveProcessStartTickMilliseconds();
         initializeUi();
         initializeConnections();
         updateVisualState();
@@ -360,6 +364,10 @@ namespace ks::ui
             return false;
         }
         if (widgetBelongsTo(hitWidget, m_systemVersionLabel))
+        {
+            return true;
+        }
+        if (widgetBelongsTo(hitWidget, m_uptimeLabel))
         {
             return true;
         }
@@ -627,6 +635,13 @@ namespace ks::ui
         m_systemVersionLabel->setFixedHeight(kControlButtonHeight);
         m_systemVersionLabel->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
 
+        m_uptimeLabel = new QLabel(m_rightWidget);
+        m_uptimeLabel->setObjectName(QStringLiteral("ksTitleUptimeLabel"));
+        m_uptimeLabel->setAlignment(Qt::AlignVCenter | Qt::AlignRight);
+        m_uptimeLabel->setFixedHeight(kControlButtonHeight);
+        m_uptimeLabel->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+        m_uptimeLabel->setMinimumWidth(0);
+
         m_captureProtectionButton = new QPushButton(m_rightWidget);
         m_pinButton = new QPushButton(m_rightWidget);
         m_minButton = new QPushButton(m_rightWidget);
@@ -640,6 +655,7 @@ namespace ks::ui
         m_closeButton->setObjectName(QStringLiteral("ksTitleCloseButton"));
 
         m_rightLayout->addWidget(m_systemVersionLabel, 0, Qt::AlignVCenter);
+        m_rightLayout->addWidget(m_uptimeLabel, 0, Qt::AlignVCenter);
 
         const std::array<QPushButton*, 5> controlButtons = {
             m_captureProtectionButton,
@@ -670,6 +686,10 @@ namespace ks::ui
         m_rootLayout->addWidget(m_leftWidget, 0, 0, Qt::AlignLeft | Qt::AlignVCenter);
         m_rootLayout->addWidget(m_centerInputGroup, 0, 1, Qt::AlignCenter);
         m_rootLayout->addWidget(m_rightWidget, 0, 2, Qt::AlignRight | Qt::AlignVCenter);
+
+        m_uptimeTimer = new QTimer(this);
+        m_uptimeTimer->setInterval(1000);
+        updateUptimeText();
         updateCommandLineWidth();
     }
 
@@ -716,6 +736,12 @@ namespace ks::ui
         connect(m_commandModeAction, &QAction::triggered, this, [this]() {
             setTitleInputMode(false);
         });
+        connect(
+            m_uptimeTimer,
+            &QTimer::timeout,
+            this,
+            [this]() { updateUptimeText(); });
+        m_uptimeTimer->start();
     }
 
     void CustomTitleBar::updateVisualState()
@@ -736,7 +762,8 @@ namespace ks::ui
             "  color:%3;"
             "  font-weight:600;"
             "}"
-            "#ksCustomTitleBar QLabel#ksTitleSystemVersionLabel{"
+            "#ksCustomTitleBar QLabel#ksTitleSystemVersionLabel,"
+            "#ksCustomTitleBar QLabel#ksTitleUptimeLabel{"
             "  color:%3;"
             "  font-weight:500;"
             "  padding:0 4px;"
@@ -960,6 +987,96 @@ namespace ks::ui
             m_commandLineEdit->setPlaceholderText(
                 QStringLiteral("输入命令后回车：将使用 cmd /K 在新控制台执行"));
         }
+    }
+
+    void CustomTitleBar::updateUptimeText()
+    {
+        if (m_uptimeLabel == nullptr)
+        {
+            return;
+        }
+
+        // 运行时长走 GetTickCount64 时间轴，不受系统时钟被改动或 QPC 变速影响。
+#ifdef Q_OS_WIN
+        const unsigned long long currentTickMilliseconds =
+            static_cast<unsigned long long>(::GetTickCount64());
+#else
+        const unsigned long long currentTickMilliseconds =
+            static_cast<unsigned long long>(
+                QDateTime::currentMSecsSinceEpoch());
+#endif
+        const unsigned long long elapsedMilliseconds =
+            currentTickMilliseconds >= m_processStartTickMilliseconds
+            ? currentTickMilliseconds - m_processStartTickMilliseconds
+            : 0ULL;
+        const unsigned long long totalSeconds =
+            elapsedMilliseconds / 1000ULL;
+        const unsigned long long days = totalSeconds / 86400ULL;
+        const unsigned long long hours =
+            (totalSeconds / 3600ULL) % 24ULL;
+        const unsigned long long minutes =
+            (totalSeconds / 60ULL) % 60ULL;
+        const unsigned long long seconds = totalSeconds % 60ULL;
+        const QString elapsedText = days > 0ULL
+            ? ks::i18n::sourceText(
+                QStringLiteral("%1 天 %2:%3:%4"))
+                .arg(days)
+                .arg(hours, 2, 10, QLatin1Char('0'))
+                .arg(minutes, 2, 10, QLatin1Char('0'))
+                .arg(seconds, 2, 10, QLatin1Char('0'))
+            : QStringLiteral("%1:%2:%3")
+                .arg(hours, 2, 10, QLatin1Char('0'))
+                .arg(minutes, 2, 10, QLatin1Char('0'))
+                .arg(seconds, 2, 10, QLatin1Char('0'));
+        m_uptimeLabel->setText(
+            ks::i18n::sourceText(QStringLiteral("已调试：%1")).arg(elapsedText));
+        m_uptimeLabel->setToolTip(
+            ks::i18n::sourceText(
+                QStringLiteral("软件启动后已运行：%1"))
+                .arg(elapsedText));
+    }
+
+    unsigned long long CustomTitleBar::resolveProcessStartTickMilliseconds() const
+    {
+#ifdef Q_OS_WIN
+        const unsigned long long currentTickMilliseconds =
+            static_cast<unsigned long long>(::GetTickCount64());
+        FILETIME creationTime = {};
+        FILETIME exitTime = {};
+        FILETIME kernelTime = {};
+        FILETIME userTime = {};
+        if (::GetProcessTimes(
+                ::GetCurrentProcess(),
+                &creationTime,
+                &exitTime,
+                &kernelTime,
+                &userTime) == FALSE)
+        {
+            return currentTickMilliseconds;
+        }
+
+        FILETIME currentSystemTime = {};
+        ::GetSystemTimeAsFileTime(&currentSystemTime);
+        ULARGE_INTEGER creationValue = {};
+        creationValue.LowPart = creationTime.dwLowDateTime;
+        creationValue.HighPart = creationTime.dwHighDateTime;
+        ULARGE_INTEGER currentValue = {};
+        currentValue.LowPart = currentSystemTime.dwLowDateTime;
+        currentValue.HighPart = currentSystemTime.dwHighDateTime;
+        if (currentValue.QuadPart < creationValue.QuadPart)
+        {
+            return currentTickMilliseconds;
+        }
+
+        const unsigned long long processAgeMilliseconds =
+            (currentValue.QuadPart - creationValue.QuadPart) / 10000ULL;
+        return processAgeMilliseconds <= currentTickMilliseconds
+            ? currentTickMilliseconds - processAgeMilliseconds
+            : currentTickMilliseconds;
+#else
+        return static_cast<unsigned long long>(
+            QDateTime::currentMSecsSinceEpoch());
+#endif
     }
 
     bool CustomTitleBar::tryStartWindowSystemMove(const QPoint& globalPoint)
