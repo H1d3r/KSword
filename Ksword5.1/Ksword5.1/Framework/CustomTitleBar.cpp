@@ -7,10 +7,8 @@
 #include <QApplication>
 #include <QCoreApplication>
 #include <QDate>
-#include <QDateTime>
 #include <QFileIconProvider>
 #include <QFileInfo>
-#include <QFontMetrics>
 #include <QGuiApplication>
 #include <QGridLayout>
 #include <QHBoxLayout>
@@ -23,7 +21,6 @@
 #include <QResizeEvent>
 #include <QScreen>
 #include <QStringList>
-#include <QTimer>
 #include <QToolButton>
 #include <QWidget>
 #include <QWindow>
@@ -41,7 +38,6 @@ namespace
     // - kControlButtonWidth：右上角控制按钮固定宽度；
     // - kControlButtonHeight：右上角控制按钮固定高度；
     // - kControlIconSize：右上角控制按钮图标尺寸；
-    // - kUserBadgeHorizontalExtraWidth：用户名徽标按文本自适应时保留的左右留白和边框余量；
     // - kCommandLineMinWidth：命令输入框最小宽度；
     // - kCommandLineMaxWidth：命令输入框最大宽度；
     // - kAppIconSize：左侧应用图标绘制尺寸。
@@ -49,7 +45,6 @@ namespace
     constexpr int kControlButtonWidth = 32;
     constexpr int kControlButtonHeight = 24;
     constexpr int kControlIconSize = 16;
-    constexpr int kUserBadgeHorizontalExtraWidth = 18;
     constexpr int kCommandLineMinWidth = 210;
     constexpr int kCommandLineMaxWidth = 760;
     constexpr int kAppIconSize = 18;
@@ -286,8 +281,6 @@ namespace ks::ui
     CustomTitleBar::CustomTitleBar(QWidget* parentWidget)
         : QWidget(parentWidget)
     {
-        m_processStartTickMilliseconds =
-            resolveProcessStartTickMilliseconds();
         initializeUi();
         initializeConnections();
         updateVisualState();
@@ -368,15 +361,7 @@ namespace ks::ui
         {
             return false;
         }
-        if (widgetBelongsTo(hitWidget, m_userBadgeButton))
-        {
-            return false;
-        }
         if (widgetBelongsTo(hitWidget, m_systemVersionLabel))
-        {
-            return true;
-        }
-        if (widgetBelongsTo(hitWidget, m_timeStatusLabel))
         {
             return true;
         }
@@ -594,18 +579,8 @@ namespace ks::ui
         m_titleTextLabel->setText(QStringLiteral("KswordARK-5.1-Release(%1)").arg(resolveCompileDateText()));
         m_titleTextLabel->setAlignment(Qt::AlignVCenter | Qt::AlignLeft);
 
-        m_rawUserNameText = resolveCurrentUserNameText();
-        m_isSpecialUser = m_rawUserNameText.compare(QStringLiteral("33251"), Qt::CaseSensitive) == 0;
-        m_userBadgeButton = new QPushButton(m_leftWidget);
-        m_userBadgeButton->setEnabled(false);
-        m_userBadgeButton->setFocusPolicy(Qt::NoFocus);
-        m_userBadgeButton->setFixedHeight(18);
-        m_userBadgeButton->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
-        m_userBadgeButton->setCursor(Qt::ArrowCursor);
-
         m_leftLayout->addWidget(m_appIconLabel, 0);
         m_leftLayout->addWidget(m_titleTextLabel, 0);
-        m_leftLayout->addWidget(m_userBadgeButton, 0);
 
         // 中间输入组：左侧模式按钮（搜索/CMD）+ 输入框，外观合并为一个整体。
         // 默认“搜索”模式做全局页面文本搜索；切到 CMD 模式后回车在新控制台执行。
@@ -654,13 +629,6 @@ namespace ks::ui
         m_systemVersionLabel->setFixedHeight(kControlButtonHeight);
         m_systemVersionLabel->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
 
-        m_timeStatusLabel = new QLabel(m_rightWidget);
-        m_timeStatusLabel->setObjectName(QStringLiteral("ksTitleTimeStatusLabel"));
-        m_timeStatusLabel->setAlignment(Qt::AlignVCenter | Qt::AlignRight);
-        m_timeStatusLabel->setFixedHeight(kControlButtonHeight);
-        m_timeStatusLabel->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
-        m_timeStatusLabel->setMinimumWidth(0);
-
         m_captureProtectionButton = new QPushButton(m_rightWidget);
         m_pinButton = new QPushButton(m_rightWidget);
         m_minButton = new QPushButton(m_rightWidget);
@@ -674,7 +642,6 @@ namespace ks::ui
         m_closeButton->setObjectName(QStringLiteral("ksTitleCloseButton"));
 
         m_rightLayout->addWidget(m_systemVersionLabel, 0, Qt::AlignVCenter);
-        m_rightLayout->addWidget(m_timeStatusLabel, 0, Qt::AlignVCenter);
 
         const std::array<QPushButton*, 5> controlButtons = {
             m_captureProtectionButton,
@@ -705,10 +672,6 @@ namespace ks::ui
         m_rootLayout->addWidget(m_leftWidget, 0, 0, Qt::AlignLeft | Qt::AlignVCenter);
         m_rootLayout->addWidget(m_centerInputGroup, 0, 1, Qt::AlignCenter);
         m_rootLayout->addWidget(m_rightWidget, 0, 2, Qt::AlignRight | Qt::AlignVCenter);
-
-        m_timeStatusTimer = new QTimer(this);
-        m_timeStatusTimer->setInterval(1000);
-        updateTimeStatusText();
         updateCommandLineWidth();
     }
 
@@ -755,12 +718,6 @@ namespace ks::ui
         connect(m_commandModeAction, &QAction::triggered, this, [this]() {
             setTitleInputMode(false);
         });
-        connect(
-            m_timeStatusTimer,
-            &QTimer::timeout,
-            this,
-            [this]() { updateTimeStatusText(); });
-        m_timeStatusTimer->start();
     }
 
     void CustomTitleBar::updateVisualState()
@@ -772,25 +729,6 @@ namespace ks::ui
         const QString commandTextColorText = KswordTheme::TextPrimaryColorHex();
         const QString commandBorderText = KswordTheme::BorderStrongColorHex();
 
-        const QString normalBadgeBackgroundText = m_darkModeEnabled
-            ? KswordTheme::SurfaceAltColorHex()
-            : KswordTheme::SurfaceColorHex();
-        const QString normalBadgeTextColorText = KswordTheme::PrimaryBlueHex;
-        const QString specialBadgeBackgroundText = KswordTheme::PrimaryBlueHex;
-        const QString specialBadgeTextColorText = m_darkModeEnabled
-            ? KswordTheme::OnAccentHex()
-            : KswordTheme::ThemeColorName(KswordTheme::EnsureTextContrast(
-                KswordTheme::TextPrimaryColor(),
-                KswordTheme::AccentColor(KswordTheme::AccentRole::Blue),
-                3.0));
-
-        const QString userBadgeBackgroundText = m_isSpecialUser
-            ? specialBadgeBackgroundText
-            : normalBadgeBackgroundText;
-        const QString userBadgeTextColorText = m_isSpecialUser
-            ? specialBadgeTextColorText
-            : normalBadgeTextColorText;
-
         const QString titleBarStyleSheetText = QStringLiteral(
             "#ksCustomTitleBar{"
             "  background:%1;"
@@ -800,8 +738,7 @@ namespace ks::ui
             "  color:%3;"
             "  font-weight:600;"
             "}"
-            "#ksCustomTitleBar QLabel#ksTitleSystemVersionLabel,"
-            "#ksCustomTitleBar QLabel#ksTitleTimeStatusLabel{"
+            "#ksCustomTitleBar QLabel#ksTitleSystemVersionLabel{"
             "  color:%3;"
             "  font-weight:500;"
             "  padding:0 4px;"
@@ -859,12 +796,6 @@ namespace ks::ui
             "#ksCustomTitleBar QPushButton#ksTitleCloseButton:pressed{"
             "  background:__TITLE_CLOSE_PRESSED__;"
             "}"
-            "#ksCustomTitleBar QPushButton:disabled{"
-            "  background:%7;"
-            "  color:%8;"
-            "  border:1px solid %6;"
-            "  padding:0 6px;"
-            "  font-weight:700;"
             "}")
             .arg(titleBarBackgroundText)
             .arg(titleBarBorderText)
@@ -872,8 +803,6 @@ namespace ks::ui
             .arg(commandBackgroundText)
             .arg(commandTextColorText)
             .arg(commandBorderText)
-            .arg(userBadgeBackgroundText)
-            .arg(userBadgeTextColorText)
             .replace(QStringLiteral("__TITLE_BUTTON_HOVER__"), KswordTheme::PrimaryBlueSolidHoverHex())
             .replace(QStringLiteral("__TITLE_MODE_HOVER_TEXT__"), KswordTheme::OnAccentHex())
             .replace(QStringLiteral("__TITLE_BUTTON_PRESSED__"), KswordTheme::PrimaryBluePressedHex)
@@ -884,8 +813,7 @@ namespace ks::ui
         // 图标与按钮文案同步：
         // - 截屏屏蔽按钮根据保护状态切换眼睛/闭眼；
         // - 图钉根据置顶状态切换空心/实心；
-        // - 最大化按钮根据窗口状态切换最大化/还原图标；
-        // - 用户按钮根据“33251”特判切换显示名。
+        // - 最大化按钮根据窗口状态切换最大化/还原图标。
         m_captureProtectionButton->setIcon(QIcon(
             m_captureProtectionEnabled
             ? QStringLiteral(":/Icon/titlebar_capture_protected.svg")
@@ -918,13 +846,6 @@ namespace ks::ui
 
         m_closeButton->setIcon(QIcon(QStringLiteral(":/Icon/titlebar_close.svg")));
         m_closeButton->setIconSize(QSize(kControlIconSize, kControlIconSize));
-
-        const QString displayUserNameText = m_isSpecialUser
-            ? QStringLiteral("WangWei_CM")
-            : m_rawUserNameText;
-        m_userBadgeButton->setText(displayUserNameText);
-        m_userBadgeButton->setToolTip(QStringLiteral("当前用户：%1").arg(m_rawUserNameText));
-        updateUserBadgeWidth(displayUserNameText);
 
         updateTitleInputModeVisuals();
 
@@ -1041,120 +962,6 @@ namespace ks::ui
             m_commandLineEdit->setPlaceholderText(
                 QStringLiteral("输入命令后回车：将使用 cmd /K 在新控制台执行"));
         }
-    }
-
-    void CustomTitleBar::updateUserBadgeWidth(const QString& displayUserNameText)
-    {
-        if (m_userBadgeButton == nullptr)
-        {
-            return;
-        }
-
-        // 宽度按实际展示用户名计算：
-        // - fontMetrics 读取当前主题样式后的按钮字体；
-        // - 额外宽度覆盖左右 padding、边框和禁用态绘制余量；
-        // - 固定宽度只固定“计算结果”，不是固定常量，用户名变化后会重新贴合。
-        m_userBadgeButton->ensurePolished();
-        const QFontMetrics badgeFontMetrics(m_userBadgeButton->font());
-        const int textWidth = badgeFontMetrics.horizontalAdvance(displayUserNameText);
-        const int badgeWidth = std::max(1, textWidth + kUserBadgeHorizontalExtraWidth);
-        m_userBadgeButton->setFixedWidth(badgeWidth);
-        m_userBadgeButton->updateGeometry();
-    }
-
-    void CustomTitleBar::updateTimeStatusText()
-    {
-        if (m_timeStatusLabel == nullptr)
-        {
-            return;
-        }
-
-        const QString systemTimeText =
-            QDateTime::currentDateTime().toString(
-                QStringLiteral("yyyy-MM-dd HH:mm:ss"));
-#ifdef Q_OS_WIN
-        const unsigned long long currentTickMilliseconds =
-            static_cast<unsigned long long>(::GetTickCount64());
-#else
-        const unsigned long long currentTickMilliseconds =
-            static_cast<unsigned long long>(
-                QDateTime::currentMSecsSinceEpoch());
-#endif
-        const unsigned long long elapsedMilliseconds =
-            currentTickMilliseconds >= m_processStartTickMilliseconds
-            ? currentTickMilliseconds - m_processStartTickMilliseconds
-            : 0ULL;
-        const unsigned long long totalSeconds =
-            elapsedMilliseconds / 1000ULL;
-        const unsigned long long days = totalSeconds / 86400ULL;
-        const unsigned long long hours =
-            (totalSeconds / 3600ULL) % 24ULL;
-        const unsigned long long minutes =
-            (totalSeconds / 60ULL) % 60ULL;
-        const unsigned long long seconds = totalSeconds % 60ULL;
-        const QString elapsedText = days > 0ULL
-            ? ks::i18n::sourceText(
-                QStringLiteral("%1 天 %2:%3:%4"))
-                .arg(days)
-                .arg(hours, 2, 10, QLatin1Char('0'))
-                .arg(minutes, 2, 10, QLatin1Char('0'))
-                .arg(seconds, 2, 10, QLatin1Char('0'))
-            : QStringLiteral("%1:%2:%3")
-                .arg(hours, 2, 10, QLatin1Char('0'))
-                .arg(minutes, 2, 10, QLatin1Char('0'))
-                .arg(seconds, 2, 10, QLatin1Char('0'));
-        const QString displayText =
-            ks::i18n::sourceText(
-                QStringLiteral("系统时间：%1 | 已调试：%2"))
-                .arg(systemTimeText, elapsedText);
-        m_timeStatusLabel->setText(displayText);
-        m_timeStatusLabel->setToolTip(
-            ks::i18n::sourceText(
-                QStringLiteral("当前系统时间；软件启动后已运行：%1"))
-                .arg(elapsedText));
-    }
-
-    unsigned long long CustomTitleBar::resolveProcessStartTickMilliseconds() const
-    {
-#ifdef Q_OS_WIN
-        const unsigned long long currentTickMilliseconds =
-            static_cast<unsigned long long>(::GetTickCount64());
-        FILETIME creationTime = {};
-        FILETIME exitTime = {};
-        FILETIME kernelTime = {};
-        FILETIME userTime = {};
-        if (::GetProcessTimes(
-                ::GetCurrentProcess(),
-                &creationTime,
-                &exitTime,
-                &kernelTime,
-                &userTime) == FALSE)
-        {
-            return currentTickMilliseconds;
-        }
-
-        FILETIME currentSystemTime = {};
-        ::GetSystemTimeAsFileTime(&currentSystemTime);
-        ULARGE_INTEGER creationValue = {};
-        creationValue.LowPart = creationTime.dwLowDateTime;
-        creationValue.HighPart = creationTime.dwHighDateTime;
-        ULARGE_INTEGER currentValue = {};
-        currentValue.LowPart = currentSystemTime.dwLowDateTime;
-        currentValue.HighPart = currentSystemTime.dwHighDateTime;
-        if (currentValue.QuadPart < creationValue.QuadPart)
-        {
-            return currentTickMilliseconds;
-        }
-
-        const unsigned long long processAgeMilliseconds =
-            (currentValue.QuadPart - creationValue.QuadPart) / 10000ULL;
-        return processAgeMilliseconds <= currentTickMilliseconds
-            ? currentTickMilliseconds - processAgeMilliseconds
-            : currentTickMilliseconds;
-#else
-        return static_cast<unsigned long long>(
-            QDateTime::currentMSecsSinceEpoch());
-#endif
     }
 
     bool CustomTitleBar::tryStartWindowSystemMove(const QPoint& globalPoint)
@@ -1296,28 +1103,6 @@ namespace ks::ui
             return QDate::currentDate().toString(QStringLiteral("yyyy-MM-dd"));
         }
         return compileDateValue.toString(QStringLiteral("yyyy-MM-dd"));
-    }
-
-    QString CustomTitleBar::resolveCurrentUserNameText() const
-    {
-        const QString envUserNameText = qEnvironmentVariable("USERNAME").trimmed();
-        if (!envUserNameText.isEmpty())
-        {
-            return envUserNameText;
-        }
-
-        wchar_t userNameBuffer[256] = {};
-        DWORD bufferLength = static_cast<DWORD>(std::size(userNameBuffer));
-        if (::GetUserNameW(userNameBuffer, &bufferLength) != FALSE)
-        {
-            const QString apiUserNameText = QString::fromWCharArray(userNameBuffer).trimmed();
-            if (!apiUserNameText.isEmpty())
-            {
-                return apiUserNameText;
-            }
-        }
-
-        return QStringLiteral("UnknownUser");
     }
 
     QString CustomTitleBar::resolveWindowsVersionText() const
