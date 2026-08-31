@@ -1088,27 +1088,42 @@ KswordARKDriverShouldSkipTerminatingProcess(
 
 Routine Description:
 
-    参照 SKT64 的进程遍历逻辑，通过 EPROCESS.ObjectTable 过滤已经退出的进程。
+    判定候选 EPROCESS 是否已经退出或正在退出。
+    首选导出例程 PsGetProcessExitStatus，它直接读 EPROCESS.ExitStatus，不依赖任何
+    DynData 偏移；退化路径才回到 SKT64 那套 EPROCESS.ObjectTable 判据。
 
 Arguments:
 
     ProcessObject - 候选进程 EPROCESS。
-    DynState - 本次枚举开始时截取的统一 DynData 状态。
+    DynState - 本次枚举开始时截取的统一 DynData 状态，可为 NULL。
 
 Return Value:
 
-    ObjectTable 可读且为 NULL 时返回 TRUE，表示该进程处于 terminating/exited 状态。
-    偏移不可用或读取失败时返回 FALSE，避免因为诊断数据缺失误隐藏正常进程。
+    ExitStatus 不再是 STATUS_PENDING，或 ObjectTable 可读且为 NULL 时返回 TRUE，
+    表示该进程处于 terminating/exited 状态。
+    两条判据都拿不到结论时返回 FALSE，避免因为诊断数据缺失误隐藏正常进程。
 
 --*/
 {
     ULONG64 objectTableAddress = 0ULL;
     NTSTATUS status = STATUS_SUCCESS;
 
-    if (ProcessObject == NULL || DynState == NULL) {
+    if (ProcessObject == NULL) {
         return FALSE;
     }
-    if (!DynState->Initialized || !KswordARKDriverProcessDynOffsetPresent(DynState->Kernel.EpObjectTable)) {
+
+    //
+    // EPROCESS.ExitStatus 在进程创建时被置为 STATUS_PENDING，终止时写入真实退出码。
+    // PsGetProcessExitStatus 是导出例程，因此这条判据在 DynData 完全缺失时依然可用——
+    // System Informer 偏移表按 ntoskrnl 的 TimeDateStamp 精确匹配，新内核往往不在表内，
+    // 此时 EpObjectTable 不可用，只靠下面的 ObjectTable 判据会退化成“永远不是残骸”。
+    //
+    if (PsGetProcessExitStatus(ProcessObject) != STATUS_PENDING) {
+        return TRUE;
+    }
+
+    if (DynState == NULL || !DynState->Initialized ||
+        !KswordARKDriverProcessDynOffsetPresent(DynState->Kernel.EpObjectTable)) {
         return FALSE;
     }
 
