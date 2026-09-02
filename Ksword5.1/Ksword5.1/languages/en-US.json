@@ -5672,6 +5672,7 @@
     "CIDTable(可能为误报)": "CIDTable(Possible false positive)",
     "ThemeColorRemap.h": "ThemeColorRemap.h",
     "ThemeStatusRole.h": "ThemeStatusRole.h",
+    "NtfsRunListDecode.h": "NtfsRunListDecode.h",
     "[MainWindow] 存量样式表主题色重映射": "[MainWindow] Remapped theme colors in existing style sheets",
     "ReportStructuredView.h": "ReportStructuredView.h",
     "[R0?] ": "[R0?] ",

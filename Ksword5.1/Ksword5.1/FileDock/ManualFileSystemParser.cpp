@@ -33,8 +33,15 @@
 #include <Windows.h>
 #include <winioctl.h>
 
+#include "NtfsRunListDecode.h"
+
 namespace
 {
+    // runlist 解码已移入 ks::file（见 NtfsRunListDecode.h）：它是纯字节解析，
+    // 剥离出去才能脱离真实卷做边界测试。这里保留别名，调用点不变。
+    using ks::file::NtfsDataRun;
+    using ks::file::ParseNtfsRunList;
+
     // NtfsNameLink 作用：
     // - 表示同一条 MFT 记录下的一个“目录名链接”；
     // - 用于保留硬链接/多父目录场景，避免一条记录只能映射到一个目录。
@@ -43,16 +50,6 @@ namespace
         std::uint64_t parentIndex = 0;         // 父目录记录号。
         QString fileName;                      // 该父目录下显示的文件名。
         int nameScore = -1;                    // 名称优先级，优先 Win32/Win32&DOS。
-    };
-
-    // NtfsDataRun 作用：
-    // - 保存非 resident 主数据流的一个数据段；
-    // - 用于后续估算“簇是否仍未被覆盖”。
-    struct NtfsDataRun
-    {
-        std::uint64_t startLcn = 0;            // 数据段起始 LCN，稀疏段时为 0。
-        std::uint64_t clusterCount = 0;        // 当前数据段占用的簇数量。
-        bool isSparse = false;                 // 是否稀疏段，true 表示该段逻辑上为 0 填充。
     };
 
     // NtfsVolumeBitmapSnapshot 作用：
@@ -325,121 +322,7 @@ namespace
         return value;
     }
 
-    // readSignedLe64 作用：
-    // - 读取长度 1~8 字节的有符号小端整数；
-    // - 供 NTFS runlist 解析相对 LCN 偏移使用。
-    std::int64_t readSignedLe64(const std::byte* ptr, const std::uint8_t byteCount)
-    {
-        std::uint64_t rawValue = 0;
-        if (ptr == nullptr || byteCount == 0 || byteCount > 8)
-        {
-            return 0;
-        }
 
-        for (std::uint8_t i = 0; i < byteCount; ++i)
-        {
-            rawValue |=
-                static_cast<std::uint64_t>(
-                    static_cast<std::uint8_t>(ptr[i]))
-                << (i * 8);
-        }
-
-        // 若最高字节符号位为 1，则需要手动做符号扩展。
-        const std::uint64_t signMask =
-            std::uint64_t{1} << (byteCount * 8 - 1);
-        if (byteCount < 8 && (rawValue & signMask) != 0)
-        {
-            rawValue |=
-                std::numeric_limits<std::uint64_t>::max()
-                << (byteCount * 8);
-        }
-        std::int64_t signedValue = 0;
-        static_assert(sizeof(signedValue) == sizeof(rawValue));
-        std::memcpy(&signedValue, &rawValue, sizeof(signedValue));
-        return signedValue;
-    }
-
-    // parseNtfsRunList 作用：
-    // - 解析非 resident 主数据流的 runlist；
-    // - 输出每一段实际 LCN 范围或稀疏段信息。
-    bool parseNtfsRunList(
-        const std::byte* runListPtr,
-        const std::byte* runListEnd,
-        std::vector<NtfsDataRun>& dataRunsOut)
-    {
-        dataRunsOut.clear();
-        if (runListPtr == nullptr || runListEnd == nullptr || runListPtr >= runListEnd)
-        {
-            return false;
-        }
-
-        std::int64_t currentLcn = 0;
-        while (runListPtr < runListEnd)
-        {
-            const std::uint8_t headerValue = static_cast<std::uint8_t>(*runListPtr);
-            runListPtr += 1;
-            if (headerValue == 0)
-            {
-                return !dataRunsOut.empty();
-            }
-
-            const std::uint8_t lengthFieldBytes = (headerValue & 0x0F);
-            const std::uint8_t offsetFieldBytes = ((headerValue >> 4) & 0x0F);
-            if (lengthFieldBytes == 0
-                || lengthFieldBytes > 8
-                || offsetFieldBytes > 8
-                || runListPtr + lengthFieldBytes + offsetFieldBytes > runListEnd)
-            {
-                dataRunsOut.clear();
-                return false;
-            }
-
-            std::uint64_t clusterCountValue = 0;
-            for (std::uint8_t i = 0; i < lengthFieldBytes; ++i)
-            {
-                clusterCountValue |=
-                    (static_cast<std::uint64_t>(static_cast<std::uint8_t>(runListPtr[i])) << (i * 8));
-            }
-            if (clusterCountValue == 0)
-            {
-                dataRunsOut.clear();
-                return false;
-            }
-
-            NtfsDataRun runValue{};
-            runValue.clusterCount = clusterCountValue;
-            if (offsetFieldBytes == 0)
-            {
-                runValue.isSparse = true;
-            }
-            else
-            {
-                const std::int64_t lcnDeltaValue =
-                    readSignedLe64(runListPtr + lengthFieldBytes, offsetFieldBytes);
-                const bool positiveOverflow =
-                    lcnDeltaValue > 0 &&
-                    currentLcn >
-                        std::numeric_limits<std::int64_t>::max() -
-                            lcnDeltaValue;
-                const bool negativeOrOverflow =
-                    lcnDeltaValue ==
-                        std::numeric_limits<std::int64_t>::min() ||
-                    (lcnDeltaValue < 0 &&
-                     currentLcn < -lcnDeltaValue);
-                if (positiveOverflow || negativeOrOverflow)
-                {
-                    dataRunsOut.clear();
-                    return false;
-                }
-                currentLcn += lcnDeltaValue;
-                runValue.startLcn = static_cast<std::uint64_t>(currentLcn);
-            }
-
-            dataRunsOut.push_back(std::move(runValue));
-            runListPtr += lengthFieldBytes + offsetFieldBytes;
-        }
-        return !dataRunsOut.empty();
-    }
 
     // trimVolumeRoot 作用：从任意路径提取卷根，如 C:\。
     QString trimVolumeRoot(const QString& pathText)
@@ -1572,7 +1455,7 @@ namespace
                         && runListStart < attrEnd)
                     {
                         std::vector<NtfsDataRun> runValues;
-                        if (parseNtfsRunList(recordBytes.data() + runListStart, recordBytes.data() + attrEnd, runValues))
+                        if (ParseNtfsRunList(recordBytes.data() + runListStart, recordBytes.data() + attrEnd, runValues))
                         {
                             std::uint64_t parsedClusterCount = 0;
                             for (const NtfsDataRun& runValue : runValues)

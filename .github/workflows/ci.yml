@@ -97,7 +97,7 @@ jobs:
           }
 
           common='(^tools/|^scripts/|^shared/|^third_party/|^\.deps/|^\.github/workflows/|^.*\.sln$|(^|/)(Directory\.Build\..*|.*\.props|.*\.targets)$)'
-          usermode_re="^(TaskmgrHijack\.ps1$|Ksword5\.1/|Launcher/|Taskbar/|KswordHUD/|APIMonitor_x64/|KswordCLI/)|$common"
+          usermode_re="^(TaskmgrHijack\.ps1$|Ksword5\.1/|Launcher/|Taskbar/|KswordHUD/|APIMonitor_x64/|KswordCLI/|KswordFsDecodeTests/)|$common"
           setup_re="^(TaskmgrHijack\.ps1$|KswordSetup/|Ksword5\.1/|Launcher/|Taskbar/|KswordHUD/|APIMonitor_x64/|KswordCLI/|KswordARKDriver/|KswordARKLight/)|$common"
           arklight_re="^(KswordARKLight/|KswordARKLightTests/|KswordARKDriver/|Ksword5\.1/Ksword5\.1/(ArkDriverClient/|Resource/)|shared/driver/|scripts/Sign-KswordArkDriverVariant\.ps1)|$common"
           ce_plugin_re="^(CheatEnginePlugin/|Ksword5\.1/Ksword5\.1/(ArkDriverClient/|ksword/string/)|shared/driver/)|$common"
@@ -343,13 +343,25 @@ jobs:
             'Taskbar/Taskbar.vcxproj',
             'KswordHUD/KswordHUD.vcxproj',
             'APIMonitor_x64/APIMonitor_x64.vcxproj',
-            'KswordCLI/KswordCLI.vcxproj'
+            'KswordCLI/KswordCLI.vcxproj',
+            'KswordFsDecodeTests/KswordFsDecodeTests.vcxproj'
           )
           foreach ($project in $projects) {
             & $msbuild $project @properties
             if ($LASTEXITCODE -ne 0) {
               throw "MSBuild failed for $project with exit code $LASTEXITCODE."
             }
+          }
+
+          # 文件系统结构解码的离线单元测试：只喂字节数组，不打开卷、不加载驱动。
+          # runlist 是磁盘上的不可信输入，越界与溢出分支在真实卷上极难构造。
+          $decodeTests = 'KswordFsDecodeTests/x64/Release/KswordFsDecodeTests.exe'
+          if (-not (Test-Path $decodeTests)) {
+            throw "File-system decode tests were not built: $decodeTests"
+          }
+          & $decodeTests
+          if ($LASTEXITCODE -ne 0) {
+            throw "File-system decode tests failed with exit code $LASTEXITCODE."
           }
 
       - name: Verify primary build artifacts

@@ -215,6 +215,9 @@
     <ClCompile Include="FileDock\ManualFileSystemParser.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="FileDock\NtfsRunListDecode.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="FileDock\DriverFileSystemParser.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -1746,6 +1749,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="FileDock\ManualFileSystemParser.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="FileDock\NtfsRunListDecode.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="FileDock\DriverFileSystemParser.h">

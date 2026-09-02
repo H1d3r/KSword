@@ -5669,6 +5669,7 @@
     ", styleRemapWidgets=": ", styleRemapWidgets=",
     "ThemeColorRemap.h": "ThemeColorRemap.h",
     "ThemeStatusRole.h": "ThemeStatusRole.h",
+    "NtfsRunListDecode.h": "NtfsRunListDecode.h",
     "[MainWindow] 存量样式表主题色重映射": "[MainWindow] 存量样式表主题色重映射",
     "%1\n可能为误报：CID Table 槽位解出进程对象，但 R0 取引用失败，无法确认该 PID 对应存活进程。": "%1\n可能为误报：CID Table 槽位解出进程对象，但 R0 取引用失败，无法确认该 PID 对应存活进程。",
     "%1\n可能为误报：该 EPROCESS 已退出（ExitStatus 非 STATUS_PENDING），被摘出活动链表后仍留在 PspCidTable 中，多为短命进程残骸。": "%1\n可能为误报：该 EPROCESS 已退出（ExitStatus 非 STATUS_PENDING），被摘出活动链表后仍留在 PspCidTable 中，多为短命进程残骸。",

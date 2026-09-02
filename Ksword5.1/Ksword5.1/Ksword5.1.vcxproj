@@ -161,6 +161,7 @@
     <ClCompile Include="FileDock\FilePropertyPeAnalyzer.Directories.cpp" />
     <ClCompile Include="FileDock\FilePropertyPeAnalyzer.Tables.cpp" />
     <ClCompile Include="FileDock\ManualFileSystemParser.cpp" />
+    <ClCompile Include="FileDock\NtfsRunListDecode.cpp" />
     <ClCompile Include="FileDock\DriverFileSystemParser.cpp" />
     <ClCompile Include="FileDock\IrpFileSystemParser.cpp" />
     <ClCompile Include="ScannerDock\ScannerDock.cpp" />
@@ -544,6 +545,7 @@
     <ClInclude Include="PluginHost.h" />
     <ClInclude Include="Internationalization\LanguageManager.h" />
     <ClInclude Include="FileDock\ManualFileSystemParser.h" />
+    <ClInclude Include="FileDock\NtfsRunListDecode.h" />
     <ClInclude Include="FileDock\DriverFileSystemParser.h" />
     <ClInclude Include="FileDock\IrpFileSystemParser.h" />
     <ClInclude Include="FileDock\FileHandleUsageScanner.h" />
