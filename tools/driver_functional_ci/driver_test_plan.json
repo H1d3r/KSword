@@ -1,0 +1,2964 @@
+{
+  "schemaVersion": 1,
+  "ioctlPrefix": "IOCTL_KSWORD_ARK_",
+  "purpose": "在开启测试签名的专用 CI 机器上按计划遍历 KswordARK 驱动功能；系统崩溃即判失败，并通过分层策略保证崩溃不由测试自身的危险操作造成。",
+  "policy": {
+    "tiers": {
+      "probe": "默认执行。只读查询，或作用于 harness 自建对象（临时文件、专属注册表键、自己拉起的进程）的有界可逆操作。",
+      "guarded": "默认不执行；需要 -IncludeGuarded 并显式承担风险。崩溃时归因为 harness-attributable，而非驱动缺陷。",
+      "excluded": "任何模式下都不执行。"
+    },
+    "expectations": {
+      "success": "KswordCLI 必须以 0 退出。",
+      "graceful": "允许非零退出（unsupported/partial/budget 都是有效运行态结果），但进程不得异常终止。",
+      "timeout": "该用例故意让请求挂起；超时后被结束视为通过，进程无法退出则判定驱动取消路径缺陷。"
+    },
+    "mustExcludePatterns": [
+      "^WRITE_",
+      "^RXPF_(REGISTER|UNREGISTER|CHANGE|WRITE|SET_EMULATION|RUN_SELF_TEST)",
+      "^CONTROL_DRIVER_",
+      "^CONTROL_(HVM|SYSTEM_TIME|CPU_POWER)$",
+      "^SET_BUGCHECK_",
+      "^CONFIGURE_BUGCHECK_",
+      "PATCH_INLINE_HOOK",
+      "RESTORE_IDT_BASELINE",
+      "FORCE_UNLOAD_DRIVER",
+      "RETURN_TO_FIRMWARE",
+      "^DKOM_",
+      "^INJECT_",
+      "^REMOVE_EXTERNAL_CALLBACK",
+      "^HVM_EPT_RULE$",
+      "^DELETE_PIDDB$",
+      "^HWID_DISPATCH_CONTROL$",
+      "^SET_PROCESS_VISIBILITY$"
+    ],
+    "patternWaivers": {},
+    "gapBudget": {
+      "no-cli-path": 18
+    },
+    "targetGuards": {
+      "harness-owned-process": "命令里的 PID 必须等于本次运行 spawn 的一次性目标进程。",
+      "harness-owned-path": "命令里的路径必须位于本次运行的临时目录。",
+      "harness-owned-registry-key": "命令里的注册表键必须位于本次运行的专属测试键之下。"
+    }
+  },
+  "variables": {
+    "self.pid": "runner 自身进程 PID。",
+    "self.handle": "从 handle enum 输出解析出的一个自有句柄值。",
+    "target.pid": "harness 拉起的证据目标进程 PID（只被读取，不被改动）。",
+    "target.tid": "证据目标进程主线程 TID。",
+    "target.imageBase": "证据目标进程主模块基址（0x 前缀）。",
+    "lifecycle.pid": "harness 为生命周期用例单独拉起的一次性进程 PID。",
+    "temp.dirWin32": "本次运行的临时目录（Win32 路径）。",
+    "temp.probeFileNt": "只读探针文件（\\??\\ 前缀 NT 路径）。",
+    "temp.mutableFileNt": "允许被打完整性标签的临时文件（NT 路径）。",
+    "temp.deletableFileNt": "允许被 R0 删除的一次性文件（NT 路径）。",
+    "temp.regValueFile": "写注册表值用的原始数据文件。",
+    "registry.testKeyNt": "本次运行的专属注册表测试键（\\REGISTRY\\MACHINE\\...）。",
+    "registry.testKeyRenamedLeaf": "重命名目标叶名。",
+    "registry.testKeyRenamedNt": "重命名后的完整 NT 键路径。",
+    "registry.softwareKeyNt": "\\REGISTRY\\MACHINE\\SOFTWARE。",
+    "registry.currentVersionKeyNt": "\\REGISTRY\\MACHINE\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion。",
+    "system.kernel32Win32": "C:\\Windows\\System32\\kernel32.dll。",
+    "system.kernel32Nt": "\\??\\C:\\Windows\\System32\\kernel32.dll。",
+    "driver.serviceName": "被测驱动的服务名（KswordARK）。",
+    "window.hwnd": "可用的顶层窗口句柄；服务型 runner 上通常不可用。",
+    "profile.v4Blob": "guarded：operator 指定的 v4 DynData profile 包路径。",
+    "callback.rulesBlob": "guarded：operator 指定的 callback 规则包路径。",
+    "redirect.rulesBlob": "guarded：operator 指定的重定向规则包路径。",
+    "network.rulesBlob": "guarded：operator 指定的网络规则包路径。",
+    "mutation.targetKind": "guarded：operator 指定的 mutation 目标类型。",
+    "mutation.address": "guarded：operator 指定的 mutation 目标地址。",
+    "mutation.beforeHex": "guarded：mutation 期望的原值。",
+    "mutation.afterHex": "guarded：mutation 写入值。",
+    "mutation.transactionId": "guarded：上一步 mutation prepare 返回的事务 ID。"
+  },
+  "cases": [
+    {
+      "id": "selftest.ioctl-registry",
+      "tier": "probe",
+      "ioctls": [
+        "QUERY_IOCTL_REGISTRY"
+      ],
+      "steps": [
+        [
+          "r0",
+          "ioctl-registry",
+          "--max-entries",
+          "512"
+        ]
+      ],
+      "expect": "success",
+      "timeoutSeconds": 120,
+      "notes": "中央注册表自述；同时作为设备可用性探针。"
+    },
+    {
+      "id": "selftest.driver-capabilities",
+      "tier": "probe",
+      "ioctls": [
+        "QUERY_DRIVER_CAPABILITIES"
+      ],
+      "steps": [
+        [
+          "capability",
+          "query-driver-capabilities",
+          "--limit",
+          "8"
+        ]
+      ],
+      "expect": "success",
+      "timeoutSeconds": 120
+    },
+    {
+      "id": "selftest.preflight",
+      "tier": "probe",
+      "ioctls": [
+        "QUERY_PREFLIGHT"
+      ],
+      "steps": [
+        [
+          "preflight",
+          "query",
+          "--limit",
+          "8"
+        ]
+      ],
+      "expect": "success",
+      "timeoutSeconds": 120
+    },
+    {
+      "id": "selftest.log-channel",
+      "tier": "probe",
+      "ioctls": [],
+      "steps": [
+        [
+          "log",
+          "--max-frames",
+          "32"
+        ]
+      ],
+      "expect": "success",
+      "timeoutSeconds": 120,
+      "notes": "共享日志设备读取，不经过 IOCTL 分发表。"
+    },
+    {
+      "id": "dyn.status",
+      "tier": "probe",
+      "ioctls": [
+        "QUERY_DYN_STATUS"
+      ],
+      "steps": [
+        [
+          "dyn",
+          "status"
+        ]
+      ],
+      "expect": "success",
+      "timeoutSeconds": 120
+    },
+    {
+      "id": "dyn.fields",
+      "tier": "probe",
+      "ioctls": [
+        "QUERY_DYN_FIELDS"
+      ],
+      "steps": [
+        [
+          "dyn",
+          "fields",
+          "--limit",
+          "8"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120
+    },
+    {
+      "id": "dyn.capabilities",
+      "tier": "probe",
+      "ioctls": [
+        "QUERY_CAPABILITIES"
+      ],
+      "steps": [
+        [
+          "dyn",
+          "capabilities"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120
+    },
+    {
+      "id": "dyn.v4-modules",
+      "tier": "probe",
+      "ioctls": [
+        "QUERY_DYN_V4_MODULES"
+      ],
+      "steps": [
+        [
+          "dyn",
+          "v4-modules",
+          "--limit",
+          "8"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120
+    },
+    {
+      "id": "dyn.v4-capability-groups",
+      "tier": "probe",
+      "ioctls": [
+        "QUERY_DYN_V4_CAPABILITY_GROUPS"
+      ],
+      "steps": [
+        [
+          "dyn",
+          "v4-capabilities",
+          "--limit",
+          "8"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120
+    },
+    {
+      "id": "dyn.v4-missing",
+      "tier": "probe",
+      "ioctls": [
+        "QUERY_DYN_V4_MISSING_ITEMS"
+      ],
+      "steps": [
+        [
+          "dyn",
+          "v4-missing",
+          "--limit",
+          "8"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120
+    },
+    {
+      "id": "dyn.v4-items",
+      "tier": "probe",
+      "ioctls": [
+        "QUERY_DYN_V4_ITEMS"
+      ],
+      "steps": [
+        [
+          "dyn",
+          "v4-items",
+          "--limit",
+          "8"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120
+    },
+    {
+      "id": "safety.query-policy",
+      "tier": "probe",
+      "ioctls": [
+        "QUERY_SAFETY_POLICY"
+      ],
+      "steps": [
+        [
+          "safety",
+          "query-policy"
+        ]
+      ],
+      "expect": "success",
+      "timeoutSeconds": 120
+    },
+    {
+      "id": "safety.set-policy-noop",
+      "tier": "probe",
+      "ioctls": [
+        "SET_SAFETY_POLICY",
+        "QUERY_SAFETY_POLICY"
+      ],
+      "steps": [
+        [
+          "safety",
+          "set-policy",
+          "--set-flags",
+          "0x0",
+          "--clear-flags",
+          "0x0"
+        ],
+        [
+          "safety",
+          "query-policy"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120,
+      "notes": "空位掩码更新：只走写入路径，不改变任何策略位。"
+    },
+    {
+      "id": "process.enum",
+      "tier": "probe",
+      "ioctls": [
+        "ENUM_PROCESS"
+      ],
+      "steps": [
+        [
+          "process",
+          "enum",
+          "--limit",
+          "20"
+        ]
+      ],
+      "expect": "success",
+      "timeoutSeconds": 120
+    },
+    {
+      "id": "process.crossview",
+      "tier": "probe",
+      "ioctls": [
+        "QUERY_PROCESS_CROSSVIEW"
+      ],
+      "steps": [
+        [
+          "process",
+          "crossview",
+          "--limit",
+          "20"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 180
+    },
+    {
+      "id": "process.detail",
+      "tier": "probe",
+      "ioctls": [
+        "QUERY_PROCESS_DETAIL"
+      ],
+      "steps": [
+        [
+          "process",
+          "detail",
+          "--pid",
+          "{target.pid}"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120,
+      "requires": [
+        "target.pid"
+      ]
+    },
+    {
+      "id": "process.runtime-fields",
+      "tier": "probe",
+      "ioctls": [
+        "QUERY_PROCESS_RUNTIME_FIELDS"
+      ],
+      "steps": [
+        [
+          "process",
+          "runtime-fields",
+          "--pid",
+          "{target.pid}",
+          "--items",
+          "1:0:8,2:8:8"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120,
+      "requires": [
+        "target.pid"
+      ],
+      "notes": "仅采样 EPROCESS 头部两个 8 字节窗口，由 R0 自行校验偏移边界。"
+    },
+    {
+      "id": "thread.enum",
+      "tier": "probe",
+      "ioctls": [
+        "ENUM_THREAD"
+      ],
+      "steps": [
+        [
+          "thread",
+          "enum",
+          "--pid",
+          "{target.pid}",
+          "--limit",
+          "20"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120,
+      "requires": [
+        "target.pid"
+      ]
+    },
+    {
+      "id": "thread.crossview",
+      "tier": "probe",
+      "ioctls": [
+        "QUERY_THREAD_CROSSVIEW"
+      ],
+      "steps": [
+        [
+          "thread",
+          "crossview",
+          "--pid",
+          "{target.pid}",
+          "--limit",
+          "20"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 180,
+      "requires": [
+        "target.pid"
+      ]
+    },
+    {
+      "id": "thread.detail",
+      "tier": "probe",
+      "ioctls": [
+        "QUERY_THREAD_DETAIL"
+      ],
+      "steps": [
+        [
+          "thread",
+          "detail",
+          "--tid",
+          "{target.tid}",
+          "--pid",
+          "{target.pid}"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120,
+      "requires": [
+        "target.pid",
+        "target.tid"
+      ]
+    },
+    {
+      "id": "thread.runtime-fields",
+      "tier": "probe",
+      "ioctls": [
+        "QUERY_THREAD_RUNTIME_FIELDS"
+      ],
+      "steps": [
+        [
+          "thread",
+          "runtime-fields",
+          "--tid",
+          "{target.tid}",
+          "--pid",
+          "{target.pid}",
+          "--items",
+          "1:0:8"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120,
+      "requires": [
+        "target.pid",
+        "target.tid"
+      ]
+    },
+    {
+      "id": "handle.enum",
+      "tier": "probe",
+      "ioctls": [
+        "ENUM_PROCESS_HANDLES"
+      ],
+      "steps": [
+        [
+          "handle",
+          "enum",
+          "--pid",
+          "{self.pid}",
+          "--limit",
+          "20"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120
+    },
+    {
+      "id": "handle.query-object",
+      "tier": "probe",
+      "ioctls": [
+        "QUERY_HANDLE_OBJECT"
+      ],
+      "steps": [
+        [
+          "handle",
+          "query-object",
+          "--pid",
+          "{self.pid}",
+          "--handle",
+          "{self.handle}"
+        ],
+        [
+          "handle",
+          "object-header",
+          "--pid",
+          "{self.pid}",
+          "--handle",
+          "{self.handle}"
+        ],
+        [
+          "handle",
+          "type-matrix",
+          "--pid",
+          "{self.pid}",
+          "--handle",
+          "{self.handle}"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120,
+      "requires": [
+        "self.handle"
+      ]
+    },
+    {
+      "id": "alpc.query-port-nonalpc",
+      "tier": "probe",
+      "ioctls": [
+        "QUERY_ALPC_PORT"
+      ],
+      "steps": [
+        [
+          "alpc",
+          "query-port",
+          "--pid",
+          "{self.pid}",
+          "--handle",
+          "{self.handle}"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120,
+      "requires": [
+        "self.handle"
+      ],
+      "negative": true,
+      "notes": "负向探针：传入非 ALPC 句柄，R0 必须结构化拒绝而不是崩溃。"
+    },
+    {
+      "id": "section.query-process",
+      "tier": "probe",
+      "ioctls": [
+        "QUERY_PROCESS_SECTION"
+      ],
+      "steps": [
+        [
+          "section",
+          "query-process",
+          "--pid",
+          "{target.pid}",
+          "--max-mappings",
+          "64",
+          "--limit",
+          "10"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120,
+      "requires": [
+        "target.pid"
+      ]
+    },
+    {
+      "id": "section.query-file-mappings",
+      "tier": "probe",
+      "ioctls": [
+        "QUERY_FILE_SECTION_MAPPINGS"
+      ],
+      "steps": [
+        [
+          "section",
+          "query-file-mappings",
+          "--path",
+          "{system.kernel32Nt}",
+          "--max-mappings",
+          "64",
+          "--limit",
+          "10"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120
+    },
+    {
+      "id": "wsl.query-silo",
+      "tier": "probe",
+      "ioctls": [
+        "QUERY_WSL_SILO"
+      ],
+      "steps": [
+        [
+          "wsl",
+          "query-silo",
+          "--pid",
+          "{target.pid}"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120,
+      "requires": [
+        "target.pid"
+      ]
+    },
+    {
+      "id": "kernel.cid",
+      "tier": "probe",
+      "ioctls": [
+        "ENUM_CID_TABLE"
+      ],
+      "steps": [
+        [
+          "kernel",
+          "cid",
+          "--max-entries",
+          "256",
+          "--limit",
+          "10"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 180
+    },
+    {
+      "id": "kernel.object-summary",
+      "tier": "probe",
+      "ioctls": [
+        "QUERY_KERNEL_OBJECT_SUMMARY"
+      ],
+      "steps": [
+        [
+          "kernel",
+          "object-summary",
+          "--target-kind",
+          "1",
+          "--cid",
+          "{target.pid}"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120,
+      "requires": [
+        "target.pid"
+      ]
+    },
+    {
+      "id": "kernel.ipc",
+      "tier": "probe",
+      "ioctls": [
+        "QUERY_IPC_SUMMARY"
+      ],
+      "steps": [
+        [
+          "kernel",
+          "ipc",
+          "--pid",
+          "{target.pid}",
+          "--max-entries",
+          "32"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120,
+      "requires": [
+        "target.pid"
+      ]
+    },
+    {
+      "id": "r0.object-types",
+      "tier": "probe",
+      "ioctls": [
+        "ENUM_OBJECT_TYPE_TABLE"
+      ],
+      "steps": [
+        [
+          "r0",
+          "object-types",
+          "--max-entries",
+          "64"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120
+    },
+    {
+      "id": "r0.workqueue",
+      "tier": "probe",
+      "ioctls": [
+        "ENUM_WORK_QUEUE"
+      ],
+      "steps": [
+        [
+          "r0",
+          "workqueue",
+          "--max-entries",
+          "64",
+          "--limit",
+          "10"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120
+    },
+    {
+      "id": "memory.query-va",
+      "tier": "probe",
+      "ioctls": [
+        "QUERY_VIRTUAL_MEMORY"
+      ],
+      "steps": [
+        [
+          "memory",
+          "query-va",
+          "--pid",
+          "{target.pid}",
+          "--address",
+          "{target.imageBase}"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120,
+      "requires": [
+        "target.pid",
+        "target.imageBase"
+      ]
+    },
+    {
+      "id": "memory.read-va",
+      "tier": "probe",
+      "ioctls": [
+        "READ_VIRTUAL_MEMORY"
+      ],
+      "steps": [
+        [
+          "memory",
+          "read-va",
+          "--pid",
+          "{target.pid}",
+          "--address",
+          "{target.imageBase}",
+          "--bytes",
+          "64",
+          "--hexdump"
+        ]
+      ],
+      "expect": "success",
+      "timeoutSeconds": 120,
+      "requires": [
+        "target.pid",
+        "target.imageBase"
+      ],
+      "notes": "读取目标进程主模块头部；只读，且目标由 harness 自己拉起。"
+    },
+    {
+      "id": "memory.translate-va",
+      "tier": "probe",
+      "ioctls": [
+        "TRANSLATE_VIRTUAL_ADDRESS"
+      ],
+      "steps": [
+        [
+          "memory",
+          "translate-va",
+          "--pid",
+          "{target.pid}",
+          "--address",
+          "{target.imageBase}"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120,
+      "requires": [
+        "target.pid",
+        "target.imageBase"
+      ]
+    },
+    {
+      "id": "memory.query-pte",
+      "tier": "probe",
+      "ioctls": [
+        "QUERY_PAGE_TABLE_ENTRY"
+      ],
+      "steps": [
+        [
+          "memory",
+          "query-pte",
+          "--pid",
+          "{target.pid}",
+          "--address",
+          "{target.imageBase}"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120,
+      "requires": [
+        "target.pid",
+        "target.imageBase"
+      ]
+    },
+    {
+      "id": "memory.read-phys",
+      "tier": "probe",
+      "ioctls": [
+        "READ_PHYSICAL_MEMORY"
+      ],
+      "steps": [
+        [
+          "memory",
+          "read-phys",
+          "--address",
+          "0x1000",
+          "--bytes",
+          "256"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120,
+      "notes": "低端常规 RAM 页只读；不触碰 MMIO/保留区间。"
+    },
+    {
+      "id": "memory.scan-kexec",
+      "tier": "probe",
+      "ioctls": [
+        "SCAN_KERNEL_EXECUTABLE_MEMORY"
+      ],
+      "steps": [
+        [
+          "memory",
+          "scan-kexec",
+          "--max-entries",
+          "128",
+          "--limit",
+          "10"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 600
+    },
+    {
+      "id": "memory.scan-evidence",
+      "tier": "probe",
+      "ioctls": [
+        "SCAN_KERNEL_MEMORY_EVIDENCE"
+      ],
+      "steps": [
+        [
+          "memory",
+          "scan-evidence",
+          "--max-rows",
+          "128",
+          "--limit",
+          "10"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 600
+    },
+    {
+      "id": "kernel.ssdt",
+      "tier": "probe",
+      "ioctls": [
+        "ENUM_SSDT"
+      ],
+      "steps": [
+        [
+          "kernel",
+          "ssdt",
+          "--limit",
+          "10"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 180
+    },
+    {
+      "id": "kernel.shadow-ssdt",
+      "tier": "probe",
+      "ioctls": [
+        "ENUM_SHADOW_SSDT"
+      ],
+      "steps": [
+        [
+          "kernel",
+          "shadow-ssdt",
+          "--limit",
+          "10"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 180
+    },
+    {
+      "id": "kernel.scan-inline-hooks",
+      "tier": "probe",
+      "ioctls": [
+        "SCAN_INLINE_HOOKS"
+      ],
+      "steps": [
+        [
+          "kernel",
+          "scan-inline-hooks",
+          "--max-entries",
+          "128",
+          "--limit",
+          "10"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 600
+    },
+    {
+      "id": "kernel.enum-iat-eat-hooks",
+      "tier": "probe",
+      "ioctls": [
+        "ENUM_IAT_EAT_HOOKS"
+      ],
+      "steps": [
+        [
+          "kernel",
+          "enum-iat-eat-hooks",
+          "--max-entries",
+          "128",
+          "--limit",
+          "10"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 600
+    },
+    {
+      "id": "kernel.query-driver-object",
+      "tier": "probe",
+      "ioctls": [
+        "QUERY_DRIVER_OBJECT"
+      ],
+      "steps": [
+        [
+          "kernel",
+          "query-driver-object",
+          "--driver",
+          "{driver.serviceName}",
+          "--limit",
+          "10"
+        ],
+        [
+          "driver",
+          "detail",
+          "--driver",
+          "{driver.serviceName}",
+          "--limit",
+          "10"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120
+    },
+    {
+      "id": "kernel.query-driver-integrity",
+      "tier": "probe",
+      "ioctls": [
+        "QUERY_DRIVER_INTEGRITY"
+      ],
+      "steps": [
+        [
+          "kernel",
+          "query-driver-integrity",
+          "--driver",
+          "{driver.serviceName}",
+          "--limit",
+          "10"
+        ],
+        [
+          "driver",
+          "integrity",
+          "--driver",
+          "{driver.serviceName}",
+          "--limit",
+          "10"
+        ],
+        [
+          "driver",
+          "unloaded",
+          "--max-rows",
+          "32",
+          "--limit",
+          "10"
+        ],
+        [
+          "driver",
+          "piddb",
+          "--max-rows",
+          "32",
+          "--limit",
+          "10"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 300
+    },
+    {
+      "id": "kernel.query-cpu",
+      "tier": "probe",
+      "ioctls": [
+        "QUERY_CPU_HARDWARE"
+      ],
+      "steps": [
+        [
+          "kernel",
+          "query-cpu"
+        ]
+      ],
+      "expect": "success",
+      "timeoutSeconds": 120
+    },
+    {
+      "id": "kernel.query-phys-layout",
+      "tier": "probe",
+      "ioctls": [
+        "QUERY_PHYSICAL_MEMORY_LAYOUT"
+      ],
+      "steps": [
+        [
+          "kernel",
+          "query-phys-layout"
+        ]
+      ],
+      "expect": "success",
+      "timeoutSeconds": 120
+    },
+    {
+      "id": "kernel.callbacks",
+      "tier": "probe",
+      "ioctls": [
+        "ENUM_CALLBACKS"
+      ],
+      "steps": [
+        [
+          "kernel",
+          "callbacks",
+          "--max-entries",
+          "128",
+          "--limit",
+          "10"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 300
+    },
+    {
+      "id": "r0.timer-dpc",
+      "tier": "probe",
+      "ioctls": [
+        "ENUM_TIMER_DPC"
+      ],
+      "steps": [
+        [
+          "r0",
+          "timer-dpc",
+          "--max-entries",
+          "128"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 180
+    },
+    {
+      "id": "r0.unloaded-drivers",
+      "tier": "probe",
+      "ioctls": [
+        "QUERY_UNLOADED_DRIVERS"
+      ],
+      "steps": [
+        [
+          "r0",
+          "unloaded",
+          "--source",
+          "mm",
+          "--max-rows",
+          "64"
+        ],
+        [
+          "r0",
+          "unloaded",
+          "--source",
+          "piddb",
+          "--max-rows",
+          "64"
+        ],
+        [
+          "r0",
+          "unloaded",
+          "--source",
+          "hash",
+          "--max-rows",
+          "64"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120
+    },
+    {
+      "id": "r0.piddb",
+      "tier": "probe",
+      "ioctls": [
+        "QUERY_PIDDB"
+      ],
+      "steps": [
+        [
+          "r0",
+          "piddb",
+          "--max-rows",
+          "64"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120
+    },
+    {
+      "id": "r0.slat-iommu",
+      "tier": "probe",
+      "ioctls": [
+        "QUERY_SLAT_IOMMU_AUDIT"
+      ],
+      "steps": [
+        [
+          "r0",
+          "slat-iommu"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120
+    },
+    {
+      "id": "r0.platform-audit",
+      "tier": "probe",
+      "ioctls": [
+        "QUERY_PLATFORM_AUDIT"
+      ],
+      "steps": [
+        [
+          "r0",
+          "platform",
+          "--max-rows",
+          "64"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120
+    },
+    {
+      "id": "r0.i8042-audit",
+      "tier": "probe",
+      "ioctls": [
+        "QUERY_I8042_AUDIT"
+      ],
+      "steps": [
+        [
+          "r0",
+          "i8042",
+          "--max-rows",
+          "64"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120
+    },
+    {
+      "id": "r0.cpu-power",
+      "tier": "probe",
+      "ioctls": [
+        "QUERY_CPU_POWER"
+      ],
+      "steps": [
+        [
+          "r0",
+          "cpu-power"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120
+    },
+    {
+      "id": "r0.system-time",
+      "tier": "probe",
+      "ioctls": [
+        "QUERY_SYSTEM_TIME"
+      ],
+      "steps": [
+        [
+          "r0",
+          "system-time"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120
+    },
+    {
+      "id": "r0.hvm-status",
+      "tier": "probe",
+      "ioctls": [
+        "QUERY_HVM"
+      ],
+      "steps": [
+        [
+          "r0",
+          "hvm-status"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120,
+      "notes": "只读查询 VT-x 生命周期状态；不做 VMXON/VMXOFF。"
+    },
+    {
+      "id": "r0.hvm-events",
+      "tier": "probe",
+      "ioctls": [
+        "HVM_EVENTS"
+      ],
+      "steps": [
+        [
+          "r0",
+          "hvm-events",
+          "--max-rows",
+          "64"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120,
+      "notes": "只读事件环，不清空、不安装 EPT 规则。"
+    },
+    {
+      "id": "r0.process-protect-state",
+      "tier": "probe",
+      "ioctls": [
+        "QUERY_PROCESS_PROTECT_STATE"
+      ],
+      "steps": [
+        [
+          "r0",
+          "process-protect"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120
+    },
+    {
+      "id": "r0.debug-output-drain",
+      "tier": "probe",
+      "ioctls": [
+        "DEBUG_OUTPUT_DRAIN"
+      ],
+      "steps": [
+        [
+          "r0",
+          "debug-output",
+          "--max-records",
+          "64",
+          "--limit",
+          "10"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120,
+      "notes": "只读环形缓冲；注册 DbgPrint 回调由 DEBUG_OUTPUT_CONTROL 负责，当前无 CLI 入口。"
+    },
+    {
+      "id": "device.stack-audit",
+      "tier": "probe",
+      "ioctls": [
+        "QUERY_DEVICE_STACK_AUDIT"
+      ],
+      "steps": [
+        [
+          "driver",
+          "device",
+          "--max-rows",
+          "64",
+          "--limit",
+          "10"
+        ],
+        [
+          "driver",
+          "major",
+          "--max-rows",
+          "64",
+          "--limit",
+          "10"
+        ],
+        [
+          "driver",
+          "fastio",
+          "--max-rows",
+          "64",
+          "--limit",
+          "10"
+        ],
+        [
+          "hardware",
+          "audit",
+          "--max-rows",
+          "64",
+          "--limit",
+          "10"
+        ],
+        [
+          "hardware",
+          "pnp",
+          "--max-rows",
+          "64",
+          "--limit",
+          "10"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 300
+    },
+    {
+      "id": "device.input-stack-audit",
+      "tier": "probe",
+      "ioctls": [
+        "QUERY_INPUT_STACK_AUDIT"
+      ],
+      "steps": [
+        [
+          "hardware",
+          "input",
+          "--max-rows",
+          "64",
+          "--limit",
+          "10"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120
+    },
+    {
+      "id": "device.usb-topology-audit",
+      "tier": "probe",
+      "ioctls": [
+        "QUERY_USB_TOPOLOGY_AUDIT"
+      ],
+      "steps": [
+        [
+          "hardware",
+          "usb",
+          "--max-rows",
+          "64",
+          "--limit",
+          "10"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120
+    },
+    {
+      "id": "device.gpu-display-watchdog",
+      "tier": "probe",
+      "ioctls": [
+        "QUERY_GPU_DISPLAY_WATCHDOG_AUDIT"
+      ],
+      "steps": [
+        [
+          "window",
+          "gpu",
+          "--max-rows",
+          "64",
+          "--limit",
+          "10"
+        ],
+        [
+          "window",
+          "display",
+          "--max-rows",
+          "64",
+          "--limit",
+          "10"
+        ],
+        [
+          "window",
+          "watchdog",
+          "--max-rows",
+          "64",
+          "--limit",
+          "10"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120
+    },
+    {
+      "id": "misc.security-status",
+      "tier": "probe",
+      "ioctls": [
+        "QUERY_SECURITY_STATUS"
+      ],
+      "steps": [
+        [
+          "misc",
+          "security"
+        ],
+        [
+          "misc",
+          "ci"
+        ],
+        [
+          "misc",
+          "vbs"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120
+    },
+    {
+      "id": "misc.hyperv-summary",
+      "tier": "probe",
+      "ioctls": [
+        "QUERY_HYPERV_SUMMARY"
+      ],
+      "steps": [
+        [
+          "misc",
+          "hyperv"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120
+    },
+    {
+      "id": "misc.app-control-status",
+      "tier": "probe",
+      "ioctls": [
+        "QUERY_APP_CONTROL_STATUS"
+      ],
+      "steps": [
+        [
+          "misc",
+          "applocker"
+        ],
+        [
+          "misc",
+          "bam"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120
+    },
+    {
+      "id": "misc.driver-trust-view",
+      "tier": "probe",
+      "ioctls": [
+        "QUERY_DRIVER_TRUST_VIEW"
+      ],
+      "steps": [
+        [
+          "misc",
+          "driver-trust",
+          "--max-entries",
+          "64",
+          "--limit",
+          "10"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120
+    },
+    {
+      "id": "file.query-info",
+      "tier": "probe",
+      "ioctls": [
+        "QUERY_FILE_INFO"
+      ],
+      "steps": [
+        [
+          "file",
+          "query-info",
+          "--path",
+          "{temp.probeFileNt}"
+        ],
+        [
+          "file",
+          "fileobject",
+          "--path",
+          "{temp.probeFileNt}"
+        ]
+      ],
+      "expect": "success",
+      "timeoutSeconds": 120,
+      "requires": [
+        "temp.probeFileNt"
+      ]
+    },
+    {
+      "id": "file.minifilter-inventory",
+      "tier": "probe",
+      "ioctls": [
+        "QUERY_MINIFILTER_INVENTORY"
+      ],
+      "steps": [
+        [
+          "file",
+          "minifilter",
+          "--max-rows",
+          "64",
+          "--limit",
+          "10"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120
+    },
+    {
+      "id": "file.bitlocker-audit",
+      "tier": "probe",
+      "ioctls": [
+        "QUERY_BITLOCKER_FVE_AUDIT"
+      ],
+      "steps": [
+        [
+          "file",
+          "bitlocker",
+          "--max-rows",
+          "64",
+          "--limit",
+          "10"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120
+    },
+    {
+      "id": "file.volume-stack-audit",
+      "tier": "probe",
+      "ioctls": [
+        "QUERY_VOLUME_STACK_AUDIT"
+      ],
+      "steps": [
+        [
+          "file",
+          "storage",
+          "--max-rows",
+          "64",
+          "--limit",
+          "10"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120
+    },
+    {
+      "id": "file.mountmgr-audit",
+      "tier": "probe",
+      "ioctls": [
+        "QUERY_MOUNTMGR_MAPPING_AUDIT"
+      ],
+      "steps": [
+        [
+          "file",
+          "mountmgr",
+          "--max-rows",
+          "64",
+          "--limit",
+          "10"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120
+    },
+    {
+      "id": "file.filesystem-audit",
+      "tier": "probe",
+      "ioctls": [
+        "QUERY_FILESYSTEM_INTEGRITY_AUDIT"
+      ],
+      "steps": [
+        [
+          "file",
+          "filesystem",
+          "--max-rows",
+          "64",
+          "--limit",
+          "10"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120
+    },
+    {
+      "id": "file.enum-directory",
+      "tier": "probe",
+      "ioctls": [
+        "ENUM_DIRECTORY"
+      ],
+      "steps": [
+        [
+          "r0",
+          "directory",
+          "--path",
+          "{temp.dirWin32}",
+          "--max-entries",
+          "64",
+          "--limit",
+          "10"
+        ]
+      ],
+      "expect": "success",
+      "timeoutSeconds": 120,
+      "requires": [
+        "temp.dirWin32"
+      ]
+    },
+    {
+      "id": "file.enum-directory-irp",
+      "tier": "probe",
+      "ioctls": [
+        "FILE_IRP_ENUM_DIRECTORY"
+      ],
+      "steps": [
+        [
+          "r0",
+          "directory-irp",
+          "--path",
+          "{temp.dirWin32}",
+          "--max-entries",
+          "64",
+          "--limit",
+          "10"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120,
+      "requires": [
+        "temp.dirWin32"
+      ]
+    },
+    {
+      "id": "file.image-signature",
+      "tier": "probe",
+      "ioctls": [
+        "QUERY_IMAGE_SIGNATURE"
+      ],
+      "steps": [
+        [
+          "r0",
+          "image-signature",
+          "--path",
+          "{system.kernel32Win32}"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120
+    },
+    {
+      "id": "file.image-trust",
+      "tier": "probe",
+      "ioctls": [
+        "QUERY_IMAGE_TRUST"
+      ],
+      "steps": [
+        [
+          "trust",
+          "query-image",
+          "--path",
+          "{system.kernel32Win32}"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120
+    },
+    {
+      "id": "file.set-integrity",
+      "tier": "probe",
+      "ioctls": [
+        "SET_FILE_INTEGRITY"
+      ],
+      "steps": [
+        [
+          "file",
+          "set-integrity",
+          "--path",
+          "{temp.mutableFileNt}",
+          "--level",
+          "low",
+          "--confirm"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120,
+      "requires": [
+        "temp.mutableFileNt"
+      ],
+      "targetGuard": "harness-owned-path",
+      "notes": "只对 harness 自建的临时文件打标签；runner 校验路径必须位于本次运行的临时目录。"
+    },
+    {
+      "id": "file.delete-path",
+      "tier": "probe",
+      "ioctls": [
+        "DELETE_PATH"
+      ],
+      "steps": [
+        [
+          "file",
+          "delete-path",
+          "--path",
+          "{temp.deletableFileNt}"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120,
+      "requires": [
+        "temp.deletableFileNt"
+      ],
+      "targetGuard": "harness-owned-path",
+      "notes": "删除 harness 自建的一次性文件；runner 校验路径前缀。"
+    },
+    {
+      "id": "file.monitor-cycle",
+      "tier": "probe",
+      "ioctls": [
+        "FILE_MONITOR_QUERY_STATUS",
+        "FILE_MONITOR_CONTROL",
+        "FILE_MONITOR_DRAIN"
+      ],
+      "steps": [
+        [
+          "file",
+          "monitor-status"
+        ],
+        [
+          "file",
+          "monitor-control",
+          "--action",
+          "1"
+        ],
+        [
+          "file",
+          "monitor-status"
+        ],
+        [
+          "file",
+          "monitor-drain",
+          "--max-events",
+          "64"
+        ],
+        [
+          "file",
+          "monitor-control",
+          "--action",
+          "3"
+        ],
+        [
+          "file",
+          "monitor-control",
+          "--action",
+          "2"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 180,
+      "cleanup": [
+        [
+          "file",
+          "monitor-control",
+          "--action",
+          "2"
+        ]
+      ],
+      "notes": "START(1)->DRAIN->CLEAR(3)->STOP(2) 闭环；cleanup 保证异常路径也会停止监控。"
+    },
+    {
+      "id": "storage.raw-disk-backend",
+      "tier": "probe",
+      "ioctls": [
+        "QUERY_RAW_DISK_BACKEND"
+      ],
+      "steps": [
+        [
+          "r0",
+          "raw-disk-backend",
+          "--disk",
+          "0"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120
+    },
+    {
+      "id": "storage.raw-disk-read",
+      "tier": "probe",
+      "ioctls": [
+        "READ_RAW_DISK"
+      ],
+      "steps": [
+        [
+          "r0",
+          "raw-disk-read",
+          "--disk",
+          "0",
+          "--offset",
+          "0",
+          "--length",
+          "512"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120,
+      "notes": "只读第 0 扇区；写路径 WRITE_RAW_DISK 永久排除。"
+    },
+    {
+      "id": "network.query-status",
+      "tier": "probe",
+      "ioctls": [
+        "NETWORK_QUERY_STATUS"
+      ],
+      "steps": [
+        [
+          "network",
+          "query-status",
+          "--limit",
+          "10"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120
+    },
+    {
+      "id": "network.tcp-endpoints",
+      "tier": "probe",
+      "ioctls": [
+        "NETWORK_QUERY_TCP_ENDPOINTS"
+      ],
+      "steps": [
+        [
+          "network",
+          "tcp",
+          "--max-rows",
+          "64",
+          "--limit",
+          "10"
+        ],
+        [
+          "network",
+          "audit",
+          "--max-rows",
+          "64",
+          "--limit",
+          "10"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120
+    },
+    {
+      "id": "network.udp-endpoints",
+      "tier": "probe",
+      "ioctls": [
+        "NETWORK_QUERY_UDP_ENDPOINTS"
+      ],
+      "steps": [
+        [
+          "network",
+          "udp",
+          "--max-rows",
+          "64",
+          "--limit",
+          "10"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120
+    },
+    {
+      "id": "network.wfp-inventory",
+      "tier": "probe",
+      "ioctls": [
+        "NETWORK_QUERY_WFP_INVENTORY"
+      ],
+      "steps": [
+        [
+          "network",
+          "wfp",
+          "--max-rows",
+          "64",
+          "--limit",
+          "10"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120
+    },
+    {
+      "id": "network.ndis-chain",
+      "tier": "probe",
+      "ioctls": [
+        "NETWORK_QUERY_NDIS_CHAIN"
+      ],
+      "steps": [
+        [
+          "network",
+          "ndis",
+          "--max-rows",
+          "64",
+          "--limit",
+          "10"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120
+    },
+    {
+      "id": "network.wfp-events",
+      "tier": "probe",
+      "ioctls": [
+        "NETWORK_QUERY_WFP_EVENTS"
+      ],
+      "steps": [
+        [
+          "r0",
+          "wfp-events",
+          "--max-rows",
+          "64"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120
+    },
+    {
+      "id": "network.traffic-packets",
+      "tier": "probe",
+      "ioctls": [
+        "NETWORK_QUERY_TRAFFIC_PACKETS"
+      ],
+      "steps": [
+        [
+          "r0",
+          "traffic",
+          "--max-rows",
+          "64"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120,
+      "notes": "只读已有抓包环；不开启抓包（NETWORK_CONTROL_TRAFFIC_CAPTURE 无 CLI 入口且 CI 不开启）。"
+    },
+    {
+      "id": "redirect.query-status",
+      "tier": "probe",
+      "ioctls": [
+        "REDIRECT_QUERY_STATUS"
+      ],
+      "steps": [
+        [
+          "redirect",
+          "query-status",
+          "--limit",
+          "10"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120
+    },
+    {
+      "id": "win32k.profile-status",
+      "tier": "probe",
+      "ioctls": [
+        "QUERY_WIN32K_PROFILE_STATUS"
+      ],
+      "steps": [
+        [
+          "window",
+          "win32k",
+          "--max-entries",
+          "64",
+          "--limit",
+          "10"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120
+    },
+    {
+      "id": "win32k.windows",
+      "tier": "probe",
+      "ioctls": [
+        "QUERY_WIN32K_WINDOWS"
+      ],
+      "steps": [
+        [
+          "window",
+          "gui",
+          "--max-entries",
+          "64",
+          "--limit",
+          "10"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120
+    },
+    {
+      "id": "win32k.gui-threads",
+      "tier": "probe",
+      "ioctls": [
+        "QUERY_WIN32K_GUI_THREADS"
+      ],
+      "steps": [
+        [
+          "window",
+          "gui-threads",
+          "--max-entries",
+          "64",
+          "--limit",
+          "10"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120
+    },
+    {
+      "id": "win32k.hotkeys-pdb",
+      "tier": "probe",
+      "ioctls": [
+        "QUERY_WIN32K_HOTKEYS_PDB"
+      ],
+      "steps": [
+        [
+          "window",
+          "hotkeys-pdb",
+          "--max-entries",
+          "64",
+          "--limit",
+          "10"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120
+    },
+    {
+      "id": "win32k.hooks-pdb",
+      "tier": "probe",
+      "ioctls": [
+        "QUERY_WIN32K_HOOKS_PDB"
+      ],
+      "steps": [
+        [
+          "window",
+          "hooks-pdb",
+          "--match",
+          "both",
+          "--max-entries",
+          "64",
+          "--limit",
+          "10"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120
+    },
+    {
+      "id": "win32k.window-detail",
+      "tier": "probe",
+      "ioctls": [
+        "QUERY_WIN32K_WINDOW_DETAIL"
+      ],
+      "steps": [
+        [
+          "window",
+          "detail",
+          "--hwnd",
+          "{window.hwnd}"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120,
+      "requires": [
+        "window.hwnd"
+      ],
+      "notes": "服务型 runner 通常没有交互桌面；缺少可用 HWND 时该用例记为 skipped。"
+    },
+    {
+      "id": "win32k.timers",
+      "tier": "probe",
+      "ioctls": [
+        "QUERY_WIN32K_TIMERS"
+      ],
+      "steps": [
+        [
+          "r0",
+          "win32k-timers",
+          "--max-entries",
+          "64"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120
+    },
+    {
+      "id": "win32k.event-hooks",
+      "tier": "probe",
+      "ioctls": [
+        "QUERY_WIN32K_EVENT_HOOKS"
+      ],
+      "steps": [
+        [
+          "r0",
+          "win32k-events",
+          "--max-entries",
+          "64"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120
+    },
+    {
+      "id": "keyboard.enum-hotkeys",
+      "tier": "probe",
+      "ioctls": [
+        "ENUM_KEYBOARD_HOTKEYS"
+      ],
+      "steps": [
+        [
+          "keyboard",
+          "enum-hotkeys",
+          "--max-entries",
+          "64",
+          "--limit",
+          "10"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120
+    },
+    {
+      "id": "keyboard.enum-hooks",
+      "tier": "probe",
+      "ioctls": [
+        "ENUM_KEYBOARD_HOOKS"
+      ],
+      "steps": [
+        [
+          "keyboard",
+          "enum-hooks",
+          "--max-entries",
+          "64",
+          "--limit",
+          "10"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120
+    },
+    {
+      "id": "hwid.dispatch-query",
+      "tier": "probe",
+      "ioctls": [
+        "HWID_DISPATCH_QUERY"
+      ],
+      "steps": [
+        [
+          "hwid",
+          "dispatch-query"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120,
+      "notes": "只查询 HWID dispatch hook 状态；HWID_DISPATCH_CONTROL 永久排除。"
+    },
+    {
+      "id": "callback.runtime-state",
+      "tier": "probe",
+      "ioctls": [
+        "GET_CALLBACK_RUNTIME_STATE"
+      ],
+      "steps": [
+        [
+          "callback",
+          "runtime-state"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120
+    },
+    {
+      "id": "callback.enum",
+      "tier": "probe",
+      "ioctls": [
+        "ENUM_CALLBACKS"
+      ],
+      "steps": [
+        [
+          "callback",
+          "enum",
+          "--max-entries",
+          "128",
+          "--limit",
+          "10"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 300
+    },
+    {
+      "id": "callback.minifilter-bypass-pids",
+      "tier": "probe",
+      "ioctls": [
+        "QUERY_MINIFILTER_BYPASS_PIDS",
+        "SET_MINIFILTER_BYPASS_PIDS"
+      ],
+      "steps": [
+        [
+          "callback",
+          "query-minifilter-bypass-pids"
+        ],
+        [
+          "callback",
+          "set-minifilter-bypass-pids",
+          "--pids",
+          "{self.pid}"
+        ],
+        [
+          "callback",
+          "query-minifilter-bypass-pids"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120,
+      "notes": "仅把 runner 自身 PID 写入放行表；驱动在本次运行结束时被卸载，状态不会遗留。"
+    },
+    {
+      "id": "callback.monitor-cycle",
+      "tier": "probe",
+      "ioctls": [
+        "CALLBACK_MONITOR_CONTROL",
+        "CALLBACK_MONITOR_QUERY",
+        "CALLBACK_MONITOR_READ"
+      ],
+      "steps": [
+        [
+          "callback",
+          "monitor-start"
+        ],
+        [
+          "callback",
+          "monitor-status"
+        ],
+        [
+          "callback",
+          "monitor-read",
+          "--max-records",
+          "64",
+          "--limit",
+          "10"
+        ],
+        [
+          "callback",
+          "monitor-stop"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 180,
+      "cleanup": [
+        [
+          "callback",
+          "monitor-stop"
+        ]
+      ]
+    },
+    {
+      "id": "callback.cancel-pending",
+      "tier": "probe",
+      "ioctls": [
+        "CANCEL_ALL_PENDING_DECISIONS"
+      ],
+      "steps": [
+        [
+          "callback",
+          "cancel-pending"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120,
+      "notes": "无挂起决策时是幂等空操作。"
+    },
+    {
+      "id": "callback.wait-event-cancel",
+      "tier": "probe",
+      "ioctls": [
+        "WAIT_CALLBACK_EVENT"
+      ],
+      "steps": [
+        [
+          "callback",
+          "wait-event"
+        ]
+      ],
+      "expect": "timeout",
+      "timeoutSeconds": 20,
+      "cleanup": [
+        [
+          "callback",
+          "cancel-pending"
+        ]
+      ],
+      "notes": "故意让 WAIT 挂起再结束进程：验证 IRP 取消路径；进程若无法退出则判定为驱动缺陷。"
+    },
+    {
+      "id": "mutation.query-audit",
+      "tier": "probe",
+      "ioctls": [
+        "MUTATION_QUERY_AUDIT"
+      ],
+      "steps": [
+        [
+          "mutation",
+          "query-audit",
+          "--max-entries",
+          "64",
+          "--limit",
+          "10"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120
+    },
+    {
+      "id": "registry.read-enum",
+      "tier": "probe",
+      "ioctls": [
+        "READ_REGISTRY_VALUE",
+        "ENUM_REGISTRY_KEY"
+      ],
+      "steps": [
+        [
+          "registry",
+          "enum-key",
+          "--key",
+          "{registry.softwareKeyNt}",
+          "--max-subkeys",
+          "16",
+          "--max-values",
+          "16",
+          "--limit",
+          "10"
+        ],
+        [
+          "registry",
+          "read-value",
+          "--key",
+          "{registry.currentVersionKeyNt}",
+          "--value",
+          "ProductName"
+        ]
+      ],
+      "expect": "success",
+      "timeoutSeconds": 120
+    },
+    {
+      "id": "registry.mutation-cycle",
+      "tier": "probe",
+      "ioctls": [
+        "CREATE_REGISTRY_KEY",
+        "SET_REGISTRY_VALUE",
+        "RENAME_REGISTRY_VALUE",
+        "DELETE_REGISTRY_VALUE",
+        "RENAME_REGISTRY_KEY",
+        "DELETE_REGISTRY_KEY"
+      ],
+      "steps": [
+        [
+          "registry",
+          "create-key",
+          "--key",
+          "{registry.testKeyNt}"
+        ],
+        [
+          "registry",
+          "set-value",
+          "--key",
+          "{registry.testKeyNt}",
+          "--value",
+          "CiProbe",
+          "--type",
+          "1",
+          "--data-file",
+          "{temp.regValueFile}"
+        ],
+        [
+          "registry",
+          "read-value",
+          "--key",
+          "{registry.testKeyNt}",
+          "--value",
+          "CiProbe"
+        ],
+        [
+          "registry",
+          "rename-value",
+          "--key",
+          "{registry.testKeyNt}",
+          "--old-value",
+          "CiProbe",
+          "--new-value",
+          "CiProbeRenamed"
+        ],
+        [
+          "registry",
+          "delete-value",
+          "--key",
+          "{registry.testKeyNt}",
+          "--value",
+          "CiProbeRenamed"
+        ],
+        [
+          "registry",
+          "rename-key",
+          "--key",
+          "{registry.testKeyNt}",
+          "--new-name",
+          "{registry.testKeyRenamedLeaf}"
+        ],
+        [
+          "registry",
+          "delete-key",
+          "--key",
+          "{registry.testKeyRenamedNt}"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120,
+      "cleanup": [
+        [
+          "registry",
+          "delete-key",
+          "--key",
+          "{registry.testKeyNt}"
+        ],
+        [
+          "registry",
+          "delete-key",
+          "--key",
+          "{registry.testKeyRenamedNt}"
+        ]
+      ],
+      "requires": [
+        "registry.testKeyNt",
+        "temp.regValueFile"
+      ],
+      "targetGuard": "harness-owned-registry-key",
+      "notes": "全部落在 harness 专属子键内；runner 校验每个 --key 前缀必须是本次运行的测试键。"
+    },
+    {
+      "id": "process.set-integrity",
+      "tier": "probe",
+      "ioctls": [
+        "SET_PROCESS_INTEGRITY"
+      ],
+      "steps": [
+        [
+          "process",
+          "set-integrity",
+          "--pid",
+          "{lifecycle.pid}",
+          "--level",
+          "low",
+          "--confirm"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120,
+      "requires": [
+        "lifecycle.pid"
+      ],
+      "targetGuard": "harness-owned-process"
+    },
+    {
+      "id": "process.suspend",
+      "tier": "probe",
+      "ioctls": [
+        "SUSPEND_PROCESS"
+      ],
+      "steps": [
+        [
+          "process",
+          "suspend",
+          "--pid",
+          "{lifecycle.pid}"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120,
+      "requires": [
+        "lifecycle.pid"
+      ],
+      "targetGuard": "harness-owned-process"
+    },
+    {
+      "id": "process.terminate",
+      "tier": "probe",
+      "ioctls": [
+        "TERMINATE_PROCESS"
+      ],
+      "steps": [
+        [
+          "process",
+          "terminate",
+          "--pid",
+          "{lifecycle.pid}"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120,
+      "requires": [
+        "lifecycle.pid"
+      ],
+      "targetGuard": "harness-owned-process",
+      "notes": "必须排在最后：目标是 harness 自己拉起的一次性进程。"
+    },
+    {
+      "id": "guarded.process.set-ppl",
+      "tier": "guarded",
+      "ioctls": [
+        "SET_PPL_LEVEL"
+      ],
+      "steps": [
+        [
+          "process",
+          "set-ppl",
+          "--pid",
+          "{lifecycle.pid}",
+          "--level",
+          "0"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120,
+      "requires": [
+        "lifecycle.pid"
+      ],
+      "targetGuard": "harness-owned-process",
+      "notes": "写 EPROCESS.Protection 私有偏移；偏移错配会在目标退出时崩溃，故默认关闭。"
+    },
+    {
+      "id": "guarded.process.set-special-flags",
+      "tier": "guarded",
+      "ioctls": [
+        "SET_PROCESS_SPECIAL_FLAGS"
+      ],
+      "steps": [
+        [
+          "process",
+          "set-special-flags",
+          "--pid",
+          "{lifecycle.pid}",
+          "--action",
+          "0"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120,
+      "requires": [
+        "lifecycle.pid"
+      ],
+      "targetGuard": "harness-owned-process",
+      "notes": "写 EPROCESS 标志位；同上，默认关闭。"
+    },
+    {
+      "id": "guarded.mutation.transaction",
+      "tier": "guarded",
+      "ioctls": [
+        "MUTATION_PREPARE",
+        "MUTATION_ROLLBACK",
+        "MUTATION_COMMIT"
+      ],
+      "steps": [
+        [
+          "mutation",
+          "prepare",
+          "--target-kind",
+          "{mutation.targetKind}",
+          "--after-hex",
+          "{mutation.afterHex}",
+          "--before-hex",
+          "{mutation.beforeHex}",
+          "--pid",
+          "{lifecycle.pid}",
+          "--address",
+          "{mutation.address}"
+        ],
+        [
+          "mutation",
+          "rollback",
+          "--transaction-id",
+          "{mutation.transactionId}"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120,
+      "requires": [
+        "lifecycle.pid",
+        "mutation.targetKind",
+        "mutation.address"
+      ],
+      "notes": "事务框架需要 operator 提供有效 target-kind/地址/载荷；默认关闭。"
+    },
+    {
+      "id": "guarded.dyn.apply-profile",
+      "tier": "guarded",
+      "ioctls": [
+        "APPLY_DYN_PROFILE_V4",
+        "APPLY_DYN_PROFILE",
+        "APPLY_DYN_PROFILE_EX"
+      ],
+      "steps": [
+        [
+          "dyn",
+          "apply-profile-v4",
+          "--blob",
+          "{profile.v4Blob}"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120,
+      "requires": [
+        "profile.v4Blob"
+      ],
+      "notes": "下发内核偏移包。只允许仓库随附并通过 dyndata_validate 的正式 profile；手写偏移会造成延迟崩溃。"
+    },
+    {
+      "id": "guarded.callback.set-rules",
+      "tier": "guarded",
+      "ioctls": [
+        "SET_CALLBACK_RULES"
+      ],
+      "steps": [
+        [
+          "callback",
+          "set-rules",
+          "--blob",
+          "{callback.rulesBlob}"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120,
+      "requires": [
+        "callback.rulesBlob"
+      ],
+      "notes": "会改变全机 process/thread/image/registry 回调判定，可能拦住 runner 自身。"
+    },
+    {
+      "id": "guarded.redirect.set-rules",
+      "tier": "guarded",
+      "ioctls": [
+        "REDIRECT_SET_RULES"
+      ],
+      "steps": [
+        [
+          "redirect",
+          "set-rules",
+          "--blob",
+          "{redirect.rulesBlob}"
+        ],
+        [
+          "redirect",
+          "query-status",
+          "--limit",
+          "10"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120,
+      "requires": [
+        "redirect.rulesBlob"
+      ],
+      "notes": "全机文件/注册表重定向规则。"
+    },
+    {
+      "id": "guarded.network.set-rules",
+      "tier": "guarded",
+      "ioctls": [
+        "NETWORK_SET_RULES"
+      ],
+      "steps": [
+        [
+          "network",
+          "set-rules",
+          "--blob",
+          "{network.rulesBlob}"
+        ]
+      ],
+      "expect": "graceful",
+      "timeoutSeconds": 120,
+      "requires": [
+        "network.rulesBlob"
+      ],
+      "notes": "全机网络放行/拦截规则，可能切断 runner 的网络。"
+    }
+  ],
+  "excluded": [
+    {
+      "ioctl": "ADJUST_PROCESS_TOKEN_PRIVILEGE",
+      "reason": "no-cli-path",
+      "detail": "KswordCLI 当前没有对应子命令，无法在本 harness 内触发；属于覆盖缺口，不是安全排除。"
+    },
+    {
+      "ioctl": "ANSWER_CALLBACK_EVENT",
+      "reason": "requires-live-event",
+      "detail": "需要真实挂起的回调决策事件；CI 不下发会拦截系统行为的规则，因此无法安全构造。"
+    },
+    {
+      "ioctl": "CONFIGURE_BUGCHECK_DIAGNOSTICS",
+      "reason": "bugcheck-path",
+      "detail": "配置蓝屏渲染/守卫路径。本 CI 用崩溃证据做判定，绝不能改动崩溃路径本身。"
+    },
+    {
+      "ioctl": "CONFIGURE_BUGCHECK_GUARD",
+      "reason": "bugcheck-path",
+      "detail": "配置蓝屏渲染/守卫路径。本 CI 用崩溃证据做判定，绝不能改动崩溃路径本身。"
+    },
+    {
+      "ioctl": "CONFIGURE_BUGCHECK_SHIELD",
+      "reason": "bugcheck-path",
+      "detail": "配置蓝屏渲染/守卫路径。本 CI 用崩溃证据做判定，绝不能改动崩溃路径本身。"
+    },
+    {
+      "ioctl": "CONTROL_CPU_POWER",
+      "reason": "alters-host-power",
+      "detail": "改动 CPU 电源/频率状态，可能让 runner 失去响应。"
+    },
+    {
+      "ioctl": "CONTROL_DRIVER_COMMUNICATION",
+      "reason": "patches-third-party-driver",
+      "detail": "改写第三方驱动的 dispatch 表/映像/通信通道。"
+    },
+    {
+      "ioctl": "CONTROL_DRIVER_DISPATCH",
+      "reason": "patches-third-party-driver",
+      "detail": "改写第三方驱动的 dispatch 表/映像/通信通道。"
+    },
+    {
+      "ioctl": "CONTROL_DRIVER_IMAGE",
+      "reason": "patches-third-party-driver",
+      "detail": "改写第三方驱动的 dispatch 表/映像/通信通道。"
+    },
+    {
+      "ioctl": "CONTROL_DRIVER_THREAD",
+      "reason": "no-cli-path",
+      "detail": "KswordCLI 当前没有对应子命令，无法在本 harness 内触发；属于覆盖缺口，不是安全排除。"
+    },
+    {
+      "ioctl": "CONTROL_HVM",
+      "reason": "virtualization-lifecycle",
+      "detail": "VMXON/EPT 规则安装。CI 机器通常已在 Hyper-V/VBS 之下，嵌套虚拟化切换的崩溃不可归因。"
+    },
+    {
+      "ioctl": "CONTROL_IO_TIMER",
+      "reason": "no-cli-path",
+      "detail": "KswordCLI 当前没有对应子命令，无法在本 harness 内触发；属于覆盖缺口，不是安全排除。"
+    },
+    {
+      "ioctl": "CONTROL_PLATFORM_AUDIT",
+      "reason": "no-cli-path",
+      "detail": "KswordCLI 当前没有对应子命令，无法在本 harness 内触发；属于覆盖缺口，不是安全排除。"
+    },
+    {
+      "ioctl": "CONTROL_SYSTEM_TIME",
+      "reason": "alters-host-clock",
+      "detail": "改动系统时间会破坏 CI 时间线、证书校验和崩溃取证时序。"
+    },
+    {
+      "ioctl": "DEBUG_OUTPUT_CONTROL",
+      "reason": "no-cli-path",
+      "detail": "KswordCLI 当前没有对应子命令，无法在本 harness 内触发；属于覆盖缺口，不是安全排除。"
+    },
+    {
+      "ioctl": "DELETE_PIDDB",
+      "reason": "mutates-kernel-database",
+      "detail": "删除 PiDDBCacheTable 条目，改写内核共享数据库。"
+    },
+    {
+      "ioctl": "DKOM_PROCESS",
+      "reason": "dkom-unlink",
+      "detail": "摘链 EPROCESS 会在目标退出时崩溃，是最典型的手贱型 bugcheck。"
+    },
+    {
+      "ioctl": "EXPERIMENTAL_RETURN_TO_FIRMWARE",
+      "reason": "reboots-host",
+      "detail": "直接返回固件即重启，等价于人为终止本次运行。"
+    },
+    {
+      "ioctl": "FILE_IRP_SUBMIT",
+      "reason": "no-cli-path",
+      "detail": "KswordCLI 当前没有对应子命令，无法在本 harness 内触发；属于覆盖缺口，不是安全排除。"
+    },
+    {
+      "ioctl": "FORCE_UNLOAD_DRIVER",
+      "reason": "unloads-live-driver",
+      "detail": "强制卸载在用驱动，崩溃由被卸载驱动的残留引用决定。"
+    },
+    {
+      "ioctl": "HVM_EPT_RULE",
+      "reason": "virtualization-lifecycle",
+      "detail": "VMXON/EPT 规则安装。CI 机器通常已在 Hyper-V/VBS 之下，嵌套虚拟化切换的崩溃不可归因。"
+    },
+    {
+      "ioctl": "HWID_DISPATCH_CONTROL",
+      "reason": "alters-host-identity",
+      "detail": "改写磁盘/网卡/GPU 标识，会污染 CI 机器并影响后续运行。"
+    },
+    {
+      "ioctl": "INJECT_PROCESS",
+      "reason": "code-injection",
+      "detail": "注入 DLL/shellcode；崩溃取决于载荷而不是驱动。"
+    },
+    {
+      "ioctl": "MUTATE_KEYBOARD_HOTKEY",
+      "reason": "no-cli-path",
+      "detail": "KswordCLI 当前没有对应子命令，无法在本 harness 内触发；属于覆盖缺口，不是安全排除。"
+    },
+    {
+      "ioctl": "NETWORK_CONTROL_TRAFFIC_CAPTURE",
+      "reason": "no-cli-path",
+      "detail": "KswordCLI 当前没有对应子命令，无法在本 harness 内触发；属于覆盖缺口，不是安全排除。"
+    },
+    {
+      "ioctl": "PATCH_INLINE_HOOK",
+      "reason": "patchguard-protected-write",
+      "detail": "改写 SSDT/内核映像/IDT 等 PatchGuard 覆盖结构，是典型的自伤型崩溃来源。"
+    },
+    {
+      "ioctl": "PROCESS_TOKEN_PRIVILEGES",
+      "reason": "no-cli-path",
+      "detail": "KswordCLI 当前没有对应子命令，无法在本 harness 内触发；属于覆盖缺口，不是安全排除。"
+    },
+    {
+      "ioctl": "QUERY_PROCESS_TOKEN_PRIVILEGES",
+      "reason": "no-cli-path",
+      "detail": "KswordCLI 当前没有对应子命令，无法在本 harness 内触发；属于覆盖缺口，不是安全排除。"
+    },
+    {
+      "ioctl": "QUERY_RESEARCH_TOPIC",
+      "reason": "no-cli-path",
+      "detail": "KswordCLI 当前没有对应子命令，无法在本 harness 内触发；属于覆盖缺口，不是安全排除。"
+    },
+    {
+      "ioctl": "REMOVE_EXTERNAL_CALLBACK",
+      "reason": "system-wide-callback-decisions",
+      "detail": "摘除第三方驱动注册的回调，崩溃归因于被摘除方。"
+    },
+    {
+      "ioctl": "REMOVE_EXTERNAL_CALLBACK_EX",
+      "reason": "system-wide-callback-decisions",
+      "detail": "摘除第三方驱动注册的回调，崩溃归因于被摘除方。"
+    },
+    {
+      "ioctl": "RESTORE_IDT_BASELINE",
+      "reason": "patchguard-protected-write",
+      "detail": "改写 SSDT/内核映像/IDT 等 PatchGuard 覆盖结构，是典型的自伤型崩溃来源。"
+    },
+    {
+      "ioctl": "RXPF_CHANGE_PAGE",
+      "reason": "experimental-page-fault-hooking",
+      "detail": "RXPF 安装 #PF 钩子并做指令模拟，属实验机制；同时无 CLI 入口。"
+    },
+    {
+      "ioctl": "RXPF_DRAIN_EVENTS",
+      "reason": "no-cli-path",
+      "detail": "KswordCLI 当前没有对应子命令，无法在本 harness 内触发；属于覆盖缺口，不是安全排除。"
+    },
+    {
+      "ioctl": "RXPF_QUERY_PAGE",
+      "reason": "no-cli-path",
+      "detail": "KswordCLI 当前没有对应子命令，无法在本 harness 内触发；属于覆盖缺口，不是安全排除。"
+    },
+    {
+      "ioctl": "RXPF_QUERY_STATS",
+      "reason": "no-cli-path",
+      "detail": "KswordCLI 当前没有对应子命令，无法在本 harness 内触发；属于覆盖缺口，不是安全排除。"
+    },
+    {
+      "ioctl": "RXPF_QUERY_SUPPORT",
+      "reason": "no-cli-path",
+      "detail": "KswordCLI 当前没有对应子命令，无法在本 harness 内触发；属于覆盖缺口，不是安全排除。"
+    },
+    {
+      "ioctl": "RXPF_REGISTER_PAGE",
+      "reason": "experimental-page-fault-hooking",
+      "detail": "RXPF 安装 #PF 钩子并做指令模拟，属实验机制；同时无 CLI 入口。"
+    },
+    {
+      "ioctl": "RXPF_RUN_SELF_TEST",
+      "reason": "experimental-page-fault-hooking",
+      "detail": "RXPF 安装 #PF 钩子并做指令模拟，属实验机制；同时无 CLI 入口。"
+    },
+    {
+      "ioctl": "RXPF_SET_EMULATION",
+      "reason": "experimental-page-fault-hooking",
+      "detail": "RXPF 安装 #PF 钩子并做指令模拟，属实验机制；同时无 CLI 入口。"
+    },
+    {
+      "ioctl": "RXPF_UNREGISTER_PAGE",
+      "reason": "experimental-page-fault-hooking",
+      "detail": "RXPF 安装 #PF 钩子并做指令模拟，属实验机制；同时无 CLI 入口。"
+    },
+    {
+      "ioctl": "RXPF_WRITE_PAGE",
+      "reason": "experimental-page-fault-hooking",
+      "detail": "RXPF 安装 #PF 钩子并做指令模拟，属实验机制；同时无 CLI 入口。"
+    },
+    {
+      "ioctl": "SET_BUGCHECK_BITMAP",
+      "reason": "bugcheck-path",
+      "detail": "配置蓝屏渲染/守卫路径。本 CI 用崩溃证据做判定，绝不能改动崩溃路径本身。"
+    },
+    {
+      "ioctl": "SET_BUGCHECK_VERDICT_RESOURCES",
+      "reason": "bugcheck-path",
+      "detail": "配置蓝屏渲染/守卫路径。本 CI 用崩溃证据做判定，绝不能改动崩溃路径本身。"
+    },
+    {
+      "ioctl": "SET_PROCESS_PROTECT_CONFIG",
+      "reason": "no-cli-path",
+      "detail": "KswordCLI 当前没有对应子命令，无法在本 harness 内触发；属于覆盖缺口，不是安全排除。"
+    },
+    {
+      "ioctl": "SET_PROCESS_VISIBILITY",
+      "reason": "dkom-unlink",
+      "detail": "摘链 EPROCESS 会在目标退出时崩溃，是最典型的手贱型 bugcheck。"
+    },
+    {
+      "ioctl": "SET_THREAD_SUSPENDED",
+      "reason": "no-cli-path",
+      "detail": "KswordCLI 当前没有对应子命令，无法在本 harness 内触发；属于覆盖缺口，不是安全排除。"
+    },
+    {
+      "ioctl": "TERMINATE_THREAD",
+      "reason": "no-cli-path",
+      "detail": "KswordCLI 当前没有对应子命令，无法在本 harness 内触发；属于覆盖缺口，不是安全排除。"
+    },
+    {
+      "ioctl": "WRITE_PHYSICAL_MEMORY",
+      "reason": "arbitrary-kernel-write",
+      "detail": "写内核/物理内存。命中 PatchGuard 覆盖区会产生延迟 bugcheck，崩溃归因于测试输入而非驱动缺陷。"
+    },
+    {
+      "ioctl": "WRITE_RAW_DISK",
+      "reason": "destroys-host-storage",
+      "detail": "裸盘写入会破坏 CI 机器的卷结构。"
+    },
+    {
+      "ioctl": "WRITE_VIRTUAL_MEMORY",
+      "reason": "arbitrary-kernel-write",
+      "detail": "写内核/物理内存。命中 PatchGuard 覆盖区会产生延迟 bugcheck，崩溃归因于测试输入而非驱动缺陷。"
+    }
+  ]
+}

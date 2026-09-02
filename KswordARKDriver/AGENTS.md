@@ -19,3 +19,4 @@ R0 功能必须遵循以下落点：
 - 新增协议头必须集中放入仓库根目录 `shared/driver/`，驱动和用户态共同 include。
 - 新增 `.c/.h` 必须同步进入 `KswordARKDriver.vcxproj` 和 `KswordARKDriver.vcxproj.filters`。
 - 第三方代码接入必须保留 LICENSE/NOTICE，正式位置使用仓库相对路径，不写个人机器绝对路径。
+- 新增或删除 IOCTL 必须同步 `tools/driver_functional_ci/driver_test_plan.json`：能安全执行的加用例，不能的写明排除原因。CI 的 `plan_gate.py` 会点名任何未处置的 IOCTL，细节见 `KswordARKDriver/tests/README.md`。
