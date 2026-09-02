@@ -7216,25 +7216,37 @@ ProcessDock::RefreshResult ProcessDock::buildRefreshResult(
                 kernelOnlyRecord.pid = kernelProcess.processId;
                 kernelOnlyRecord.parentPid = kernelProcess.parentProcessId;
                 mergeKernelProcessExtension(kernelOnlyRecord, kernelProcess);
+                // 弱证据分两类，文案都要明确写出“可能为误报”：
+                // - TERMINATING_OR_EXITED：EPROCESS 已退出但仍被句柄引用，从活动链表摘除后
+                //   继续留在 PspCidTable 里，多数是 conhost 等短命进程的残骸；
+                // - CID_TABLE_REFERENCE_FAILED：CID 槽位解出进程对象类型，但取引用失败。
+                // 两类都保留上报（真隐藏也可能落在同一判据里），只在 UI 上降级提示。
+                const bool terminatingRemnantEvidence =
+                    (kernelProcess.flags & KSWORD_ARK_PROCESS_FLAG_TERMINATING_OR_EXITED) != 0U;
+                const bool cidReferenceFailedEvidence =
+                    (kernelProcess.flags & KSWORD_ARK_PROCESS_FLAG_CID_TABLE_REFERENCE_FAILED) != 0U;
                 const bool cidTableWeakEvidence =
-                    (kernelProcess.flags &
-                        (KSWORD_ARK_PROCESS_FLAG_CID_TABLE_REFERENCE_FAILED |
-                            KSWORD_ARK_PROCESS_FLAG_TERMINATING_OR_EXITED)) != 0U;
+                    terminatingRemnantEvidence || cidReferenceFailedEvidence;
                 kernelOnlyRecord.creationTime100ns = kernelProcess.creationTime100ns != 0ULL
                     ? kernelProcess.creationTime100ns
                     : KernelOnlyCreationTimeSeed + static_cast<std::uint64_t>(kernelProcess.processId);
-                kernelOnlyRecord.processName = kernelProcess.imageName.empty()
-                    ? std::string("[R0] Unknown")
-                    : std::string("[R0] ") + kernelProcess.imageName;
-                kernelOnlyRecord.imagePath = cidTableWeakEvidence
-                    ? "[CID Table命中：对象引用失败或已退出]"
-                    : "[仅内核枚举可见]";
+                const std::string kernelOnlyBaseName = kernelProcess.imageName.empty()
+                    ? std::string("Unknown")
+                    : kernelProcess.imageName;
+                kernelOnlyRecord.processName = cidTableWeakEvidence
+                    ? std::string("[R0?] ") + kernelOnlyBaseName + "（可能为误报）"
+                    : std::string("[R0] ") + kernelOnlyBaseName;
+                kernelOnlyRecord.imagePath = terminatingRemnantEvidence
+                    ? "[可能为误报：进程已退出，EPROCESS 仍被句柄引用]"
+                    : (cidReferenceFailedEvidence
+                        ? "[可能为误报：CID Table命中但对象引用失败]"
+                        : "[仅内核枚举可见]");
                 kernelOnlyRecord.commandLine = cidTableWeakEvidence
-                    ? "[CID Table命中：保留显示，可尝试R0结束]"
+                    ? "[可能为误报：CID Table残留，保留显示，可尝试R0结束]"
                     : "[仅内核枚举可见]";
                 kernelOnlyRecord.userName = "-";
                 kernelOnlyRecord.signatureState = cidTableWeakEvidence
-                    ? "CIDTable(Weak)"
+                    ? "CIDTable(可能为误报)"
                     : "KernelOnly(Hidden?)";
                 kernelOnlyRecord.signaturePublisher.clear();
                 kernelOnlyRecord.signatureTrusted = false;
@@ -9557,6 +9569,19 @@ QVariant ProcessDock::processTableData(const ProcessTableRow& tableRow, const in
         if (tableRow.activitySnapshotActive)
         {
             return QStringLiteral("历史快照行：该行来自时间轴样本，不代表当前实时进程状态。");
+        }
+        // 弱证据的“仅内核可见”行：说明误报来源，避免用户把短命进程残骸当成隐藏进程。
+        if (tableRow.isKernelOnly &&
+            (processRecord.r0Flags & KSWORD_ARK_PROCESS_FLAG_TERMINATING_OR_EXITED) != 0U)
+        {
+            return QStringLiteral("%1\n可能为误报：该 EPROCESS 已退出（ExitStatus 非 STATUS_PENDING），被摘出活动链表后仍留在 PspCidTable 中，多为短命进程残骸。")
+                .arg(QString::fromStdString(processRecord.processName));
+        }
+        if (tableRow.isKernelOnly &&
+            (processRecord.r0Flags & KSWORD_ARK_PROCESS_FLAG_CID_TABLE_REFERENCE_FAILED) != 0U)
+        {
+            return QStringLiteral("%1\n可能为误报：CID Table 槽位解出进程对象，但 R0 取引用失败，无法确认该 PID 对应存活进程。")
+                .arg(QString::fromStdString(processRecord.processName));
         }
         if (processRecord.efficiencyModeEnabled)
         {

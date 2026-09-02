@@ -1558,18 +1558,27 @@ ProcessSnapshotRow BuildKernelOnlyRow(const KernelProcessSnapshotEntry& kernelPr
     MergeKernelProcessExtension(row, kernelProcess);
 
     const std::wstring imageName = NarrowToWide(kernelProcess.imageName);
-    row.imageName = imageName.empty() ? L"[R0] Unknown" : (L"[R0] " + imageName);
-    const bool cidTableWeakEvidence =
-        (kernelProcess.flags &
-            (KSWORD_ARK_PROCESS_FLAG_CID_TABLE_REFERENCE_FAILED |
-                KSWORD_ARK_PROCESS_FLAG_TERMINATING_OR_EXITED)) != 0U;
-    row.imagePath = cidTableWeakEvidence
-        ? L"[CID Table命中：对象引用失败或已退出]"
-        : L"[仅内核枚举可见]";
-    row.r0AuditSummary = L"KernelOnly(Hidden?)";
-    row.r0AuditDetail = cidTableWeakEvidence
-        ? L"CID Table命中：保留显示，可尝试R0结束"
-        : L"仅内核枚举可见";
+    const std::wstring baseName = imageName.empty() ? std::wstring(L"Unknown") : imageName;
+    // 弱证据行仍然保留上报，只在文案上降级为“可能为误报”，与 Ksword5.1 保持一致。
+    const bool terminatingRemnantEvidence =
+        (kernelProcess.flags & KSWORD_ARK_PROCESS_FLAG_TERMINATING_OR_EXITED) != 0U;
+    const bool cidReferenceFailedEvidence =
+        (kernelProcess.flags & KSWORD_ARK_PROCESS_FLAG_CID_TABLE_REFERENCE_FAILED) != 0U;
+    const bool cidTableWeakEvidence = terminatingRemnantEvidence || cidReferenceFailedEvidence;
+    row.imageName = cidTableWeakEvidence
+        ? (L"[R0?] " + baseName + L"（可能为误报）")
+        : (L"[R0] " + baseName);
+    row.imagePath = terminatingRemnantEvidence
+        ? L"[可能为误报：进程已退出，EPROCESS 仍被句柄引用]"
+        : (cidReferenceFailedEvidence
+            ? L"[可能为误报：CID Table命中但对象引用失败]"
+            : L"[仅内核枚举可见]");
+    row.r0AuditSummary = cidTableWeakEvidence ? L"KernelOnly(可能为误报)" : L"KernelOnly(Hidden?)";
+    row.r0AuditDetail = terminatingRemnantEvidence
+        ? L"可能为误报：EPROCESS 已退出（ExitStatus 非 STATUS_PENDING），仍留在 PspCidTable"
+        : (cidReferenceFailedEvidence
+            ? L"可能为误报：CID Table命中但对象引用失败"
+            : L"仅内核枚举可见");
     row.r0AuditDetail += L"; flags=" + FlagHexText(kernelProcess.flags);
     row.r0AuditDetail += L"; status=" + ProcessR0StatusText(kernelProcess.r0Status);
     return row;

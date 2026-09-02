@@ -1275,14 +1275,11 @@ Return Value:
         if (KswordARKDriverShouldSkipTerminatingProcess(processObject, enumContext->DynState)) {
             //
             // 已退出但仍被父进程句柄引用的 EPROCESS 会从 ActiveProcessLinks 摘除，
-            // 却继续留在 PspCidTable 中。CID 扫描的目的是找“对活动链表隐身的存活进程”，
-            // 把这些残骸当隐藏项上报会在 R3 列表里堆出一批指标恒为 0 的幽灵行；
-            // 短命进程（conhost 等）每轮换一批 PID，行数只增不减。
-            // 本程序自己摘链隐藏的进程例外，必须继续上报以便用户取消隐藏。
+            // 却继续留在 PspCidTable 中。这类残骸多半不是隐藏进程，但驱动侧仍然上报：
+            // 判据只有“ExitStatus 不是 STATUS_PENDING”，无法区分残骸与刚被摘链的存活进程，
+            // 直接丢弃会连真隐藏一起漏掉。改为打上 TERMINATING_OR_EXITED，
+            // 由 R3 标注“可能为误报”并灰显，取舍交给用户。
             //
-            if ((processFlags & KSWORD_ARK_PROCESS_FLAG_HIDDEN_BY_KSWORD_UI) == 0UL) {
-                return;
-            }
             processFlags |= KSWORD_ARK_PROCESS_FLAG_TERMINATING_OR_EXITED;
         }
         parentProcessId = HandleToULong(PsGetProcessInheritedFromUniqueProcessId(processObject));
@@ -2812,20 +2809,17 @@ KswordARKDriverEnumerateProcesses(
                     }
 
                     //
-                    // 与 CID 扫描同理：这里查的是“不在活动链表里的 PID”，
-                    // 已退出但对象仍存活的进程残骸不是隐藏进程，上报只会制造幽灵行。
+                    // 与 CID 扫描同理：这里查的是“不在活动链表里的 PID”，已退出但对象仍存活的
+                    // 残骸同样上报，只带 TERMINATING_OR_EXITED 标志交给 R3 标注“可能为误报”。
                     //
-                    if (!terminatingProcess ||
-                        (processFlags & KSWORD_ARK_PROCESS_FLAG_HIDDEN_BY_KSWORD_UI) != 0UL) {
-                        KswordARKDriverAppendProcessEntry(
-                            response,
-                            entryCapacity,
-                            scanPid,
-                            parentProcessId,
-                            processFlags,
-                            imageName,
-                            hiddenProcessObject);
-                    }
+                    KswordARKDriverAppendProcessEntry(
+                        response,
+                        entryCapacity,
+                        scanPid,
+                        parentProcessId,
+                        processFlags,
+                        imageName,
+                        hiddenProcessObject);
                     ObDereferenceObject(hiddenProcessObject);
                 }
             }
