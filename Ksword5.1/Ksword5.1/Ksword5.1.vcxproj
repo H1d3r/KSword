@@ -809,6 +809,17 @@
     </PropertyGroup>
     <Exec Command="&quot;$(KswordI18nPythonExe)&quot; &quot;$(KswordI18nAuditScript)&quot; audit --source-root &quot;$(MSBuildProjectDirectory)&quot; --zh-pack &quot;$(MSBuildProjectDirectory)\languages\zh-CN.json&quot; --en-pack &quot;$(MSBuildProjectDirectory)\languages\en-US.json&quot;" />
   </Target>
+  <!-- theme.h 的动态 token 返回 palette(...) 样式表角色，只有样式表能解析：富文本、QColor、
+       绘制路径和跨进程传参都会静默丢弃它，而两类 token 的名字只差一个词。审计先自测规则本身，
+       再扫描源码树。 -->
+  <Target Name="AuditKswordThemeTokens" BeforeTargets="ClCompile" Condition="'$(KswordSkipThemeTokenAudit)'!='true'">
+    <PropertyGroup>
+      <KswordThemeTokenAuditScript>$(MSBuildProjectDirectory)\..\..\tools\theme_token_audit.py</KswordThemeTokenAuditScript>
+      <KswordThemeTokenPythonExe Condition="'$(KswordThemeTokenPythonExe)'==''">python</KswordThemeTokenPythonExe>
+    </PropertyGroup>
+    <Exec Command="&quot;$(KswordThemeTokenPythonExe)&quot; &quot;$(KswordThemeTokenAuditScript)&quot; --self-test --theme-header &quot;$(MSBuildProjectDirectory)\theme.h&quot;" />
+    <Exec Command="&quot;$(KswordThemeTokenPythonExe)&quot; &quot;$(KswordThemeTokenAuditScript)&quot; --source-root &quot;$(MSBuildProjectDirectory)&quot;" />
+  </Target>
   <Target Name="CopyKswordLanguagePacks" AfterTargets="Build">
     <ItemGroup>
       <KswordLanguagePack Include="$(MSBuildProjectDirectory)\languages\*.json" />

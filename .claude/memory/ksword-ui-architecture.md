@@ -10,6 +10,11 @@ KSword 主程序位于 `Ksword5.1/Ksword5.1`（Qt 6.9.3 Widgets + Qt Advanced Do
 ## UI 主题架构
 
 - `theme.h`（KswordTheme 命名空间）：design-token 中心。中性表面色（Window/Surface/SurfaceAlt/SurfaceMuted/Border）由 RGB 偏移从种子色派生；强调色 PrimaryBlueColor 可由用户自定义；提供 EnsureTextContrast 等 WCAG 对比度工具。
+- `theme.h` 的颜色访问器分两族，名字只差一个词，用错编译器和 Qt 都不报错：**动态** token（`SurfaceHex()`、`TextPrimaryHex()`、`PrimaryBlueHex` 等，共 14 个）返回 `palette(base)` 这类样式表角色，Qt 每次重绘重新求值，天然跟随主题；**静态** token（`*ColorHex()`）在调用瞬间固化成 `#RRGGBB`。
+- `palette(...)` 是 QSS 专有扩展，**只有样式表能解析**。写进 QLabel/QTextEdit 富文本（走 QTextDocument 的 CSS 解析器）、`QColor` 字符串构造、`setForeground`/`QPen` 等绘制路径，或通过环境变量传给插件进程，都会被**静默丢弃**——声明整条失效、元素退回继承色，没有任何警告。这类误用已经犯过 5 次（HardwareDock 的 CPU 详情单元格、GlobalUiSearch 的结果副标题、NotificationCardManager、PluginHost）。上述场景一律改用 `*ColorHex()`。
+- 构建期有门禁：`tools/theme_token_audit.py`（vcxproj Target `AuditKswordThemeTokens`，`BeforeTargets="ClCompile"`）。token 清单从 theme.h 现场解析，新增 token 自动纳入；语句定界会跳过字符串字面量，否则内联 CSS 里的 `padding-right:18px;` 会把语句在 HTML 标签前截断而漏检。脚本自带 `--self-test`，对照 `tools/theme_token_audit_fixture/` 双向校验（标记行必须报出、未标记行不得报出），构建时先自测再扫源码。跳过用 `/p:KswordSkipThemeTokenAudit=true`。
+- 语义状态色（信息/成功/警告/错误/空闲）没有对应的 palette 角色，统一走 `UI/ThemeStatusRole`：控件用 `ks::ui::ApplyStatusRole()` 只记状态，颜色由全局样式块的 `QLabel[ksword_status_role="..."]` 规则下发。控件因此不持有自己的 styleSheet，也就不必再依赖 `ThemeColorRemap` 的存量字符串扫描（该扫描按旧值建映射，撞色时只能整组跳过）。属性名用下划线：驼峰会被 i18n 审计当成待翻译文本。
+- `SurfaceMuted` 和 `TextDisabled` 没有动态版本，且不该硬造：QSS 的 `palette()` 选不到 disabled group，剩余空闲角色（light/bright-text/shadow）都会被 QStyle 用于原生控件的立体边框绘制。用到它们的页面必须自己具备重建入口（`changeEvent` 处理 `ApplicationPaletteChange`，或每次显示时重新生成样式）。
 - 纯图标按钮的几何同样由 `theme.h` 收口：紧凑工具栏使用 `ApplyCompactIconButtonMetrics`（28px 按钮 / 16px 图标），独立或强调动作使用 `ApplyStandardIconButtonMetrics`（32px / 18px）；页面不得继续新增 30/34/36px 的临时组合。
 - `MainWindow::applyAppearanceSettings`：主题应用唯一入口，设置 QApplication palette + 调用 `applyGlobalApplicationStyleBlocks`（带 marker 的 QSS 块替换机制，marker 常量在 MainWindow.cpp 顶部匿名命名空间）。
 - 全局 QSS 块顺序：BaseControl（`UI/GlobalUiBaseStyle.cpp`）→ Tooltip → ContextMenu → ControlContrast → ComboBox，依次追加到 app stylesheet，基线块在最前，局部样式可覆盖。
