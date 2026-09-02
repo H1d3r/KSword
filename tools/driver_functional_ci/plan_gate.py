@@ -319,6 +319,24 @@ def render_report(plan: dict[str, Any], stats: dict[str, Any], counts: dict[str,
     return "\n".join(lines)
 
 
+def force_utf8_output() -> None:
+    """把标准输出/错误切到 UTF-8。
+
+    输入无。处理过程在流支持 reconfigure 时改写编码，失败时静默跳过。
+    返回值为空。GitHub 的 Windows runner 默认给 Python 的是 cp1252，
+    直接打印中文诊断会抛 UnicodeEncodeError，把通过的门禁误判成失败。
+    """
+
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (ValueError, OSError):
+            pass
+
+
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
     """解析命令行参数。
 
@@ -340,6 +358,7 @@ def main(argv: list[str] | None = None) -> int:
     检查，并按需写出报告。返回值是退出码，非零表示计划需要修正。
     """
 
+    force_utf8_output()
     args = parse_args(argv)
     root = Path(args.repo_root).resolve()
     plan_path = Path(args.plan) if args.plan else root / "tools" / "driver_functional_ci" / "driver_test_plan.json"
