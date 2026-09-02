@@ -299,10 +299,10 @@ namespace ks::ui
             QStringLiteral("cmd.popup.execute.tooltip"),
             QStringLiteral("按当前目录、用户、权限和窗口设置执行命令")));
 
-        const QString backgroundHex = KswordTheme::SurfaceColorHex();
-        const QString alternateBackgroundHex = KswordTheme::SurfaceAltColorHex();
-        const QString borderHex = KswordTheme::BorderStrongColorHex();
-        const QString textPrimaryHex = KswordTheme::TextPrimaryColorHex();
+        const QString backgroundHex = KswordTheme::SurfaceHex();
+        const QString alternateBackgroundHex = KswordTheme::SurfaceAltHex();
+        const QString borderHex = KswordTheme::BorderStrongHex();
+        const QString textPrimaryHex = KswordTheme::TextPrimaryHex();
         const QString textSecondaryHex = KswordTheme::TextSecondaryHex();
         const QString accentHex = KswordTheme::AccentHex(KswordTheme::AccentRole::Blue);
         const QString accentHoverHex = KswordTheme::PrimaryBlueSolidHoverHex();

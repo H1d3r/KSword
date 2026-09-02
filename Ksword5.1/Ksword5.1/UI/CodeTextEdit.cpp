@@ -398,7 +398,9 @@ void CodeTextEdit::refreshExtraSelections()
                 selection.cursor = textCursor();
                 selection.cursor.setPosition(pos);
                 selection.cursor.movePosition(QTextCursor::NextCharacter, QTextCursor::KeepAnchor);
-                selection.format.setForeground(KswordTheme::OnAccentColor());
+                // 底色可能是选中蓝，也可能是括号不匹配时的错误红；
+                // 前景必须按实际底色求，不能套用对强调色校准的无参版本。
+                selection.format.setForeground(KswordTheme::OnAccentColor(bg));
                 selection.format.setBackground(bg);
                 extraSelections.push_back(selection);
             };

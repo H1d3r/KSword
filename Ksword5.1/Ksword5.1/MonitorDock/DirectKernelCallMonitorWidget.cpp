@@ -12,6 +12,7 @@
 #include "MonitorTextViewer.h"
 #include "../OnlineScan/SandboxUploadActions.h"
 #include "../UI/TableInteractionSupport.h"
+#include "../UI/ThemeStatusRole.h"
 #include "../theme.h"
 
 #include <QAbstractItemView>
@@ -104,36 +105,6 @@ namespace
             .arg(KswordTheme::PrimaryBlueHex)
             .arg(KswordTheme::SurfaceHex())
             .arg(KswordTheme::BorderHex());
-    }
-
-    QString buildStatusStyle(const QString& colorHex)
-    {
-        return QStringLiteral("color:%1;font-weight:600;").arg(colorHex);
-    }
-
-    QString monitorInfoColorHex()
-    {
-        return KswordTheme::InfoColor().name(QColor::HexRgb);
-    }
-
-    QString monitorSuccessColorHex()
-    {
-        return KswordTheme::SuccessColor().name(QColor::HexRgb);
-    }
-
-    QString monitorWarningColorHex()
-    {
-        return KswordTheme::WarningColor().name(QColor::HexRgb);
-    }
-
-    QString monitorErrorColorHex()
-    {
-        return KswordTheme::ErrorColor().name(QColor::HexRgb);
-    }
-
-    QString monitorIdleColorHex()
-    {
-        return KswordTheme::TextSecondaryHex();
     }
 
     QPushButton* createIconButton(QWidget* parentWidget, const QString& iconPath, const QString& tooltipText)
@@ -751,11 +722,11 @@ void DirectKernelCallMonitorWidget::initializeUi()
     controlLayout->addLayout(buttonLayout, 1, 4, 1, 2);
 
     m_mapStatusLabel = new QLabel(QStringLiteral("syscall 映射：待解析"), m_controlPanel);
-    m_mapStatusLabel->setStyleSheet(buildStatusStyle(monitorIdleColorHex()));
+    ks::ui::ApplyStatusRole(m_mapStatusLabel, ks::ui::StatusRole::Idle);
     controlLayout->addWidget(m_mapStatusLabel, 2, 0, 1, 3);
 
     m_statusLabel = new QLabel(QStringLiteral("● 空闲"), m_controlPanel);
-    m_statusLabel->setStyleSheet(buildStatusStyle(monitorIdleColorHex()));
+    ks::ui::ApplyStatusRole(m_statusLabel, ks::ui::StatusRole::Idle);
     controlLayout->addWidget(m_statusLabel, 2, 3, 1, 3);
     m_rootLayout->addWidget(m_controlPanel, 0);
 
@@ -806,7 +777,7 @@ void DirectKernelCallMonitorWidget::initializeUi()
     filterLayout->addWidget(m_clearFilterButton, 2, 2);
 
     m_filterStatusLabel = new QLabel(QStringLiteral("筛选结果：0 / 0"), m_filterPanel);
-    m_filterStatusLabel->setStyleSheet(buildStatusStyle(monitorIdleColorHex()));
+    ks::ui::ApplyStatusRole(m_filterStatusLabel, ks::ui::StatusRole::Idle);
     filterLayout->addWidget(m_filterStatusLabel, 2, 3, 1, 3);
     m_rootLayout->addWidget(m_filterPanel, 0);
 
@@ -942,8 +913,8 @@ void DirectKernelCallMonitorWidget::reloadSyscallMap()
     {
         m_mapStatusLabel->setText(QStringLiteral("syscall 映射：%1 项（ntdll/win32u）")
             .arg(static_cast<qulonglong>(m_syscallMap.size())));
-        m_mapStatusLabel->setStyleSheet(buildStatusStyle(
-            m_syscallMap.empty() ? monitorWarningColorHex() : monitorSuccessColorHex()));
+        ks::ui::ApplyStatusRole(m_mapStatusLabel,
+            m_syscallMap.empty() ? ks::ui::StatusRole::Warning : ks::ui::StatusRole::Success);
     }
 
     kLogEvent event;
@@ -1060,7 +1031,7 @@ void DirectKernelCallMonitorWidget::startCapture()
                 if (guardThis->m_statusLabel != nullptr)
                 {
                     guardThis->m_statusLabel->setText(QStringLiteral("● 已停止"));
-                    guardThis->m_statusLabel->setStyleSheet(buildStatusStyle(monitorIdleColorHex()));
+                    ks::ui::ApplyStatusRole(guardThis->m_statusLabel, ks::ui::StatusRole::Idle);
                 }
                 guardThis->updateActionState();
                 guardThis->updateStatusLabel();
@@ -1110,7 +1081,7 @@ void DirectKernelCallMonitorWidget::startCapture()
                 guardThis->m_captureRunning.store(false);
                 guardThis->m_capturePaused.store(false);
                 guardThis->m_statusLabel->setText(QStringLiteral("● StartTrace失败:%1").arg(startStatus));
-                guardThis->m_statusLabel->setStyleSheet(buildStatusStyle(monitorErrorColorHex()));
+                ks::ui::ApplyStatusRole(guardThis->m_statusLabel, ks::ui::StatusRole::Error);
                 guardThis->updateActionState();
                 kPro.set(guardThis->m_captureProgressPid, "System Syscall 会话启动失败", 0, 100.0f);
             }, Qt::QueuedConnection);
@@ -1154,7 +1125,7 @@ void DirectKernelCallMonitorWidget::startCapture()
                 guardThis->m_captureRunning.store(false);
                 guardThis->m_capturePaused.store(false);
                 guardThis->m_statusLabel->setText(QStringLiteral("● OpenTrace失败:%1").arg(lastError));
-                guardThis->m_statusLabel->setStyleSheet(buildStatusStyle(monitorErrorColorHex()));
+                ks::ui::ApplyStatusRole(guardThis->m_statusLabel, ks::ui::StatusRole::Error);
                 guardThis->updateActionState();
                 kPro.set(guardThis->m_captureProgressPid, "OpenTrace 失败", 0, 100.0f);
             }, Qt::QueuedConnection);
@@ -1214,12 +1185,12 @@ void DirectKernelCallMonitorWidget::startCapture()
             if (processStatus == ERROR_SUCCESS)
             {
                 guardThis->m_statusLabel->setText(QStringLiteral("● 已停止"));
-                guardThis->m_statusLabel->setStyleSheet(buildStatusStyle(monitorIdleColorHex()));
+                ks::ui::ApplyStatusRole(guardThis->m_statusLabel, ks::ui::StatusRole::Idle);
             }
             else
             {
                 guardThis->m_statusLabel->setText(QStringLiteral("● ProcessTrace结束:%1").arg(processStatus));
-                guardThis->m_statusLabel->setStyleSheet(buildStatusStyle(monitorWarningColorHex()));
+                ks::ui::ApplyStatusRole(guardThis->m_statusLabel, ks::ui::StatusRole::Warning);
             }
             guardThis->updateActionState();
             guardThis->updateStatusLabel();
@@ -1298,7 +1269,7 @@ void DirectKernelCallMonitorWidget::stopCaptureInternal(bool waitForThread)
     if (m_statusLabel != nullptr)
     {
         m_statusLabel->setText(QStringLiteral("● 停止中..."));
-        m_statusLabel->setStyleSheet(buildStatusStyle(monitorWarningColorHex()));
+        ks::ui::ApplyStatusRole(m_statusLabel, ks::ui::StatusRole::Warning);
     }
     // 停止按钮不能转移 m_captureThread 的所有权。该线程持有 ETW 的
     // 原始 Context，析构路径需要保留 join 句柄，才能在释放 QWidget 前
@@ -1397,18 +1368,18 @@ void DirectKernelCallMonitorWidget::updateStatusLabel()
         if (m_capturePaused.load())
         {
             m_statusLabel->setText(QStringLiteral("● 已暂停  %1 | 事件=%2").arg(targetText).arg(eventCount));
-            m_statusLabel->setStyleSheet(buildStatusStyle(monitorWarningColorHex()));
+            ks::ui::ApplyStatusRole(m_statusLabel, ks::ui::StatusRole::Warning);
         }
         else
         {
             m_statusLabel->setText(QStringLiteral("● 监听中  %1 | 事件=%2").arg(targetText).arg(eventCount));
-            m_statusLabel->setStyleSheet(buildStatusStyle(monitorInfoColorHex()));
+            ks::ui::ApplyStatusRole(m_statusLabel, ks::ui::StatusRole::Info);
         }
     }
     else
     {
         m_statusLabel->setText(QStringLiteral("● 空闲  事件=%1").arg(eventCount));
-        m_statusLabel->setStyleSheet(buildStatusStyle(monitorIdleColorHex()));
+        ks::ui::ApplyStatusRole(m_statusLabel, ks::ui::StatusRole::Idle);
     }
 }
 
@@ -2099,8 +2070,8 @@ void DirectKernelCallMonitorWidget::applyFilter()
             m_filterStatusLabel->setText(QStringLiteral("筛选结果：%1 / %2")
                 .arg(m_eventTable->rowCount())
                 .arg(m_eventTable->rowCount()));
-            m_filterStatusLabel->setStyleSheet(buildStatusStyle(
-                m_eventTable->rowCount() > 0 ? monitorSuccessColorHex() : monitorIdleColorHex()));
+            ks::ui::ApplyStatusRole(m_filterStatusLabel,
+                m_eventTable->rowCount() > 0 ? ks::ui::StatusRole::Success : ks::ui::StatusRole::Idle);
         }
         return;
     }
@@ -2137,8 +2108,8 @@ void DirectKernelCallMonitorWidget::applyFilter()
     if (m_filterStatusLabel != nullptr)
     {
         m_filterStatusLabel->setText(QStringLiteral("筛选结果：%1 / %2").arg(visibleCount).arg(m_eventTable->rowCount()));
-        m_filterStatusLabel->setStyleSheet(buildStatusStyle(
-            visibleCount > 0 ? monitorSuccessColorHex() : monitorIdleColorHex()));
+        ks::ui::ApplyStatusRole(m_filterStatusLabel,
+            visibleCount > 0 ? ks::ui::StatusRole::Success : ks::ui::StatusRole::Idle);
     }
 }
 

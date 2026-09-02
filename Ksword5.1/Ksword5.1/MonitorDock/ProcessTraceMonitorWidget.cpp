@@ -1,4 +1,5 @@
 #include "ProcessTraceMonitorWidget.h"
+#include "../UI/ThemeStatusRole.h"
 
 // ============================================================
 // ProcessTraceMonitorWidget.cpp
@@ -211,36 +212,6 @@ void ProcessTraceMonitorWidget::refreshCollapseTheme(QWidget* rootWidget)
             buttonPointer->setStyleSheet(collapseHeaderButtonStyle());
         }
     }
-}
-
-QString ProcessTraceMonitorWidget::buildStatusStyle(const QString& colorHex)
-{
-    return QStringLiteral("color:%1;font-weight:600;").arg(colorHex);
-}
-
-QString ProcessTraceMonitorWidget::monitorInfoColorHex()
-{
-    return KswordTheme::InfoColor().name(QColor::HexRgb);
-}
-
-QString ProcessTraceMonitorWidget::monitorSuccessColorHex()
-{
-    return KswordTheme::SuccessColor().name(QColor::HexRgb);
-}
-
-QString ProcessTraceMonitorWidget::monitorWarningColorHex()
-{
-    return KswordTheme::WarningColor().name(QColor::HexRgb);
-}
-
-QString ProcessTraceMonitorWidget::monitorErrorColorHex()
-{
-    return KswordTheme::ErrorColor().name(QColor::HexRgb);
-}
-
-QString ProcessTraceMonitorWidget::monitorIdleColorHex()
-{
-    return KswordTheme::TextSecondaryHex();
 }
 
 QString ProcessTraceMonitorWidget::providerTypeFromName(const QString& providerNameText)
@@ -542,17 +513,17 @@ void ProcessTraceMonitorWidget::updateStatusLabel()
         if (m_capturePaused.load())
         {
             m_statusLabel->setText(QStringLiteral("● 已暂停  %1").arg(summaryText));
-            m_statusLabel->setStyleSheet(buildStatusStyle(monitorWarningColorHex()));
+            ks::ui::ApplyStatusRole(m_statusLabel, ks::ui::StatusRole::Warning);
         }
         else
         {
             m_statusLabel->setText(QStringLiteral("● 监听中  %1").arg(summaryText));
-            m_statusLabel->setStyleSheet(buildStatusStyle(monitorInfoColorHex()));
+            ks::ui::ApplyStatusRole(m_statusLabel, ks::ui::StatusRole::Info);
         }
     }
     else
     {
         m_statusLabel->setText(QStringLiteral("● 空闲  %1").arg(summaryText));
-        m_statusLabel->setStyleSheet(buildStatusStyle(monitorIdleColorHex()));
+        ks::ui::ApplyStatusRole(m_statusLabel, ks::ui::StatusRole::Idle);
     }
 }

@@ -1479,7 +1479,7 @@ namespace
                 label->setText(QStringLiteral("%1：%2").arg(field.label, text));
                 label->setStyleSheet(QStringLiteral("font-weight:600;color:%1;")
                     .arg(tone.isEmpty()
-                        ? QColor(KswordTheme::TextPrimaryHex()).name()
+                        ? KswordTheme::TextPrimaryColorHex()
                         : visualizationToneColor(tone).name()));
             }
         }
@@ -1656,21 +1656,23 @@ namespace
             // 基础样式注入协议：
             // - 外部进程不会继承 Qt palette/QSS，因此以环境变量提供稳定的主题角色；
             // - 插件可以逐步选择消费这些值，不会因为未实现样式协议而无法启动；
-            // - 当前为启动时快照，主题切换后重新打开/重试插件即可获得新值。
+            // - 当前为启动时快照，主题切换后重新打开/重试插件即可获得新值；
+            // - 一律使用 *ColorHex() 静态角色：palette(...) 动态角色只有本进程的 QSS
+            //   解析器认识，传给外部进程会变成无法识别的字面量。
             environment.insert(QStringLiteral("KSWORD_PLUGIN_STYLE_API"), QStringLiteral("1"));
             environment.insert(
                 QStringLiteral("KSWORD_PLUGIN_THEME"),
                 KswordTheme::IsDarkModeEnabled() ? QStringLiteral("dark") : QStringLiteral("light"));
             environment.insert(QStringLiteral("KSWORD_PLUGIN_COLOR_WINDOW"), KswordTheme::WindowColorHex());
-            environment.insert(QStringLiteral("KSWORD_PLUGIN_COLOR_SURFACE"), KswordTheme::SurfaceHex());
-            environment.insert(QStringLiteral("KSWORD_PLUGIN_COLOR_SURFACE_ALT"), KswordTheme::SurfaceAltHex());
-            environment.insert(QStringLiteral("KSWORD_PLUGIN_COLOR_TEXT_PRIMARY"), KswordTheme::TextPrimaryHex());
-            environment.insert(QStringLiteral("KSWORD_PLUGIN_COLOR_TEXT_SECONDARY"), KswordTheme::TextSecondaryHex());
-            environment.insert(QStringLiteral("KSWORD_PLUGIN_COLOR_BORDER"), KswordTheme::BorderHex());
+            environment.insert(QStringLiteral("KSWORD_PLUGIN_COLOR_SURFACE"), KswordTheme::SurfaceColorHex());
+            environment.insert(QStringLiteral("KSWORD_PLUGIN_COLOR_SURFACE_ALT"), KswordTheme::SurfaceAltColorHex());
+            environment.insert(QStringLiteral("KSWORD_PLUGIN_COLOR_TEXT_PRIMARY"), KswordTheme::TextPrimaryColorHex());
+            environment.insert(QStringLiteral("KSWORD_PLUGIN_COLOR_TEXT_SECONDARY"), KswordTheme::TextSecondaryColorHex());
+            environment.insert(QStringLiteral("KSWORD_PLUGIN_COLOR_BORDER"), KswordTheme::BorderColorHex());
             environment.insert(
                 QStringLiteral("KSWORD_PLUGIN_COLOR_ACCENT"),
                 KswordTheme::AccentHex(KswordTheme::AccentRole::Blue));
-            environment.insert(QStringLiteral("KSWORD_PLUGIN_COLOR_ON_ACCENT"), KswordTheme::OnAccentDynamicHex());
+            environment.insert(QStringLiteral("KSWORD_PLUGIN_COLOR_ON_ACCENT"), KswordTheme::OnAccentHex());
             m_process->setProcessEnvironment(environment);
 
             connect(m_process, &QProcess::started, this, [this]() {

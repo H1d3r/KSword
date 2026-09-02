@@ -841,6 +841,12 @@
     <ClCompile Include="UI\SvgThemeIconManager.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="UI\ThemeColorRemap.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\ThemeStatusRole.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="UI\TableColumnAutoFit.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -1869,6 +1875,12 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="UI\SvgThemeIconManager.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="UI\ThemeColorRemap.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="UI\ThemeStatusRole.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="UI\GlobalDialogTheme.h">

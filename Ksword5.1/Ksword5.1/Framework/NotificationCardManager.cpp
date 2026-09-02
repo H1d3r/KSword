@@ -56,7 +56,9 @@ namespace
         case kLogLevel::Warn: return KswordTheme::WarningColor();
         case kLogLevel::Error: return KswordTheme::ErrorColor();
         case kLogLevel::Fatal: return KswordTheme::AccentTextColor(KswordTheme::AccentRole::Red, KswordTheme::BlackColor());
-        default: return QColor(KswordTheme::PrimaryBlueHex);
+        // PrimaryBlueHex 是 "palette(highlight)" 样式表占位符，QColor 解析不出颜色；
+        // 绘制路径必须取真实强调色。
+        default: return KswordTheme::PrimaryAccentColor();
         }
     }
 
@@ -242,18 +244,18 @@ namespace ks::ui
                 m_progressBar->setValue(std::clamp(static_cast<int>(std::lround(taskItem.progress * 100.0f)), 0, 100));
             }
             m_copyText = progressCopyText(taskItem);
-            m_accentColor = QColor(KswordTheme::PrimaryBlueHex);
+            m_accentColor = KswordTheme::PrimaryAccentColor();
             refreshVisuals();
             adjustToContent();
         }
 
         void refreshVisuals()
         {
-            QColor backgroundColor(KswordTheme::SurfaceColorHex());
+            QColor backgroundColor = KswordTheme::SurfaceColor();
             backgroundColor.setAlpha(kCardBackgroundAlpha);
             const QColor accent = m_accentColor.isValid()
                 ? m_accentColor
-                : QColor(KswordTheme::PrimaryBlueHex);
+                : KswordTheme::PrimaryAccentColor();
             m_frame->setStyleSheet(QStringLiteral(
                 "#ksNotificationCardFrame{"
                 "background-color:%1;border:1px solid %2;border-left:4px solid %3;border-radius:8px;"

@@ -324,12 +324,6 @@ private:
     static QString collapsePanelStyle();
     static QString collapseHeaderButtonStyle();
     static void refreshCollapseTheme(QWidget* rootWidget);
-    static QString buildStatusStyle(const QString& colorHex);
-    static QString monitorInfoColorHex();
-    static QString monitorSuccessColorHex();
-    static QString monitorWarningColorHex();
-    static QString monitorErrorColorHex();
-    static QString monitorIdleColorHex();
     static QString providerTypeFromName(const QString& providerNameText);
     static QString now100nsText();
     static std::uint64_t currentSystemTime100ns();

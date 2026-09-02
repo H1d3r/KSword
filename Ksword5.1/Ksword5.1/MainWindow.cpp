@@ -101,6 +101,7 @@
 #include "UI/WindowChrome.h"
 #include "UI/SvgThemeIconManager.h"
 #include "UI/SmoothScrollSupport.h"
+#include "UI/ThemeColorRemap.h"
 #include "UI/ThemedMessageBox.h"
 #include "theme.h"
 #include "ksword/process/process.h"
@@ -4178,9 +4179,14 @@ namespace
         const QString backgroundColor = activeState
             ? KswordTheme::PrimaryBlueHex
             : KswordTheme::SurfaceHex();
+        // 非激活态是「中性底 + 强调色字」。这里不能直接用 PrimaryBlueHex：
+        // 用户把强调色设成亮黄、亮绿时，它在浅色 Surface 上几乎看不见。
+        // AccentTextColor 会保持色相、只调亮度到对 Surface 达标为止。
         const QString textColor = activeState
             ? KswordTheme::OnAccentHex()
-            : (KswordTheme::IsDarkModeEnabled() ? KswordTheme::TextPrimaryHex() : KswordTheme::PrimaryBlueHex);
+            : (KswordTheme::IsDarkModeEnabled()
+                ? KswordTheme::TextPrimaryHex()
+                : KswordTheme::AccentButtonTextHex());
         const QString hoverColor = activeState
             ? KswordTheme::PrimaryBlueSolidHoverHex()
             : KswordTheme::PrimaryBlueSolidHoverHex();
@@ -4220,9 +4226,10 @@ namespace
         const QString backgroundColor = activeState
             ? KswordTheme::PrimaryBlueHex
             : KswordTheme::SurfaceHex();
+        // 同上：非激活态的强调色文字必须先对 Surface 校准，否则高亮度强调色会糊在底上。
         const QString textColor = activeState
             ? adaptiveTextColor
-            : KswordTheme::PrimaryBlueHex;
+            : KswordTheme::AccentButtonTextHex();
         const QString hoverColor = activeState
             ? KswordTheme::PrimaryBlueSolidHoverHex()
             : KswordTheme::PrimaryBlueSubtleHex();
@@ -9287,7 +9294,9 @@ bool MainWindow::showUnsignedDriverFailureDialog(
         "  background:%4;"
         "}")
         .arg(KswordTheme::SurfaceHex())
-        .arg(KswordTheme::PrimaryBlueHex)
+        // 文字色在 hover/pressed 时不变，底色却一路走到强调色混合底；
+        // 直接用 PrimaryBlueHex 会让高亮度强调色下的按钮文字贴到底色上。
+        .arg(KswordTheme::AccentButtonTextHex())
         .arg(KswordTheme::PrimaryBlueSubtleHex())
         .arg(KswordTheme::ThemeColorName(KswordTheme::PrimaryBlueSurfacePressedColor())));
     rootLayout->addWidget(enableTestModeButton);
@@ -11552,18 +11561,28 @@ void MainWindow::applyAppearanceSettings(
         || previousSettings.customMainBackgroundColor.compare(
             settings.customMainBackgroundColor,
             Qt::CaseInsensitive) != 0;
-    // 必须在读取任一 AccentColor 前更新种子，确保调色板、QSS 与绘制控件使用同一主题色。
-    KswordTheme::SetPrimaryAccentColor(settings.customThemeColor);
-    // 主背景使用独立种子，不参与强调色偏移；空值继续跟随当前深浅主题。
-    KswordTheme::SetMainBackgroundColor(settings.customMainBackgroundColor);
     // 系统颜色方案通知已抵达时，previousSettings 再计算会得到新颜色方案；
     // 直接读取主题模块当前状态，才能识别 FollowSystem 的真实深浅色切换。
+    // 该判断必须留在更新主题种子之前：种子只影响颜色，不影响深浅标志，
+    // 但快照采集依赖它，提前求值才能拿到“换色前”的主题状态。
     const bool effectiveThemeChanged =
         isInitialAppearanceApply || KswordTheme::IsDarkModeEnabled() != darkModeEnabled;
     // themeVisualRefreshRequired 用途：作为所有专用主题控件的唯一重建条件。
     // 深浅主题、强调色或独立主背景色任一变化，都必须进入同一刷新入口。
     const bool themeVisualRefreshRequired =
         effectiveThemeChanged || themeColorChanged || mainBackgroundColorChanged;
+    // staleThemeColorSnapshot 用途：记录换种子之前全部静态主题角色的取值。
+    // 页面构造期写进 styleSheet 的 *ColorHex()/AccentHex()/语义色都是当场固化的
+    // #RRGGBB，主题种子变化后不会自行更新；快照给出“旧值 -> 新值”的重写依据。
+    // 首次应用时还没有存量控件，采集只会浪费时间。
+    const ks::ui::ThemeColorSnapshot staleThemeColorSnapshot =
+        (!isInitialAppearanceApply && themeVisualRefreshRequired)
+        ? ks::ui::CaptureThemeColorSnapshot()
+        : ks::ui::ThemeColorSnapshot();
+    // 必须在读取任一 AccentColor 前更新种子，确保调色板、QSS 与绘制控件使用同一主题色。
+    KswordTheme::SetPrimaryAccentColor(settings.customThemeColor);
+    // 主背景使用独立种子，不参与强调色偏移；空值继续跟随当前深浅主题。
+    KswordTheme::SetMainBackgroundColor(settings.customMainBackgroundColor);
     const bool backgroundPathChanged =
         isInitialAppearanceApply
         || previousSettings.backgroundImagePath.compare(
@@ -11670,6 +11689,7 @@ void MainWindow::applyAppearanceSettings(
     int globalAppStyleLength = 0;
     qint64 styleSheetApplyElapsedMs = 0;
     ks::ui::SvgThemeIconApplyResult svgThemeIconApplyResult;
+    ks::ui::ThemeColorRemapResult themeColorRemapResult;
     bool globalAppStyleChanged = false;
     bool mainStyleSheetChanged = false;
 
@@ -11891,6 +11911,25 @@ void MainWindow::applyAppearanceSettings(
     {
         refreshThemeDependentVisuals(darkModeEnabled);
 
+        // 专用刷新入口只覆盖少数几个自带 refreshThemeVisuals 的面板；其余页面把静态
+        // 主题色固化在自己的 styleSheet 里，而控件自身样式表优先级高于全局 QSS。
+        // 这里按快照统一重写存量样式表，把它们一并拉回当前主题。
+        // 必须排在各面板主动重建之后，避免刚重建好的新色又被扫描一遍做无用功。
+        themeColorRemapResult = ks::ui::RemapStaleThemeColors(staleThemeColorSnapshot);
+        if (themeColorRemapResult.rewrittenWidgetCount > 0
+            || themeColorRemapResult.rewrittenPaletteWidgetCount > 0
+            || themeColorRemapResult.ambiguousColorCount > 0)
+        {
+            dbg << appearanceApplyEvent
+                << "[MainWindow] 存量样式表主题色重映射"
+                << ", mappedColors=" << themeColorRemapResult.mappedColorCount
+                << ", ambiguousColors=" << themeColorRemapResult.ambiguousColorCount
+                << ", inspectedWidgets=" << themeColorRemapResult.inspectedWidgetCount
+                << ", rewrittenWidgets=" << themeColorRemapResult.rewrittenWidgetCount
+                << ", rewrittenPalettes=" << themeColorRemapResult.rewrittenPaletteWidgetCount
+                << eol;
+        }
+
         runtimeProgress.update(
             88,
             QStringLiteral("main.runtime_appearance.progress.svg_icons"),
@@ -11987,6 +12026,12 @@ void MainWindow::applyAppearanceSettings(
         << (svgThemeIconApplyResult.skippedDefaultTheme ? "true" : "false")
         << ", svgIconElapsedMs="
         << svgThemeIconApplyResult.elapsedMilliseconds
+        << ", styleRemapWidgets="
+        << themeColorRemapResult.rewrittenWidgetCount
+        << ", styleRemapPalettes="
+        << themeColorRemapResult.rewrittenPaletteWidgetCount
+        << ", styleRemapAmbiguous="
+        << themeColorRemapResult.ambiguousColorCount
         << "，styleElapsedMs="
         << styleSheetApplyElapsedMs
         << "，elapsedMs="

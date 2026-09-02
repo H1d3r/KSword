@@ -195,7 +195,7 @@ namespace process_detail_window_internal
             "QWidget#ProcessDetailWindowRoot QScrollBar::sub-page{"
             "  background:%4;"
             "}")
-            .arg(KswordTheme::WindowColorHex())
+            .arg(KswordTheme::MainBackgroundHex())
             .arg(KswordTheme::TextPrimaryHex())
             .arg(KswordTheme::BorderHex())
             .arg(KswordTheme::SurfaceHex())

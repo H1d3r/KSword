@@ -1,5 +1,6 @@
 #include "WinAPIDock.h"
 #include "../UI/VisibleTableWidget.h"
+#include "../UI/ThemeStatusRole.h"
 #include "../theme.h"
 
 // ============================================================
@@ -116,7 +117,8 @@ void WinAPIDock::initializeUi()
     processPanelLayout->setSpacing(8);
 
     QLabel* const processTitleLabel = new QLabel(QStringLiteral("目标进程"), m_processPanel);
-    processTitleLabel->setStyleSheet(buildStatusStyle(KswordTheme::PrimaryBlueHex));
+    processTitleLabel->setStyleSheet(
+        QStringLiteral("color:%1;font-weight:600;").arg(KswordTheme::PrimaryBlueHex));
 
     m_processIconLabel = new QLabel(m_processPanel);
     m_processIconLabel->setFixedSize(24, 24);
@@ -153,7 +155,7 @@ void WinAPIDock::initializeUi()
     m_processRefreshButton->setStyleSheet(blueButtonStyle());
 
     m_processStatusLabel = new QLabel(QStringLiteral("● 输入进程名或刷新候选列表"), m_processPanel);
-    m_processStatusLabel->setStyleSheet(buildStatusStyle(monitorIdleColorHex()));
+    ks::ui::ApplyStatusRole(m_processStatusLabel, ks::ui::StatusRole::Idle);
 
     processPanelLayout->addWidget(processTitleLabel, 0);
     processPanelLayout->addWidget(m_processIconLabel, 0);
@@ -176,7 +178,7 @@ void WinAPIDock::initializeUi()
         createSectionTitle(
             QStringLiteral("WinAPI Agent 会话"),
             m_sessionPanel,
-            buildStatusStyle(KswordTheme::PrimaryBlueHex)),
+            QStringLiteral("color:%1;font-weight:600;").arg(KswordTheme::PrimaryBlueHex)),
         0);
 
     QHBoxLayout* const sessionConfigurationColumnsLayout = new QHBoxLayout();
@@ -342,7 +344,7 @@ void WinAPIDock::initializeUi()
     sessionPanelLayout->addLayout(sessionButtonLayout);
 
     m_sessionStatusLabel = new QLabel(QStringLiteral("● 空闲"), m_sessionPanel);
-    m_sessionStatusLabel->setStyleSheet(buildStatusStyle(monitorIdleColorHex()));
+    ks::ui::ApplyStatusRole(m_sessionStatusLabel, ks::ui::StatusRole::Idle);
     sessionPanelLayout->addWidget(m_sessionStatusLabel, 0);
     sessionPanelLayout->addStretch(1);
 
@@ -355,7 +357,7 @@ void WinAPIDock::initializeUi()
         createSectionTitle(
             QStringLiteral("Fake Success（命中 API 直接伪返回）"),
             fakeSuccessPanel,
-            buildStatusStyle(KswordTheme::PrimaryBlueHex)),
+            QStringLiteral("color:%1;font-weight:600;").arg(KswordTheme::PrimaryBlueHex)),
         0);
 
     QFormLayout* const fakeFormLayout = new QFormLayout();
@@ -462,7 +464,7 @@ void WinAPIDock::initializeUi()
     fakeSuccessLayout->addWidget(m_fakeRuleTable, 0);
 
     m_fakeRuleStatusLabel = new QLabel(QStringLiteral("规则：0 条；启动会话时应用。"), fakeSuccessPanel);
-    m_fakeRuleStatusLabel->setStyleSheet(buildStatusStyle(monitorIdleColorHex()));
+    ks::ui::ApplyStatusRole(m_fakeRuleStatusLabel, ks::ui::StatusRole::Idle);
     fakeSuccessLayout->addWidget(m_fakeRuleStatusLabel, 0);
     fakeSuccessLayout->addStretch(1);
 
@@ -492,7 +494,7 @@ void WinAPIDock::initializeUi()
     m_eventKeepBottomCheck->setToolTip(QStringLiteral("新事件到来时自动滚动到最底部。"));
 
     m_eventFilterStatusLabel = new QLabel(QStringLiteral("筛选结果：0 / 0"), m_filterPanel);
-    m_eventFilterStatusLabel->setStyleSheet(buildStatusStyle(monitorIdleColorHex()));
+    ks::ui::ApplyStatusRole(m_eventFilterStatusLabel, ks::ui::StatusRole::Idle);
 
     filterLayout->addWidget(m_eventFilterEdit, 1);
     filterLayout->addWidget(m_eventFilterClearButton, 0);

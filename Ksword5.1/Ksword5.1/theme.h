@@ -272,9 +272,129 @@ namespace KswordTheme
             : blackColor;
     }
 
+    // EnsureTextContrastForBackgrounds 作用：让同一个前景色对多个候选背景同时可读。
+    // 只对一种表面校准是不够的：同一个文字角色会落在窗口底、面板底、交替行底和
+    // 静音底上，这些表面亮度并不相同，只满足其中一个时，在别的表面上就会糊成一片。
+    // 处理：先看原色是否已经满足全部背景；不满足时保持色相，沿 HSL 亮度逐档搜索，
+    //       取第一个对所有背景都达标的值；两个方向都失败时退回黑白里更稳的一个。
+    inline QColor EnsureTextContrastForBackgrounds(
+        const QColor& preferredColor,
+        const QColor* backgroundColors,
+        const int backgroundCount,
+        const double minimumRatio = 4.5)
+    {
+        if (backgroundColors == nullptr || backgroundCount <= 0)
+        {
+            return preferredColor;
+        }
+
+        const auto satisfiesAll = [&](const QColor& candidateColor) {
+            for (int index = 0; index < backgroundCount; ++index)
+            {
+                if (ContrastRatio(candidateColor, backgroundColors[index]) < minimumRatio)
+                {
+                    return false;
+                }
+            }
+            return true;
+        };
+
+        QColor candidate = preferredColor;
+        candidate.setAlpha(255);
+        if (satisfiesAll(candidate))
+        {
+            return candidate;
+        }
+
+        int hue = -1;
+        int saturation = 0;
+        int lightness = 0;
+        int alpha = 255;
+        candidate.getHsl(&hue, &saturation, &lightness, &alpha);
+
+        // 背景族整体偏暗就往亮处找，偏亮就往暗处找；取平均亮度判断方向。
+        double luminanceSum = 0.0;
+        for (int index = 0; index < backgroundCount; ++index)
+        {
+            luminanceSum += RelativeLuminance(backgroundColors[index]);
+        }
+        const bool shouldLighten = (luminanceSum / backgroundCount) < 0.5;
+
+        const auto findAdjustedColor = [&](const bool lighten) -> QColor {
+            for (int lightnessOffset = 4; lightnessOffset <= 255; lightnessOffset += 4)
+            {
+                QColor adjustedColor = candidate;
+                const int adjustedLightness = lighten
+                    ? qMin(255, lightness + lightnessOffset)
+                    : qMax(0, lightness - lightnessOffset);
+                adjustedColor.setHsl(hue, saturation, adjustedLightness, 255);
+                if (satisfiesAll(adjustedColor))
+                {
+                    return adjustedColor;
+                }
+            }
+            return QColor();
+        };
+
+        const QColor preferredDirectionColor = findAdjustedColor(shouldLighten);
+        if (preferredDirectionColor.isValid())
+        {
+            return preferredDirectionColor;
+        }
+        const QColor oppositeDirectionColor = findAdjustedColor(!shouldLighten);
+        if (oppositeDirectionColor.isValid())
+        {
+            return oppositeDirectionColor;
+        }
+
+        // 没有任何同色相亮度能同时满足全部背景（背景族本身跨度过大时会这样），
+        // 退回黑白里“最差那一档更好”的一个，保证不出现完全糊掉的组合。
+        const auto worstRatio = [&](const QColor& candidateColor) {
+            double worst = 1000.0;
+            for (int index = 0; index < backgroundCount; ++index)
+            {
+                worst = qMin(worst, ContrastRatio(candidateColor, backgroundColors[index]));
+            }
+            return worst;
+        };
+        return worstRatio(WhiteColor()) >= worstRatio(BlackColor()) ? WhiteColor() : BlackColor();
+    }
+
     // ==============================
     // Theme state and neutral surfaces
     // ==============================
+
+    // ==============================
+    // Theme seed generation and per-role cache
+    // ==============================
+
+    // ThemeSeedGeneration 作用：深浅模式、强调色、主背景三个种子每变一次就自增。
+    // 自定义主题下的角色求值要在多个背景之间做亮度搜索，单次可达十几微秒；而这些
+    // 角色会在 paintEvent 和 item delegate 里被逐帧逐行调用。缓存以此计数器失效，
+    // 换主题后立刻重算，平时直接命中。
+    inline quint64 ThemeSeedGeneration = 1;
+
+    inline void InvalidateThemeColorCache()
+    {
+        ++ThemeSeedGeneration;
+    }
+
+    // CachedThemeColor 作用：把一个角色的求值结果存进调用方给的槽位。
+    // 槽位是该角色专属的 static thread_local 变量：thread_local 让后台线程
+    // （日志、导出）各持一份，不必加锁，也不会读到别的线程算到一半的值。
+    template <typename ComputeFunction>
+    inline QColor CachedThemeColor(
+        QColor& cachedColor,
+        quint64& cachedGeneration,
+        ComputeFunction computeFunction)
+    {
+        if (cachedGeneration != ThemeSeedGeneration || !cachedColor.isValid())
+        {
+            cachedColor = computeFunction();
+            cachedGeneration = ThemeSeedGeneration;
+        }
+        return cachedColor;
+    }
 
     inline const char* DarkModePropertyKey = "ksword_dark_mode_enabled";
 
@@ -284,6 +404,7 @@ namespace KswordTheme
         {
             qApp->setProperty(DarkModePropertyKey, enabled);
         }
+        InvalidateThemeColorCache();
     }
 
     inline bool IsDarkModeEnabled()
@@ -415,13 +536,21 @@ namespace KswordTheme
         CustomMainBackgroundColor = requestedColor.isValid()
             ? requestedColor.toRgb()
             : QColor();
+        InvalidateThemeColorCache();
     }
 
-    inline QColor MainBackgroundColor()
+    inline QColor ComputeMainBackgroundColor()
     {
         return CustomMainBackgroundColor.isValid()
             ? CustomMainBackgroundColor
             : DefaultMainBackgroundColor(IsDarkModeEnabled());
+    }
+
+    inline QColor MainBackgroundColor()
+    {
+        static thread_local QColor cachedColor;
+        static thread_local quint64 cachedGeneration = 0;
+        return CachedThemeColor(cachedColor, cachedGeneration, &ComputeMainBackgroundColor);
     }
 
     inline QColor WindowColor()
@@ -448,63 +577,161 @@ namespace KswordTheme
             });
     }
 
-    inline QColor SurfaceColor()
+    inline QColor ComputeSurfaceColor()
     {
         return RebasedNeutralRoleColor(DefaultSurfaceColor(IsDarkModeEnabled()));
     }
 
-    inline QColor SurfaceAltColor()
+    inline QColor SurfaceColor()
+    {
+        static thread_local QColor cachedColor;
+        static thread_local quint64 cachedGeneration = 0;
+        return CachedThemeColor(cachedColor, cachedGeneration, &ComputeSurfaceColor);
+    }
+
+    inline QColor ComputeSurfaceAltColor()
     {
         return RebasedNeutralRoleColor(DefaultSurfaceAltColor(IsDarkModeEnabled()));
     }
 
-    inline QColor SurfaceMutedColor()
+    inline QColor SurfaceAltColor()
+    {
+        static thread_local QColor cachedColor;
+        static thread_local quint64 cachedGeneration = 0;
+        return CachedThemeColor(cachedColor, cachedGeneration, &ComputeSurfaceAltColor);
+    }
+
+    inline QColor ComputeSurfaceMutedColor()
     {
         return RebasedNeutralRoleColor(DefaultSurfaceMutedColor(IsDarkModeEnabled()));
     }
 
-    inline QColor BorderColor()
+    inline QColor SurfaceMutedColor()
+    {
+        static thread_local QColor cachedColor;
+        static thread_local quint64 cachedGeneration = 0;
+        return CachedThemeColor(cachedColor, cachedGeneration, &ComputeSurfaceMutedColor);
+    }
+
+    inline QColor ComputeBorderColor()
     {
         return RebasedNeutralRoleColor(DefaultBorderColor(IsDarkModeEnabled()));
     }
 
-    inline QColor BorderStrongColor()
+    inline QColor BorderColor()
+    {
+        static thread_local QColor cachedColor;
+        static thread_local quint64 cachedGeneration = 0;
+        return CachedThemeColor(cachedColor, cachedGeneration, &ComputeBorderColor);
+    }
+
+    inline QColor ComputeBorderStrongColor()
     {
         return RebasedNeutralRoleColor(DefaultBorderStrongColor(IsDarkModeEnabled()));
     }
 
-    inline QColor PaletteDarkColor()
+    inline QColor BorderStrongColor()
+    {
+        static thread_local QColor cachedColor;
+        static thread_local quint64 cachedGeneration = 0;
+        return CachedThemeColor(cachedColor, cachedGeneration, &ComputeBorderStrongColor);
+    }
+
+    inline QColor ComputePaletteDarkColor()
     {
         return RebasedNeutralRoleColor(DefaultPaletteDarkColor(IsDarkModeEnabled()));
     }
 
-    inline QColor TextPrimaryColor()
+    inline QColor PaletteDarkColor()
+    {
+        static thread_local QColor cachedColor;
+        static thread_local quint64 cachedGeneration = 0;
+        return CachedThemeColor(cachedColor, cachedGeneration, &ComputePaletteDarkColor);
+    }
+
+    // NeutralSurfaceFamily 作用：列出通用文字角色真实会落到的四种中性表面。
+    // 文字只对 SurfaceColor 校准时，自定义主背景一旦把 SurfaceAlt / SurfaceMuted
+    // 推到别的亮度档，同一段文字在按钮、交替行和静音底上就会贴到背景里。
+    // 出参写入调用方数组，返回有效元素个数，避免在 header 里引入容器依赖。
+    inline int NeutralSurfaceFamily(QColor* surfaceBuffer)
+    {
+        surfaceBuffer[0] = MainBackgroundColor();
+        surfaceBuffer[1] = SurfaceColor();
+        surfaceBuffer[2] = SurfaceAltColor();
+        surfaceBuffer[3] = SurfaceMutedColor();
+        return 4;
+    }
+
+    // 以下三个角色只在用户自定义主背景时才做对比度校准：内置调色板的取值经过
+    // 人工调校，默认主题必须保持原像素，不能被自动校准改动。
+    inline QColor ComputeTextPrimaryColor()
     {
         const QColor defaultTextColor = DefaultTextPrimaryColor(IsDarkModeEnabled());
-        return CustomMainBackgroundColor.isValid()
-            ? EnsureTextContrast(defaultTextColor, SurfaceColor())
-            : defaultTextColor;
+        if (!CustomMainBackgroundColor.isValid())
+        {
+            return defaultTextColor;
+        }
+        QColor surfaceBuffer[4];
+        const int surfaceCount = NeutralSurfaceFamily(surfaceBuffer);
+        return EnsureTextContrastForBackgrounds(defaultTextColor, surfaceBuffer, surfaceCount);
+    }
+
+    inline QColor TextPrimaryColor()
+    {
+        static thread_local QColor cachedColor;
+        static thread_local quint64 cachedGeneration = 0;
+        return CachedThemeColor(cachedColor, cachedGeneration, &ComputeTextPrimaryColor);
+    }
+
+    inline QColor ComputeTextSecondaryColor()
+    {
+        const QColor defaultTextColor = DefaultTextSecondaryColor(IsDarkModeEnabled());
+        if (!CustomMainBackgroundColor.isValid())
+        {
+            return defaultTextColor;
+        }
+        QColor surfaceBuffer[4];
+        const int surfaceCount = NeutralSurfaceFamily(surfaceBuffer);
+        return EnsureTextContrastForBackgrounds(defaultTextColor, surfaceBuffer, surfaceCount);
     }
 
     inline QColor TextSecondaryColor()
     {
-        const QColor defaultTextColor = DefaultTextSecondaryColor(IsDarkModeEnabled());
-        return CustomMainBackgroundColor.isValid()
-            ? EnsureTextContrast(defaultTextColor, SurfaceColor())
-            : defaultTextColor;
+        static thread_local QColor cachedColor;
+        static thread_local quint64 cachedGeneration = 0;
+        return CachedThemeColor(cachedColor, cachedGeneration, &ComputeTextSecondaryColor);
+    }
+
+    inline QColor ComputeTextDisabledColor()
+    {
+        const QColor defaultTextColor = DefaultTextDisabledColor(IsDarkModeEnabled());
+        if (!CustomMainBackgroundColor.isValid())
+        {
+            return defaultTextColor;
+        }
+        QColor surfaceBuffer[4];
+        const int surfaceCount = NeutralSurfaceFamily(surfaceBuffer);
+        // 禁用文字属于非关键信息，按 WCAG 图形/大字档 3.0 判定。
+        return EnsureTextContrastForBackgrounds(defaultTextColor, surfaceBuffer, surfaceCount, 3.0);
     }
 
     inline QColor TextDisabledColor()
     {
-        const QColor defaultTextColor = DefaultTextDisabledColor(IsDarkModeEnabled());
-        return CustomMainBackgroundColor.isValid()
-            ? EnsureTextContrast(defaultTextColor, SurfaceColor(), 3.0)
-            : defaultTextColor;
+        static thread_local QColor cachedColor;
+        static thread_local quint64 cachedGeneration = 0;
+        return CachedThemeColor(cachedColor, cachedGeneration, &ComputeTextDisabledColor);
+    }
+
+    inline QColor ComputeMainBackgroundTextColor()
+    {
+        return EnsureTextContrast(TextPrimaryColor(), MainBackgroundColor());
     }
 
     inline QColor MainBackgroundTextColor()
     {
-        return EnsureTextContrast(TextPrimaryColor(), MainBackgroundColor());
+        static thread_local QColor cachedColor;
+        static thread_local quint64 cachedGeneration = 0;
+        return CachedThemeColor(cachedColor, cachedGeneration, &ComputeMainBackgroundTextColor);
     }
 
     inline QString WindowColorHex() { return ThemeColorName(WindowColor()); }
@@ -560,6 +787,7 @@ namespace KswordTheme
         PrimaryBlueColor = requestedColor.isValid()
             ? requestedColor.toRgb()
             : DefaultPrimaryAccentColor();
+        InvalidateThemeColorCache();
     }
 
     inline QColor AccentSeed(const AccentRole role)
@@ -624,10 +852,85 @@ namespace KswordTheme
         return ThemeColorName(AccentColor(role));
     }
 
-    inline QColor SuccessColor() { return AccentTextColor(AccentRole::Green); }
-    inline QColor WarningColor() { return AccentTextColor(AccentRole::Orange); }
-    inline QColor ErrorColor() { return AccentTextColor(AccentRole::Red); }
-    inline QColor InfoColor() { return AccentTextColor(AccentRole::Blue); }
+    inline QColor ComputeSuccessBackgroundColor();
+    inline QColor ComputeWarningBackgroundColor();
+    inline QColor ComputeErrorBackgroundColor();
+
+    // SemanticTextColor 作用：语义文字色必须同时在中性表面和自己的语义底色上可读。
+    // 只对 SurfaceColor 校准时，同一个「成功绿」放到交替行底或成功底色上就会发灰。
+    // semanticBackground 无效表示该语义没有专用底色，只校准中性表面族。
+    // 默认调色板经过人工调校，不做自动校准，避免改动内置主题的既有像素。
+    inline QColor SemanticTextColor(const AccentRole role, const QColor& semanticBackground)
+    {
+        const QColor preferredColor = AccentColor(role);
+        if (!CustomMainBackgroundColor.isValid())
+        {
+            return EnsureTextContrast(preferredColor, SurfaceColor());
+        }
+
+        QColor backgroundBuffer[5];
+        int backgroundCount = NeutralSurfaceFamily(backgroundBuffer);
+        if (semanticBackground.isValid())
+        {
+            backgroundBuffer[backgroundCount] = semanticBackground;
+            ++backgroundCount;
+        }
+        return EnsureTextContrastForBackgrounds(preferredColor, backgroundBuffer, backgroundCount);
+    }
+
+    inline QColor ErrorBackgroundColor()
+    {
+        static thread_local QColor cachedColor;
+        static thread_local quint64 cachedGeneration = 0;
+        return CachedThemeColor(cachedColor, cachedGeneration, &ComputeErrorBackgroundColor);
+    }
+
+    inline QColor WarningBackgroundColor()
+    {
+        static thread_local QColor cachedColor;
+        static thread_local quint64 cachedGeneration = 0;
+        return CachedThemeColor(cachedColor, cachedGeneration, &ComputeWarningBackgroundColor);
+    }
+
+    inline QColor SuccessBackgroundColor()
+    {
+        static thread_local QColor cachedColor;
+        static thread_local quint64 cachedGeneration = 0;
+        return CachedThemeColor(cachedColor, cachedGeneration, &ComputeSuccessBackgroundColor);
+    }
+
+    inline QColor ComputeSuccessColor() { return SemanticTextColor(AccentRole::Green, SuccessBackgroundColor()); }
+
+    inline QColor SuccessColor()
+    {
+        static thread_local QColor cachedColor;
+        static thread_local quint64 cachedGeneration = 0;
+        return CachedThemeColor(cachedColor, cachedGeneration, &ComputeSuccessColor);
+    }
+    inline QColor ComputeWarningColor() { return SemanticTextColor(AccentRole::Orange, WarningBackgroundColor()); }
+
+    inline QColor WarningColor()
+    {
+        static thread_local QColor cachedColor;
+        static thread_local quint64 cachedGeneration = 0;
+        return CachedThemeColor(cachedColor, cachedGeneration, &ComputeWarningColor);
+    }
+    inline QColor ComputeErrorColor() { return SemanticTextColor(AccentRole::Red, ErrorBackgroundColor()); }
+
+    inline QColor ErrorColor()
+    {
+        static thread_local QColor cachedColor;
+        static thread_local quint64 cachedGeneration = 0;
+        return CachedThemeColor(cachedColor, cachedGeneration, &ComputeErrorColor);
+    }
+    inline QColor ComputeInfoColor() { return SemanticTextColor(AccentRole::Blue, QColor()); }
+
+    inline QColor InfoColor()
+    {
+        static thread_local QColor cachedColor;
+        static thread_local quint64 cachedGeneration = 0;
+        return CachedThemeColor(cachedColor, cachedGeneration, &ComputeInfoColor);
+    }
     inline QString SuccessHex() { return ThemeColorName(SuccessColor()); }
     inline QString WarningHex() { return ThemeColorName(WarningColor()); }
     inline QString ErrorHex() { return ThemeColorName(ErrorColor()); }
@@ -655,41 +958,157 @@ namespace KswordTheme
         { -8, -42, -1 }
     };
 
-    inline QColor SuccessBackgroundColor()
+    // ReadableStateBackgroundColor 作用：给行/块状态底色兜一道对正文色的对比度。
+    // 这类底色是「SurfaceColor + 固定 RGB 偏移」，自定义主背景把 SurfaceColor 推到
+    // 中等亮度时，加上偏移就会顶到正文色附近。此时必须调底色：正文色可能已经被
+    // 推到接近纯白，再往上调也拉不开距离。默认调色板保持原像素，不做自动校准。
+    // ReadableSurfaceColor 作用：把一个底色推离正文色与禁用文字色，直到两者都可读。
+    //
+    // 这里不能串联两次 EnsureTextContrast：那个函数按「参照色的绝对亮度」决定推向，
+    // 深色主题下禁用文字亮度低于 0.5，它会判定要把底色调亮，正好把上一步调暗的结果
+    // 顶回正文色附近。方向必须由底色与文字的相对亮度决定：底色本来在文字的暗侧，
+    // 就继续往暗侧推，反之亦然。
+    inline QColor ReadableSurfaceColor(const QColor& surfaceColor)
     {
-        return ThemeOffsetColor(SurfaceColor(), SuccessBackgroundOffset);
+        const QColor primaryTextColor = TextPrimaryColor();
+        const QColor disabledTextColor = TextDisabledColor();
+        const auto isReadable = [&](const QColor& candidateColor) {
+            return ContrastRatio(candidateColor, primaryTextColor) >= 4.5
+                && ContrastRatio(candidateColor, disabledTextColor) >= 3.0;
+        };
+
+        QColor candidate = surfaceColor;
+        candidate.setAlpha(255);
+        if (isReadable(candidate))
+        {
+            return candidate;
+        }
+
+        int hue = -1;
+        int saturation = 0;
+        int lightness = 0;
+        int alpha = 255;
+        candidate.getHsl(&hue, &saturation, &lightness, &alpha);
+        const bool shouldDarken =
+            RelativeLuminance(candidate) < RelativeLuminance(primaryTextColor);
+
+        const auto findAdjustedColor = [&](const bool darken) -> QColor {
+            for (int lightnessOffset = 4; lightnessOffset <= 255; lightnessOffset += 4)
+            {
+                QColor adjustedColor = candidate;
+                const int adjustedLightness = darken
+                    ? qMax(0, lightness - lightnessOffset)
+                    : qMin(255, lightness + lightnessOffset);
+                adjustedColor.setHsl(hue, saturation, adjustedLightness, 255);
+                if (isReadable(adjustedColor))
+                {
+                    return adjustedColor;
+                }
+            }
+            return QColor();
+        };
+
+        const QColor preferredDirectionColor = findAdjustedColor(shouldDarken);
+        if (preferredDirectionColor.isValid())
+        {
+            return preferredDirectionColor;
+        }
+        const QColor oppositeDirectionColor = findAdjustedColor(!shouldDarken);
+        if (oppositeDirectionColor.isValid())
+        {
+            return oppositeDirectionColor;
+        }
+
+        // 同色相的任何亮度都无法同时满足两个前景时，退到黑白里更稳的一个。
+        const auto worstRatio = [&](const QColor& candidateColor) {
+            return qMin(
+                ContrastRatio(candidateColor, primaryTextColor),
+                ContrastRatio(candidateColor, disabledTextColor));
+        };
+        return worstRatio(WhiteColor()) >= worstRatio(BlackColor()) ? WhiteColor() : BlackColor();
     }
 
-    inline QColor WarningBackgroundColor()
+    // ReadableStateBackgroundColor 作用：给行/块状态底色兜一道可读性。
+    // 默认调色板保持原像素，只有自定义主背景时才校准。
+    inline QColor ReadableStateBackgroundColor(const QColor& stateBackgroundColor)
     {
-        return ThemeOffsetColor(SurfaceColor(), WarningBackgroundOffset);
+        if (!CustomMainBackgroundColor.isValid())
+        {
+            return stateBackgroundColor;
+        }
+        return ReadableSurfaceColor(stateBackgroundColor);
     }
 
-    inline QColor ErrorBackgroundColor()
+    inline QColor ComputeSuccessBackgroundColor()
     {
-        return ThemeOffsetColor(SurfaceColor(), ErrorBackgroundOffset);
+        return ReadableStateBackgroundColor(
+            ThemeOffsetColor(SurfaceColor(), SuccessBackgroundOffset));
+    }
+
+    inline QColor ComputeWarningBackgroundColor()
+    {
+        return ReadableStateBackgroundColor(
+            ThemeOffsetColor(SurfaceColor(), WarningBackgroundOffset));
+    }
+
+    inline QColor ComputeErrorBackgroundColor()
+    {
+        return ReadableStateBackgroundColor(
+            ThemeOffsetColor(SurfaceColor(), ErrorBackgroundOffset));
+    }
+
+    inline QColor ComputeEditorMatchColor()
+    {
+        return ReadableStateBackgroundColor(
+            ThemeOffsetColor(SurfaceColor(), EditorMatchOffset));
     }
 
     inline QColor EditorMatchColor()
     {
-        return ThemeOffsetColor(SurfaceColor(), EditorMatchOffset);
+        static thread_local QColor cachedColor;
+        static thread_local quint64 cachedGeneration = 0;
+        return CachedThemeColor(cachedColor, cachedGeneration, &ComputeEditorMatchColor);
+    }
+
+    inline QColor ComputeEditorCurrentMatchColor()
+    {
+        return ReadableStateBackgroundColor(
+            ThemeOffsetColor(SurfaceColor(), EditorCurrentMatchOffset));
     }
 
     inline QColor EditorCurrentMatchColor()
     {
-        return ThemeOffsetColor(SurfaceColor(), EditorCurrentMatchOffset);
+        static thread_local QColor cachedColor;
+        static thread_local quint64 cachedGeneration = 0;
+        return CachedThemeColor(cachedColor, cachedGeneration, &ComputeEditorCurrentMatchColor);
     }
 
-    inline QColor EditorSelectionColor()
+    inline QColor ComputeEditorSelectionColor()
     {
         return AccentColor(AccentRole::Blue, -2, -28);
     }
 
+    inline QColor EditorSelectionColor()
+    {
+        static thread_local QColor cachedColor;
+        static thread_local quint64 cachedGeneration = 0;
+        return CachedThemeColor(cachedColor, cachedGeneration, &ComputeEditorSelectionColor);
+    }
+
     // 强调色可能被用户设置成高亮度颜色；选中文字必须根据实际强调色自适应，
     // 不能固定白字，否则亮绿色、黄色等背景上的可读性会明显下降。
+    //
+    // 带参版本用于「底色不是 PrimaryAccentColor 本身」的场合：编辑器选中块、
+    // 括号匹配的错误红底、按钮按下态底色都不等于强调色，套用无参版本会把
+    // 对强调色校准好的前景放到另一种底色上，重新贴成一团。
+    inline QColor OnAccentColor(const QColor& accentBackgroundColor)
+    {
+        return EnsureTextContrast(TextPrimaryColor(), accentBackgroundColor);
+    }
+
     inline QColor OnAccentColor()
     {
-        return EnsureTextContrast(TextPrimaryColor(), PrimaryAccentColor());
+        return OnAccentColor(PrimaryAccentColor());
     }
     inline QString OnAccentHex() { return ThemeColorName(OnAccentColor()); }
 
@@ -706,7 +1125,7 @@ namespace KswordTheme
 
     // 默认主题保留原活动标签像素；自定义任一颜色后以强调色为主，
     // 避免互补色背景与主题色低比例混合成棕灰色。
-    inline QColor ActiveTabBackgroundColor()
+    inline QColor ComputeActiveTabBackgroundColor()
     {
         if (UsesBuiltInColorSeeds())
         {
@@ -715,9 +1134,23 @@ namespace KswordTheme
         return AccentColor(AccentRole::Blue, -18, -26);
     }
 
-    inline QColor ActiveTabTextColor()
+    inline QColor ActiveTabBackgroundColor()
+    {
+        static thread_local QColor cachedColor;
+        static thread_local quint64 cachedGeneration = 0;
+        return CachedThemeColor(cachedColor, cachedGeneration, &ComputeActiveTabBackgroundColor);
+    }
+
+    inline QColor ComputeActiveTabTextColor()
     {
         return EnsureTextContrast(TextPrimaryColor(), ActiveTabBackgroundColor());
+    }
+
+    inline QColor ActiveTabTextColor()
+    {
+        static thread_local QColor cachedColor;
+        static thread_local quint64 cachedGeneration = 0;
+        return CachedThemeColor(cachedColor, cachedGeneration, &ComputeActiveTabTextColor);
     }
 
     inline QString ActiveTabBackgroundHex() { return ThemeColorName(ActiveTabBackgroundColor()); }
@@ -826,16 +1259,29 @@ namespace KswordTheme
         { -41, -19, 0 }
     };
 
-    inline QColor PrimaryBlueSubtleColor()
+    inline QColor ComputePrimaryBlueSubtleColor()
     {
         if (UsesBuiltInColorSeeds())
         {
             return ThemeOffsetColor(SurfaceColor(), DefaultPrimaryBlueSubtleOffset);
         }
-        return BlendColors(
+        // 混合权重必须低：subtle 的语义是「带一点强调色的表面」，不是强调色本身。
+        // 原来的 160/128（63%/50%）会把它推到接近强调色的亮度，正文放上去就糊了；
+        // 46/38（18%/15%）与内置分支 SurfaceColor+(6,28,47) 的观感一致。
+        const QColor blendedColor = BlendColors(
             SurfaceColor(),
             PrimaryAccentColor(),
-            IsDarkModeEnabled() ? 160 : 128);
+            IsDarkModeEnabled() ? 46 : 38);
+        // 再兜一道：高饱和强调色混出的底色仍可能贴近正文色。这里调底色而不是调文字，
+        // 免得为了一个局部背景把全局文字角色拉到极端。
+        return ReadableSurfaceColor(blendedColor);
+    }
+
+    inline QColor PrimaryBlueSubtleColor()
+    {
+        static thread_local QColor cachedColor;
+        static thread_local quint64 cachedGeneration = 0;
+        return CachedThemeColor(cachedColor, cachedGeneration, &ComputePrimaryBlueSubtleColor);
     }
 
     inline QString PrimaryBlueSubtleHex()
@@ -848,31 +1294,78 @@ namespace KswordTheme
         return AccentHex(AccentRole::Blue, 6, -20);
     }
 
-    inline QColor PrimaryBlueSurfacePressedColor()
+    inline QColor ComputePrimaryBlueSurfacePressedColor()
     {
         if (UsesBuiltInColorSeeds())
         {
             return ThemeOffsetColor(SurfaceColor(), DefaultPrimaryBlueSurfacePressedOffset);
         }
-        return BlendColors(
+        // 按下态要比 subtle 更明显，但同样是「表面」而不是强调色实心块：
+        // 原来的 196/170（77%/67%）已经等同强调色，按钮上的文字会和底色贴到一起。
+        const QColor blendedColor = BlendColors(
             SurfaceColor(),
             PrimaryAccentColor(),
-            IsDarkModeEnabled() ? 196 : 170);
+            IsDarkModeEnabled() ? 72 : 60);
+        return ReadableSurfaceColor(blendedColor);
     }
+
+    inline QColor PrimaryBlueSurfacePressedColor()
+    {
+        static thread_local QColor cachedColor;
+        static thread_local quint64 cachedGeneration = 0;
+        return CachedThemeColor(cachedColor, cachedGeneration, &ComputePrimaryBlueSurfacePressedColor);
+    }
+
+    // AccentButtonTextColor 作用：中性底按钮上那种「不填色、只用强调色写字」的按钮文字。
+    // 这类按钮（权限徽章、R0 徽章、测试模式按钮）hover 时底色换成 PrimaryBlueSubtle、
+    // pressed 时换成 PrimaryBlueSurfacePressed，而文字色全程不变，
+    // 只对 SurfaceColor 校准的话，一按下去字就贴到底色里了。
+    inline QColor ComputeAccentButtonTextColor()
+    {
+        QColor backgroundBuffer[3] = {
+            SurfaceColor(),
+            PrimaryBlueSubtleColor(),
+            PrimaryBlueSurfacePressedColor()
+        };
+        return EnsureTextContrastForBackgrounds(AccentColor(AccentRole::Blue), backgroundBuffer, 3);
+    }
+
+    inline QColor AccentButtonTextColor()
+    {
+        static thread_local QColor cachedColor;
+        static thread_local quint64 cachedGeneration = 0;
+        return CachedThemeColor(cachedColor, cachedGeneration, &ComputeAccentButtonTextColor);
+    }
+
+    inline QString AccentButtonTextHex() { return ThemeColorName(AccentButtonTextColor()); }
 
     // 交互控件的边界和状态标记属于非文本信息，至少需要 3:1 对比度。
     // 这些角色专供复选框、单选框、滑块和滚动条使用，不能直接复用普通面板边框。
-    inline QColor ControlOutlineColor()
+    inline QColor ComputeControlOutlineColor()
     {
         return EnsureTextContrast(BorderStrongColor(), SurfaceColor(), 3.0);
     }
 
-    inline QColor ControlAccentColor()
+    inline QColor ControlOutlineColor()
+    {
+        static thread_local QColor cachedColor;
+        static thread_local quint64 cachedGeneration = 0;
+        return CachedThemeColor(cachedColor, cachedGeneration, &ComputeControlOutlineColor);
+    }
+
+    inline QColor ComputeControlAccentColor()
     {
         return EnsureTextContrast(PrimaryAccentColor(), SurfaceColor(), 3.0);
     }
 
-    inline QColor ControlAccentHoverColor()
+    inline QColor ControlAccentColor()
+    {
+        static thread_local QColor cachedColor;
+        static thread_local quint64 cachedGeneration = 0;
+        return CachedThemeColor(cachedColor, cachedGeneration, &ComputeControlAccentColor);
+    }
+
+    inline QColor ComputeControlAccentHoverColor()
     {
         return EnsureTextContrast(
             AccentColor(AccentRole::Blue, 6, -20),
@@ -880,7 +1373,14 @@ namespace KswordTheme
             3.0);
     }
 
-    inline QColor ControlAccentPressedColor()
+    inline QColor ControlAccentHoverColor()
+    {
+        static thread_local QColor cachedColor;
+        static thread_local quint64 cachedGeneration = 0;
+        return CachedThemeColor(cachedColor, cachedGeneration, &ComputeControlAccentHoverColor);
+    }
+
+    inline QColor ComputeControlAccentPressedColor()
     {
         return EnsureTextContrast(
             PrimaryBlueSurfacePressedColor(),
@@ -888,18 +1388,39 @@ namespace KswordTheme
             3.0);
     }
 
-    inline QColor ControlDisabledOutlineColor()
+    inline QColor ControlAccentPressedColor()
+    {
+        static thread_local QColor cachedColor;
+        static thread_local quint64 cachedGeneration = 0;
+        return CachedThemeColor(cachedColor, cachedGeneration, &ComputeControlAccentPressedColor);
+    }
+
+    inline QColor ComputeControlDisabledOutlineColor()
     {
         return EnsureTextContrast(TextDisabledColor(), SurfaceColor(), 3.0);
     }
 
-    inline QColor ControlDisabledFillColor()
+    inline QColor ControlDisabledOutlineColor()
+    {
+        static thread_local QColor cachedColor;
+        static thread_local quint64 cachedGeneration = 0;
+        return CachedThemeColor(cachedColor, cachedGeneration, &ComputeControlDisabledOutlineColor);
+    }
+
+    inline QColor ComputeControlDisabledFillColor()
     {
         const QColor mutedAccentColor = BlendColors(
             SurfaceMutedColor(),
             ControlAccentColor(),
             IsDarkModeEnabled() ? 72 : 56);
         return EnsureTextContrast(mutedAccentColor, SurfaceColor(), 3.0);
+    }
+
+    inline QColor ControlDisabledFillColor()
+    {
+        static thread_local QColor cachedColor;
+        static thread_local quint64 cachedGeneration = 0;
+        return CachedThemeColor(cachedColor, cachedGeneration, &ComputeControlDisabledFillColor);
     }
 
     inline QColor MaximumContrastMonochromeColor(const QColor& backgroundColor)
@@ -917,6 +1438,10 @@ namespace KswordTheme
     inline QString ControlDisabledOutlineHex() { return ThemeColorName(ControlDisabledOutlineColor()); }
     inline QString ControlDisabledFillHex() { return ThemeColorName(ControlDisabledFillColor()); }
 
+    // 以下这组返回的是 QSS 动态调色板角色，不是颜色值。它们只能写进样式表：
+    // QLabel/QTextEdit 的富文本走 QTextDocument，其 CSS 解析器不认 palette(...)
+    // （那是 QSS 专有扩展），整条声明会被忽略、文字退回继承色，而且不报任何错。
+    // 富文本、QPainter 绘制、以及要传给别的进程的颜色，一律改用 *ColorHex()。
     inline QString SurfaceHex() { return QStringLiteral("palette(base)"); }
     inline QString SurfaceAltHex() { return QStringLiteral("palette(alternate-base)"); }
     inline QString BorderHex() { return QStringLiteral("palette(mid)"); }
@@ -927,6 +1452,22 @@ namespace KswordTheme
     // applyAppearanceSettings 把 QPalette::HighlightedText 设成了 OnAccentColor()，两者取值一致；
     // 区别是这个版本跟着主题切换走，适合写进构造期就一次性下发、之后不再重建的 QSS。
     inline QString OnAccentDynamicHex() { return QStringLiteral("palette(highlighted-text)"); }
+
+    // 下面三个角色在 MainWindow::applyAppearanceSettings 里被写进 QApplication 调色板：
+    //   QPalette::Window   = MainBackgroundColor()
+    //   QPalette::WindowText = MainBackgroundTextColor()
+    //   QPalette::Midlight = BorderStrongColor()
+    // 因此这三种颜色本来就能用动态角色表达，取值与对应的 *ColorHex() 完全一致，
+    // 区别只是跟着主题切换走。构造期一次性下发、之后不再重建的 QSS 应当优先用这一组。
+    inline QString MainBackgroundHex() { return QStringLiteral("palette(window)"); }
+    inline QString MainBackgroundTextHex() { return QStringLiteral("palette(window-text)"); }
+    inline QString BorderStrongHex() { return QStringLiteral("palette(midlight)"); }
+
+    // SurfaceMuted 与 TextDisabled 没有对应的动态角色：QSS 的 palette(...) 只能选当前
+    // group 的角色，选不到 disabled group，而剩余空闲角色（light/bright-text/shadow）
+    // 都会被 QStyle 用于原生控件的立体边框绘制，挪作他用会改变非 QSS 控件的外观。
+    // 这两种颜色只能继续用 *ColorHex()，因此使用它们的页面必须自己具备重建入口
+    // （changeEvent 处理 ApplicationPaletteChange，或每次显示时重新生成样式）。
 
     // ControlCornerRadius 作用：统一按钮、组合框本体及组合框 Popup 的外轮廓圆角。
     inline constexpr int ControlCornerRadius = 3;
@@ -1165,9 +1706,17 @@ namespace KswordTheme
     }
 
     inline QColor NewRowBackgroundColor() { return SuccessBackgroundColor(); }
+    inline QColor ComputeExitedRowBackgroundColor()
+    {
+        return ReadableStateBackgroundColor(
+            ThemeOffsetColor(SurfaceColor(), ExitedRowBackgroundOffset));
+    }
+
     inline QColor ExitedRowBackgroundColor()
     {
-        return ThemeOffsetColor(SurfaceColor(), ExitedRowBackgroundOffset);
+        static thread_local QColor cachedColor;
+        static thread_local quint64 cachedGeneration = 0;
+        return CachedThemeColor(cachedColor, cachedGeneration, &ComputeExitedRowBackgroundColor);
     }
     inline QColor ExitedRowForegroundColor() { return TextSecondaryColor(); }
     inline QColor WarningAccentColor() { return WarningColor(); }

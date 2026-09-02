@@ -1,4 +1,5 @@
 #include "WinAPIDock.h"
+#include "../UI/ThemeStatusRole.h"
 
 // ============================================================
 // WinAPIDock.cpp
@@ -95,36 +96,6 @@ QString WinAPIDock::blueHeaderStyle()
         .arg(KswordTheme::PrimaryBlueHex)
         .arg(KswordTheme::SurfaceHex())
         .arg(KswordTheme::BorderHex());
-}
-
-QString WinAPIDock::buildStatusStyle(const QString& colorHex)
-{
-    return QStringLiteral("color:%1;font-weight:600;").arg(colorHex);
-}
-
-QString WinAPIDock::monitorInfoColorHex()
-{
-    return KswordTheme::InfoColor().name(QColor::HexRgb);
-}
-
-QString WinAPIDock::monitorSuccessColorHex()
-{
-    return KswordTheme::SuccessColor().name(QColor::HexRgb);
-}
-
-QString WinAPIDock::monitorWarningColorHex()
-{
-    return KswordTheme::WarningColor().name(QColor::HexRgb);
-}
-
-QString WinAPIDock::monitorErrorColorHex()
-{
-    return KswordTheme::ErrorColor().name(QColor::HexRgb);
-}
-
-QString WinAPIDock::monitorIdleColorHex()
-{
-    return KswordTheme::TextSecondaryHex();
 }
 
 QString WinAPIDock::eventCategoryText(const std::uint32_t categoryValue)
@@ -371,19 +342,19 @@ void WinAPIDock::updateStatusLabel()
         {
             m_sessionStatusLabel->setText(
                 QStringLiteral("● 监控中  PID=%1 | 事件=%2").arg(pidText).arg(eventCount));
-            m_sessionStatusLabel->setStyleSheet(buildStatusStyle(monitorInfoColorHex()));
+            ks::ui::ApplyStatusRole(m_sessionStatusLabel, ks::ui::StatusRole::Info);
         }
         else
         {
             m_sessionStatusLabel->setText(
                 QStringLiteral("● 等待 Agent 连接  PID=%1 | 事件=%2").arg(pidText).arg(eventCount));
-            m_sessionStatusLabel->setStyleSheet(buildStatusStyle(monitorWarningColorHex()));
+            ks::ui::ApplyStatusRole(m_sessionStatusLabel, ks::ui::StatusRole::Warning);
         }
     }
     else
     {
         m_sessionStatusLabel->setText(
             QStringLiteral("● 空闲  PID=%1 | 事件=%2").arg(pidText).arg(eventCount));
-        m_sessionStatusLabel->setStyleSheet(buildStatusStyle(monitorIdleColorHex()));
+        ks::ui::ApplyStatusRole(m_sessionStatusLabel, ks::ui::StatusRole::Idle);
     }
 }

@@ -8183,9 +8183,13 @@ void HardwareDock::updateTaskManagerDetailLabels(
                     "<span style=\"color:%1;font-size:13px;\">%2</span><br/>"
                     "<span style=\"color:%3;font-size:%4px;font-weight:400;\">%5</span>"
                     "</td>")
-                    .arg(KswordTheme::TextSecondaryHex())
+                    // 这里是 QLabel 富文本，不是 QSS：QTextDocument 的 CSS 解析器不认
+                    // palette(...)（那是 QSS 专有扩展），动态角色会被整条忽略、颜色退回继承色。
+                    // 富文本一律用 *ColorHex() 求出具体色；本单元格每轮采样都会重新生成，
+                    // 主题切换后下一次刷新即跟随。
+                    .arg(KswordTheme::TextSecondaryColorHex())
                     .arg(labelText.toHtmlEscaped())
-                    .arg(KswordTheme::TextPrimaryHex())
+                    .arg(KswordTheme::TextPrimaryColorHex())
                     .arg(valueFontSize)
                     .arg(valueText.toHtmlEscaped());
             };

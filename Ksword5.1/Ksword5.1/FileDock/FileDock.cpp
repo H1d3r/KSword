@@ -4364,7 +4364,7 @@ namespace
             "  background:%4;"
             "  border:none;"
             "}")
-            .arg(KswordTheme::WindowColorHex())
+            .arg(KswordTheme::MainBackgroundHex())
             .arg(KswordTheme::TextPrimaryHex())
             .arg(KswordTheme::BorderHex())
             .arg(KswordTheme::SurfaceHex())

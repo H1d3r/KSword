@@ -1528,8 +1528,11 @@ namespace ks::ui
 
         // 用扫描时的查询快照做高亮：防抖期间的新输入会另起一轮扫描。
         const QString queryText = m_activeQueryText;
+        // 这两个颜色进的是结果项的 HTML（<div style="color:...">），不是 QSS：
+        // QTextDocument 不认 palette(...)，动态角色会被忽略、文字退回继承色，
+        // 因此必须用 *ColorHex() 求出具体色。结果列表每轮搜索都会重建，主题切换后跟随。
         const QString textPrimaryHex = KswordTheme::TextPrimaryColorHex();
-        const QString textSecondaryHex = KswordTheme::TextSecondaryHex();
+        const QString textSecondaryHex = KswordTheme::TextSecondaryColorHex();
         const QString accentTextHex = KswordTheme::ThemeColorName(
             KswordTheme::EnsureTextContrast(
                 KswordTheme::PrimaryAccentColor(),
@@ -1605,16 +1608,16 @@ namespace ks::ui
             "  border-radius:3px;"
             "}")
             .arg(
-                KswordTheme::SurfaceColorHex(),
-                KswordTheme::BorderStrongColorHex(),
+                KswordTheme::SurfaceHex(),
+                KswordTheme::BorderStrongHex(),
                 KswordTheme::TextSecondaryHex(),
-                KswordTheme::SurfaceAltColorHex(),
+                KswordTheme::SurfaceAltHex(),
                 KswordTheme::ThemeColorName(KswordTheme::PrimaryAccentColor())));
         if (m_searchOptionsRow != nullptr)
         {
             m_searchOptionsRow->setStyleSheet(QStringLiteral(
                 "background:%1;border-bottom:1px solid %2;")
-                .arg(KswordTheme::SurfaceAltColorHex(), KswordTheme::BorderStrongColorHex()));
+                .arg(KswordTheme::SurfaceAltHex(), KswordTheme::BorderStrongHex()));
         }
         if (m_searchScopeLabel != nullptr)
         {
@@ -1637,9 +1640,9 @@ namespace ks::ui
                 "QTabBar::tab:selected{background:%4;color:%5;border-color:%4;}"
                 "QTabBar::tab:hover:!selected{background:%6;color:%2;}")
                 .arg(
-                    KswordTheme::SurfaceColorHex(),
+                    KswordTheme::SurfaceHex(),
                     KswordTheme::TextSecondaryHex(),
-                    KswordTheme::BorderStrongColorHex(),
+                    KswordTheme::BorderStrongHex(),
                     KswordTheme::ThemeColorName(KswordTheme::PrimaryAccentColor()),
                     KswordTheme::OnAccentHex(),
                     KswordTheme::SurfaceMutedColorHex()));

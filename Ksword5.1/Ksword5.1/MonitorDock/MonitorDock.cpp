@@ -10,6 +10,7 @@
 #include "WinAPIDock.h"
 #include "../Internationalization/LanguageManager.h"
 #include "../UI/TableInteractionSupport.h"
+#include "../UI/ThemeStatusRole.h"
 
 // 监控页实现：包含 WMI/ETW 两个标签页，所有重活走异步线程。
 #include "../OnlineScan/SandboxUploadActions.h"
@@ -904,15 +905,6 @@ namespace
         }
     }
 
-    // buildStatusStyle 作用：
-    // - 统一监控页状态标签配色，深浅色模式下都保持可读。
-    // 参数 colorHex：状态文字颜色。
-    // 返回：完整样式字符串。
-    QString buildStatusStyle(const QString& colorHex)
-    {
-        return QStringLiteral("color:%1;font-weight:600;").arg(colorHex);
-    }
-
     void stopActiveKswordTraceSessionsByPrefix(const QStringList& sessionPrefixList)
     {
         constexpr ULONG kQuerySessionCapacity = 96;
@@ -987,36 +979,6 @@ namespace
             ::wcscpy_s(stopLoggerNamePointer, loggerNameWide.size() + 1, loggerNameWide.c_str());
             ::ControlTraceW(0, stopLoggerNamePointer, stopProperties, EVENT_TRACE_CONTROL_STOP);
         }
-    }
-
-    // monitorInfoColorHex 作用：返回“信息态”颜色。
-    QString monitorInfoColorHex()
-    {
-        return KswordTheme::InfoColor().name(QColor::HexRgb);
-    }
-
-    // monitorSuccessColorHex 作用：返回“成功态”颜色。
-    QString monitorSuccessColorHex()
-    {
-        return KswordTheme::SuccessColor().name(QColor::HexRgb);
-    }
-
-    // monitorWarningColorHex 作用：返回“警告态”颜色。
-    QString monitorWarningColorHex()
-    {
-        return KswordTheme::WarningColor().name(QColor::HexRgb);
-    }
-
-    // monitorErrorColorHex 作用：返回“错误态”颜色。
-    QString monitorErrorColorHex()
-    {
-        return KswordTheme::ErrorColor().name(QColor::HexRgb);
-    }
-
-    // monitorIdleColorHex 作用：返回“空闲态”颜色。
-    QString monitorIdleColorHex()
-    {
-        return KswordTheme::TextSecondaryHex();
     }
 
     // bytesPerSecondToText 作用：
@@ -5700,7 +5662,7 @@ void MonitorDock::initializeWmiTab()
     m_wmiProviderRefreshButton->setFixedWidth(32);
 
     m_wmiProviderStatusLabel = new QLabel(QStringLiteral("● 待刷新"), m_wmiProviderPanel);
-    m_wmiProviderStatusLabel->setStyleSheet(buildStatusStyle(monitorIdleColorHex()));
+    ks::ui::ApplyStatusRole(m_wmiProviderStatusLabel, ks::ui::StatusRole::Idle);
 
     m_wmiProviderControlLayout->addWidget(m_wmiProviderFilterEdit, 1);
     m_wmiProviderControlLayout->addWidget(m_wmiProviderRefreshButton);
@@ -5851,7 +5813,7 @@ void MonitorDock::initializeWmiTab()
     m_wmiExportButton->setFixedWidth(32);
 
     m_wmiSubscribeStatusLabel = new QLabel(QStringLiteral("● 未订阅"), m_wmiSubscribePanel);
-    m_wmiSubscribeStatusLabel->setStyleSheet(buildStatusStyle(monitorIdleColorHex()));
+    ks::ui::ApplyStatusRole(m_wmiSubscribeStatusLabel, ks::ui::StatusRole::Idle);
 
     m_wmiSubscribeControlLayout->addWidget(new QLabel(QStringLiteral("WMI订阅控制"), m_wmiSubscribePanel));
     m_wmiSubscribeControlLayout->addStretch(1);
@@ -6076,7 +6038,7 @@ void MonitorDock::initializeEtwTab()
     m_etwProviderRefreshButton->setFixedWidth(34);
 
     m_etwProviderStatusLabel = new QLabel(QStringLiteral("● 待刷新"), m_etwProviderPanel);
-    m_etwProviderStatusLabel->setStyleSheet(buildStatusStyle(monitorIdleColorHex()));
+    ks::ui::ApplyStatusRole(m_etwProviderStatusLabel, ks::ui::StatusRole::Idle);
 
     m_etwProviderControlLayout->addWidget(new QLabel(QStringLiteral("ETW Providers"), m_etwProviderPanel));
     m_etwProviderControlLayout->addStretch(1);
@@ -6168,7 +6130,7 @@ void MonitorDock::initializeEtwTab()
     m_etwSessionStopButton->setEnabled(false);
 
     m_etwSessionStatusLabel = new QLabel(QStringLiteral("● 待刷新"), m_etwSessionPanel);
-    m_etwSessionStatusLabel->setStyleSheet(buildStatusStyle(monitorIdleColorHex()));
+    ks::ui::ApplyStatusRole(m_etwSessionStatusLabel, ks::ui::StatusRole::Idle);
 
     m_etwSessionControlLayout->addWidget(new QLabel(QStringLiteral("ETW会话"), m_etwSessionPanel));
     m_etwSessionControlLayout->addStretch(1);
@@ -6286,7 +6248,7 @@ void MonitorDock::initializeEtwTab()
     m_etwExportButton->setFixedWidth(34);
 
     m_etwCaptureStatusLabel = new QLabel(QStringLiteral("● 未监听"), m_etwPage);
-    m_etwCaptureStatusLabel->setStyleSheet(buildStatusStyle(monitorIdleColorHex()));
+    ks::ui::ApplyStatusRole(m_etwCaptureStatusLabel, ks::ui::StatusRole::Idle);
 
     m_etwCaptureControlLayout->addWidget(new QLabel(QStringLiteral("ETW控制"), m_etwPage));
     m_etwCaptureControlLayout->addStretch(1);
@@ -6514,7 +6476,7 @@ QWidget* MonitorDock::createEtwSimpleFilterPanel(const EtwFilterStage stage, QWi
 
     uiState.stateLabel = new QLabel(QStringLiteral("简易筛选：无条件"), uiState.panelWidget);
     uiState.stateLabel->setWordWrap(true);
-    uiState.stateLabel->setStyleSheet(buildStatusStyle(monitorIdleColorHex()));
+    ks::ui::ApplyStatusRole(uiState.stateLabel, ks::ui::StatusRole::Idle);
     rootLayout->addWidget(uiState.stateLabel);
 
     uiState.applyDebounceTimer = new QTimer(this);
@@ -6636,7 +6598,7 @@ void MonitorDock::updateEtwSimpleFilterStateLabel(const EtwFilterStage stage)
     if (!compiledFilter.enabled)
     {
         uiState.stateLabel->setText(QStringLiteral("简易筛选：已停用"));
-        uiState.stateLabel->setStyleSheet(buildStatusStyle(monitorIdleColorHex()));
+        ks::ui::ApplyStatusRole(uiState.stateLabel, ks::ui::StatusRole::Idle);
         return;
     }
     int conditionCount = 0;
@@ -6658,11 +6620,11 @@ void MonitorDock::updateEtwSimpleFilterStateLabel(const EtwFilterStage stage)
         uiState.stateLabel->setText(stage == EtwFilterStage::Pre
             ? QStringLiteral("简易筛选：无条件（全部捕获）")
             : QStringLiteral("简易筛选：无条件（全部显示）"));
-        uiState.stateLabel->setStyleSheet(buildStatusStyle(monitorIdleColorHex()));
+        ks::ui::ApplyStatusRole(uiState.stateLabel, ks::ui::StatusRole::Idle);
         return;
     }
     uiState.stateLabel->setText(QStringLiteral("简易筛选：已应用 %1 项条件").arg(conditionCount));
-    uiState.stateLabel->setStyleSheet(buildStatusStyle(monitorInfoColorHex()));
+    ks::ui::ApplyStatusRole(uiState.stateLabel, ks::ui::StatusRole::Info);
 }
 
 void MonitorDock::initializeEtwFilterPanels()
@@ -6752,7 +6714,7 @@ void MonitorDock::initializeEtwFilterPanels()
             panelLayoutOut->addLayout(actionLayout, 0);
 
             stateLabelOut = new QLabel(QStringLiteral("当前规则：无"), panelOut);
-            stateLabelOut->setStyleSheet(buildStatusStyle(monitorIdleColorHex()));
+            ks::ui::ApplyStatusRole(stateLabelOut, ks::ui::StatusRole::Idle);
             stateLabelOut->setWordWrap(true);
             panelLayoutOut->addWidget(stateLabelOut, 0);
 
@@ -8058,12 +8020,12 @@ void MonitorDock::updateEtwFilterStateLabel(const EtwFilterStage stage)
                 .arg(QStringLiteral("后置筛选当前无规则"))
                 .arg(visibleCount)
                 .arg(m_etwEventTable->rowCount()));
-            stateLabel->setStyleSheet(buildStatusStyle(monitorInfoColorHex()));
+            ks::ui::ApplyStatusRole(stateLabel, ks::ui::StatusRole::Info);
         }
         else
         {
             stateLabel->setText(tailText);
-            stateLabel->setStyleSheet(buildStatusStyle(monitorIdleColorHex()));
+            ks::ui::ApplyStatusRole(stateLabel, ks::ui::StatusRole::Idle);
         }
         return;
     }
@@ -8097,7 +8059,7 @@ void MonitorDock::updateEtwFilterStateLabel(const EtwFilterStage stage)
     }
 
     stateLabel->setText(summaryText);
-    stateLabel->setStyleSheet(buildStatusStyle(monitorInfoColorHex()));
+    ks::ui::ApplyStatusRole(stateLabel, ks::ui::StatusRole::Info);
 }
 
 void MonitorDock::applyEtwPostFilterToTable(const int firstRow, const bool updateStateLabel)
@@ -8160,7 +8122,7 @@ void MonitorDock::applyEtwFilterRules(const EtwFilterStage stage)
         if (uiState.stateLabel != nullptr)
         {
             uiState.stateLabel->setText(compileErrorText);
-            uiState.stateLabel->setStyleSheet(buildStatusStyle(monitorErrorColorHex()));
+            ks::ui::ApplyStatusRole(uiState.stateLabel, ks::ui::StatusRole::Error);
         }
         return;
     }
@@ -9349,7 +9311,7 @@ void MonitorDock::refreshWmiProvidersAsync()
         << eol;
 
     m_wmiProviderStatusLabel->setText(QStringLiteral("● 刷新中..."));
-    m_wmiProviderStatusLabel->setStyleSheet(buildStatusStyle(monitorInfoColorHex()));
+    ks::ui::ApplyStatusRole(m_wmiProviderStatusLabel, ks::ui::StatusRole::Info);
 
     if (m_wmiProviderRefreshProgressPid == 0)
     {
@@ -9370,7 +9332,7 @@ void MonitorDock::refreshWmiProvidersAsync()
                     return;
                 }
                 guardThis->m_wmiProviderStatusLabel->setText(QStringLiteral("● 初始化失败"));
-                guardThis->m_wmiProviderStatusLabel->setStyleSheet(buildStatusStyle(monitorErrorColorHex()));
+                ks::ui::ApplyStatusRole(guardThis->m_wmiProviderStatusLabel, ks::ui::StatusRole::Error);
                 if (guardThis->m_wmiProviderRefreshProgressPid != 0)
                 {
                     kPro.set(guardThis->m_wmiProviderRefreshProgressPid, "WMI Provider刷新失败", 0, 100.0f);
@@ -9393,7 +9355,7 @@ void MonitorDock::refreshWmiProvidersAsync()
                     return;
                 }
                 guardThis->m_wmiProviderStatusLabel->setText(QStringLiteral("● 连接失败"));
-                guardThis->m_wmiProviderStatusLabel->setStyleSheet(buildStatusStyle(monitorErrorColorHex()));
+                ks::ui::ApplyStatusRole(guardThis->m_wmiProviderStatusLabel, ks::ui::StatusRole::Error);
                 if (guardThis->m_wmiProviderRefreshProgressPid != 0)
                 {
                     kPro.set(guardThis->m_wmiProviderRefreshProgressPid, "WMI Provider刷新失败", 0, 100.0f);
@@ -9510,7 +9472,7 @@ void MonitorDock::refreshWmiProvidersAsync()
                 guardThis->applyWmiProviderFilter();
                 guardThis->m_wmiProviderStatusLabel->setText(
                     QStringLiteral("● 已刷新 %1 项").arg(guardThis->m_wmiProviders.size()));
-                guardThis->m_wmiProviderStatusLabel->setStyleSheet(buildStatusStyle(monitorSuccessColorHex()));
+                ks::ui::ApplyStatusRole(guardThis->m_wmiProviderStatusLabel, ks::ui::StatusRole::Success);
                 if (guardThis->m_wmiProviderRefreshProgressPid != 0)
                 {
                     kPro.set(guardThis->m_wmiProviderRefreshProgressPid, "WMI Provider完成", 0, 100.0f);
@@ -9878,7 +9840,7 @@ void MonitorDock::startWmiSubscription()
     kPro.set(m_wmiSubscribeProgressPid, "建立WMI订阅", 0, 10.0f);
 
     m_wmiSubscribeStatusLabel->setText(QStringLiteral("● 订阅中"));
-    m_wmiSubscribeStatusLabel->setStyleSheet(buildStatusStyle(monitorInfoColorHex()));
+    ks::ui::ApplyStatusRole(m_wmiSubscribeStatusLabel, ks::ui::StatusRole::Info);
     if (m_wmiUiUpdateTimer != nullptr && !m_wmiUiUpdateTimer->isActive())
     {
         m_wmiUiUpdateTimer->start();
@@ -9901,7 +9863,7 @@ void MonitorDock::startWmiSubscription()
                 }
                 guardThis->m_wmiSubscribeRunning.store(false);
                 guardThis->m_wmiSubscribeStatusLabel->setText(QString("● 初始化失败: %1").arg(errorText));
-                guardThis->m_wmiSubscribeStatusLabel->setStyleSheet(buildStatusStyle(monitorErrorColorHex()));
+                ks::ui::ApplyStatusRole(guardThis->m_wmiSubscribeStatusLabel, ks::ui::StatusRole::Error);
                 if (guardThis->m_wmiSubscribeProgressPid != 0)
                 {
                     kPro.set(guardThis->m_wmiSubscribeProgressPid, "WMI订阅失败", 0, 100.0f);
@@ -9930,7 +9892,7 @@ void MonitorDock::startWmiSubscription()
                 }
                 guardThis->m_wmiSubscribeRunning.store(false);
                 guardThis->m_wmiSubscribeStatusLabel->setText(QString("● 连接失败: %1").arg(errorText));
-                guardThis->m_wmiSubscribeStatusLabel->setStyleSheet(buildStatusStyle(monitorErrorColorHex()));
+                ks::ui::ApplyStatusRole(guardThis->m_wmiSubscribeStatusLabel, ks::ui::StatusRole::Error);
                 if (guardThis->m_wmiSubscribeProgressPid != 0)
                 {
                     kPro.set(guardThis->m_wmiSubscribeProgressPid, "WMI连接失败", 0, 100.0f);
@@ -10021,7 +9983,7 @@ void MonitorDock::startWmiSubscription()
                 }
                 guardThis->m_wmiSubscribeRunning.store(false);
                 guardThis->m_wmiSubscribeStatusLabel->setText(QStringLiteral("● 未建立任何有效订阅"));
-                guardThis->m_wmiSubscribeStatusLabel->setStyleSheet(buildStatusStyle(monitorErrorColorHex()));
+                ks::ui::ApplyStatusRole(guardThis->m_wmiSubscribeStatusLabel, ks::ui::StatusRole::Error);
                 if (guardThis->m_wmiSubscribeProgressPid != 0)
                 {
                     kPro.set(guardThis->m_wmiSubscribeProgressPid, "WMI订阅失败(无有效类)", 0, 100.0f);
@@ -10180,7 +10142,7 @@ void MonitorDock::startWmiSubscription()
             guardThis->m_wmiSubscribeRunning.store(false);
             guardThis->m_wmiSubscribePaused.store(false);
             guardThis->m_wmiSubscribeStatusLabel->setText(QStringLiteral("● 已停止"));
-            guardThis->m_wmiSubscribeStatusLabel->setStyleSheet(buildStatusStyle(monitorIdleColorHex()));
+            ks::ui::ApplyStatusRole(guardThis->m_wmiSubscribeStatusLabel, ks::ui::StatusRole::Idle);
             if (guardThis->m_wmiSubscribeProgressPid != 0)
             {
                 kPro.set(guardThis->m_wmiSubscribeProgressPid, "WMI订阅结束", 0, 100.0f);
@@ -10215,7 +10177,7 @@ void MonitorDock::stopWmiSubscriptionInternal(bool waitForThread)
     if (m_wmiSubscribeStatusLabel != nullptr)
     {
         m_wmiSubscribeStatusLabel->setText(QStringLiteral("● 停止中..."));
-        m_wmiSubscribeStatusLabel->setStyleSheet(buildStatusStyle(monitorWarningColorHex()));
+        ks::ui::ApplyStatusRole(m_wmiSubscribeStatusLabel, ks::ui::StatusRole::Warning);
     }
 
     if (m_wmiSubscribeThread == nullptr || !m_wmiSubscribeThread->joinable())
@@ -10281,12 +10243,12 @@ void MonitorDock::setWmiSubscriptionPaused(bool paused)
     if (paused)
     {
         m_wmiSubscribeStatusLabel->setText(QStringLiteral("● 已暂停"));
-        m_wmiSubscribeStatusLabel->setStyleSheet(buildStatusStyle(monitorWarningColorHex()));
+        ks::ui::ApplyStatusRole(m_wmiSubscribeStatusLabel, ks::ui::StatusRole::Warning);
     }
     else
     {
         m_wmiSubscribeStatusLabel->setText(QStringLiteral("● 订阅中"));
-        m_wmiSubscribeStatusLabel->setStyleSheet(buildStatusStyle(monitorInfoColorHex()));
+        ks::ui::ApplyStatusRole(m_wmiSubscribeStatusLabel, ks::ui::StatusRole::Info);
     }
 
     kLogEvent event;
@@ -10704,7 +10666,7 @@ void MonitorDock::refreshEtwProvidersAsync()
         << eol;
 
     m_etwProviderStatusLabel->setText(QStringLiteral("● 刷新中..."));
-    m_etwProviderStatusLabel->setStyleSheet(buildStatusStyle(monitorInfoColorHex()));
+    ks::ui::ApplyStatusRole(m_etwProviderStatusLabel, ks::ui::StatusRole::Info);
 
     if (m_etwCaptureProgressPid == 0)
     {
@@ -10763,7 +10725,7 @@ void MonitorDock::refreshEtwProvidersAsync()
             {
                 guardThis->m_etwProviderStatusLabel->setText(
                     QStringLiteral("● 已刷新 %1 项").arg(guardThis->m_etwProviders.size()));
-                guardThis->m_etwProviderStatusLabel->setStyleSheet(buildStatusStyle(monitorSuccessColorHex()));
+                ks::ui::ApplyStatusRole(guardThis->m_etwProviderStatusLabel, ks::ui::StatusRole::Success);
                 kPro.set(guardThis->m_etwCaptureProgressPid, "ETW Provider完成", 0, 100.0f);
 
                 kLogEvent event;
@@ -10775,7 +10737,7 @@ void MonitorDock::refreshEtwProvidersAsync()
             else
             {
                 guardThis->m_etwProviderStatusLabel->setText(QStringLiteral("● 刷新失败:%1").arg(status));
-                guardThis->m_etwProviderStatusLabel->setStyleSheet(buildStatusStyle(monitorErrorColorHex()));
+                ks::ui::ApplyStatusRole(guardThis->m_etwProviderStatusLabel, ks::ui::StatusRole::Error);
                 kPro.set(guardThis->m_etwCaptureProgressPid, "ETW Provider失败", 0, 100.0f);
 
                 kLogEvent event;
@@ -10799,7 +10761,7 @@ void MonitorDock::refreshEtwSessionsAsync()
     if (m_etwSessionStatusLabel != nullptr)
     {
         m_etwSessionStatusLabel->setText(QStringLiteral("● 刷新中..."));
-        m_etwSessionStatusLabel->setStyleSheet(buildStatusStyle(monitorInfoColorHex()));
+        ks::ui::ApplyStatusRole(m_etwSessionStatusLabel, ks::ui::StatusRole::Info);
     }
     if (m_etwSessionStopButton != nullptr)
     {
@@ -10951,14 +10913,14 @@ void MonitorDock::refreshEtwSessionsAsync()
                     {
                         guardThis->m_etwSessionStatusLabel->setText(
                             QStringLiteral("● 已刷新 %1 项").arg(guardThis->m_etwSessions.size()));
-                        guardThis->m_etwSessionStatusLabel->setStyleSheet(buildStatusStyle(monitorSuccessColorHex()));
+                        ks::ui::ApplyStatusRole(guardThis->m_etwSessionStatusLabel, ks::ui::StatusRole::Success);
                         kPro.set(guardThis->m_etwSessionRefreshProgressPid, "ETW会话刷新完成", 0, 100.0f);
                     }
                     else
                     {
                         guardThis->m_etwSessionStatusLabel->setText(
                             QStringLiteral("● 刷新失败:%1").arg(queryStatus));
-                        guardThis->m_etwSessionStatusLabel->setStyleSheet(buildStatusStyle(monitorErrorColorHex()));
+                        ks::ui::ApplyStatusRole(guardThis->m_etwSessionStatusLabel, ks::ui::StatusRole::Error);
                         kPro.set(guardThis->m_etwSessionRefreshProgressPid, "ETW会话刷新失败", 0, 100.0f);
                     }
                 }
@@ -11027,7 +10989,7 @@ void MonitorDock::stopSelectedEtwSessions()
     if (m_etwSessionStatusLabel != nullptr)
     {
         m_etwSessionStatusLabel->setText(QStringLiteral("● 正在结束会话..."));
-        m_etwSessionStatusLabel->setStyleSheet(buildStatusStyle(monitorWarningColorHex()));
+        ks::ui::ApplyStatusRole(m_etwSessionStatusLabel, ks::ui::StatusRole::Warning);
     }
     if (m_etwSessionStopButton != nullptr)
     {
@@ -11081,7 +11043,7 @@ void MonitorDock::stopSelectedEtwSessions()
                 {
                     guardThis->m_etwSessionStatusLabel->setText(
                         QStringLiteral("● 已结束 %1 项").arg(successCount));
-                    guardThis->m_etwSessionStatusLabel->setStyleSheet(buildStatusStyle(monitorSuccessColorHex()));
+                    ks::ui::ApplyStatusRole(guardThis->m_etwSessionStatusLabel, ks::ui::StatusRole::Success);
                     kPro.set(guardThis->m_etwSessionRefreshProgressPid, "结束ETW会话完成", 0, 100.0f);
                 }
                 else
@@ -11091,7 +11053,7 @@ void MonitorDock::stopSelectedEtwSessions()
                             "● 已结束 %1 项，%2 项失败；详情已写入日志。")
                             .arg(successCount)
                             .arg(failureTextList.size()));
-                    guardThis->m_etwSessionStatusLabel->setStyleSheet(buildStatusStyle(monitorWarningColorHex()));
+                    ks::ui::ApplyStatusRole(guardThis->m_etwSessionStatusLabel, ks::ui::StatusRole::Warning);
                     kPro.set(guardThis->m_etwSessionRefreshProgressPid, "结束ETW会话部分失败", 0, 100.0f);
                 }
             }
@@ -11580,8 +11542,7 @@ void MonitorDock::rebuildEtwArchiveFilterAsync()
                 if (guardThis->m_etwPostSimpleFilterUi.stateLabel != nullptr)
                 {
                     guardThis->m_etwPostSimpleFilterUi.stateLabel->setText(scanErrorText);
-                    guardThis->m_etwPostSimpleFilterUi.stateLabel->setStyleSheet(
-                        buildStatusStyle(monitorErrorColorHex()));
+                    ks::ui::ApplyStatusRole(guardThis->m_etwPostSimpleFilterUi.stateLabel, ks::ui::StatusRole::Error);
                 }
                 return;
             }
@@ -11766,7 +11727,7 @@ void MonitorDock::replaceEtwRowsWithSnapshot(
                 .arg(m_etwEventTable->rowCount())
                 .arg(static_cast<qulonglong>(scannedRowCount))
                 .arg(static_cast<qulonglong>(m_etwUiSkippedRows.load(std::memory_order_relaxed))));
-        m_etwPostSimpleFilterUi.stateLabel->setStyleSheet(buildStatusStyle(monitorInfoColorHex()));
+        ks::ui::ApplyStatusRole(m_etwPostSimpleFilterUi.stateLabel, ks::ui::StatusRole::Info);
     }
 }
 
@@ -12062,7 +12023,7 @@ void MonitorDock::enqueueEtwEventFromRecord(const struct _EVENT_RECORD* eventRec
             {
                 guardThis->m_etwCaptureStatusLabel->setText(
                     QStringLiteral("● 处理结束:%1").arg(ERROR_WRITE_FAULT));
-                guardThis->m_etwCaptureStatusLabel->setStyleSheet(buildStatusStyle(monitorErrorColorHex()));
+                ks::ui::ApplyStatusRole(guardThis->m_etwCaptureStatusLabel, ks::ui::StatusRole::Error);
             }
             guardThis->stopEtwCaptureInternal(false);
         }, Qt::QueuedConnection);
@@ -12367,7 +12328,7 @@ void MonitorDock::startEtwCapture()
     kPro.set(m_etwCaptureProgressPid, "准备ETW实时会话", 0, 10.0f);
 
     m_etwCaptureStatusLabel->setText(QStringLiteral("● 监听中"));
-    m_etwCaptureStatusLabel->setStyleSheet(buildStatusStyle(monitorInfoColorHex()));
+    ks::ui::ApplyStatusRole(m_etwCaptureStatusLabel, ks::ui::StatusRole::Info);
     updateEtwCaptureActionState();
 
     if (m_etwUiUpdateTimer != nullptr && !m_etwUiUpdateTimer->isActive())
@@ -12439,8 +12400,8 @@ void MonitorDock::startEtwCapture()
                         : (eventsLost == 0
                             ? QStringLiteral("● 已停止")
                             : QStringLiteral("● ETW源事件丢失:%1").arg(static_cast<qulonglong>(eventsLost))));
-                    guardThis->m_etwCaptureStatusLabel->setStyleSheet(buildStatusStyle(
-                        !archiveFailed && eventsLost == 0 ? monitorIdleColorHex() : monitorErrorColorHex()));
+                    ks::ui::ApplyStatusRole(guardThis->m_etwCaptureStatusLabel,
+                        !archiveFailed && eventsLost == 0 ? ks::ui::StatusRole::Idle : ks::ui::StatusRole::Error);
                 }
                 guardThis->updateEtwCaptureActionState();
                 if (guardThis->m_etwUiUpdateTimer != nullptr && guardThis->m_etwUiUpdateTimer->isActive())
@@ -12503,7 +12464,7 @@ void MonitorDock::startEtwCapture()
                 guardThis->m_etwCapturePaused.store(false);
                 guardThis->m_etwTimelinePauseTime100ns = 0;
                 guardThis->m_etwCaptureStatusLabel->setText(QStringLiteral("● 启动失败:%1").arg(startStatus));
-                guardThis->m_etwCaptureStatusLabel->setStyleSheet(buildStatusStyle(monitorErrorColorHex()));
+                ks::ui::ApplyStatusRole(guardThis->m_etwCaptureStatusLabel, ks::ui::StatusRole::Error);
                 guardThis->updateEtwCaptureActionState();
                 kPro.set(guardThis->m_etwCaptureProgressPid, "ETW会话启动失败", 0, 100.0f);
             }, Qt::QueuedConnection);
@@ -12576,7 +12537,7 @@ void MonitorDock::startEtwCapture()
                 guardThis->m_etwCapturePaused.store(false);
                 guardThis->m_etwTimelinePauseTime100ns = 0;
                 guardThis->m_etwCaptureStatusLabel->setText(QStringLiteral("● 无可用Provider"));
-                guardThis->m_etwCaptureStatusLabel->setStyleSheet(buildStatusStyle(monitorErrorColorHex()));
+                ks::ui::ApplyStatusRole(guardThis->m_etwCaptureStatusLabel, ks::ui::StatusRole::Error);
                 guardThis->updateEtwCaptureActionState();
                 kPro.set(guardThis->m_etwCaptureProgressPid, "Provider启用失败", 0, 100.0f);
             }, Qt::QueuedConnection);
@@ -12607,7 +12568,7 @@ void MonitorDock::startEtwCapture()
                 guardThis->m_etwCapturePaused.store(false);
                 guardThis->m_etwTimelinePauseTime100ns = 0;
                 guardThis->m_etwCaptureStatusLabel->setText(QStringLiteral("● OpenTrace失败:%1").arg(lastError));
-                guardThis->m_etwCaptureStatusLabel->setStyleSheet(buildStatusStyle(monitorErrorColorHex()));
+                ks::ui::ApplyStatusRole(guardThis->m_etwCaptureStatusLabel, ks::ui::StatusRole::Error);
                 guardThis->updateEtwCaptureActionState();
                 kPro.set(guardThis->m_etwCaptureProgressPid, "OpenTrace失败", 0, 100.0f);
             }, Qt::QueuedConnection);
@@ -12681,23 +12642,23 @@ void MonitorDock::startEtwCapture()
             if (guardThis->m_etwArchiveWriteFailed.load(std::memory_order_relaxed))
             {
                 guardThis->m_etwCaptureStatusLabel->setText(QStringLiteral("● ETW归档写入失败"));
-                guardThis->m_etwCaptureStatusLabel->setStyleSheet(buildStatusStyle(monitorErrorColorHex()));
+                ks::ui::ApplyStatusRole(guardThis->m_etwCaptureStatusLabel, ks::ui::StatusRole::Error);
             }
             else if (eventsLost != 0)
             {
                 guardThis->m_etwCaptureStatusLabel->setText(
                     QStringLiteral("● ETW源事件丢失:%1").arg(eventsLost));
-                guardThis->m_etwCaptureStatusLabel->setStyleSheet(buildStatusStyle(monitorErrorColorHex()));
+                ks::ui::ApplyStatusRole(guardThis->m_etwCaptureStatusLabel, ks::ui::StatusRole::Error);
             }
             else if (processStatus == ERROR_SUCCESS)
             {
                 guardThis->m_etwCaptureStatusLabel->setText(QStringLiteral("● 已停止"));
-                guardThis->m_etwCaptureStatusLabel->setStyleSheet(buildStatusStyle(monitorIdleColorHex()));
+                ks::ui::ApplyStatusRole(guardThis->m_etwCaptureStatusLabel, ks::ui::StatusRole::Idle);
             }
             else
             {
                 guardThis->m_etwCaptureStatusLabel->setText(QStringLiteral("● 处理结束:%1").arg(processStatus));
-                guardThis->m_etwCaptureStatusLabel->setStyleSheet(buildStatusStyle(monitorWarningColorHex()));
+                ks::ui::ApplyStatusRole(guardThis->m_etwCaptureStatusLabel, ks::ui::StatusRole::Warning);
             }
             guardThis->updateEtwCaptureActionState();
             if (guardThis->m_etwUiUpdateTimer != nullptr && guardThis->m_etwUiUpdateTimer->isActive())
@@ -12801,8 +12762,8 @@ void MonitorDock::stopEtwCaptureInternal(bool waitForThread)
                 : (eventsLost == 0
                     ? QStringLiteral("● 已停止")
                     : QStringLiteral("● ETW源事件丢失:%1").arg(static_cast<qulonglong>(eventsLost))));
-            m_etwCaptureStatusLabel->setStyleSheet(buildStatusStyle(
-                !archiveFailed && eventsLost == 0 ? monitorIdleColorHex() : monitorErrorColorHex()));
+            ks::ui::ApplyStatusRole(m_etwCaptureStatusLabel,
+                !archiveFailed && eventsLost == 0 ? ks::ui::StatusRole::Idle : ks::ui::StatusRole::Error);
         }
         if (m_etwUiUpdateTimer != nullptr && m_etwUiUpdateTimer->isActive())
         {
@@ -12846,8 +12807,8 @@ void MonitorDock::stopEtwCaptureInternal(bool waitForThread)
                 : (eventsLost == 0
                     ? QStringLiteral("● 已停止")
                     : QStringLiteral("● ETW源事件丢失:%1").arg(static_cast<qulonglong>(eventsLost))));
-            m_etwCaptureStatusLabel->setStyleSheet(buildStatusStyle(
-                !archiveFailed && eventsLost == 0 ? monitorIdleColorHex() : monitorErrorColorHex()));
+            ks::ui::ApplyStatusRole(m_etwCaptureStatusLabel,
+                !archiveFailed && eventsLost == 0 ? ks::ui::StatusRole::Idle : ks::ui::StatusRole::Error);
         }
         if (m_etwUiUpdateTimer != nullptr && m_etwUiUpdateTimer->isActive())
         {
@@ -12867,7 +12828,7 @@ void MonitorDock::stopEtwCaptureInternal(bool waitForThread)
     if (m_etwCaptureStatusLabel != nullptr)
     {
         m_etwCaptureStatusLabel->setText(QStringLiteral("● 停止中..."));
-        m_etwCaptureStatusLabel->setStyleSheet(buildStatusStyle(monitorWarningColorHex()));
+        ks::ui::ApplyStatusRole(m_etwCaptureStatusLabel, ks::ui::StatusRole::Warning);
     }
     if (m_etwUiUpdateTimer != nullptr && m_etwUiUpdateTimer->isActive())
     {
@@ -12912,7 +12873,7 @@ void MonitorDock::setEtwCapturePaused(bool paused)
         }
         refreshEtwTimelineRange(false);
         m_etwCaptureStatusLabel->setText(QStringLiteral("● 已暂停"));
-        m_etwCaptureStatusLabel->setStyleSheet(buildStatusStyle(monitorWarningColorHex()));
+        ks::ui::ApplyStatusRole(m_etwCaptureStatusLabel, ks::ui::StatusRole::Warning);
     }
     else
     {
@@ -12934,7 +12895,7 @@ void MonitorDock::setEtwCapturePaused(bool paused)
             scheduleEtwArchiveFilterRebuild();
         }
         m_etwCaptureStatusLabel->setText(QStringLiteral("● 监听中"));
-        m_etwCaptureStatusLabel->setStyleSheet(buildStatusStyle(monitorInfoColorHex()));
+        ks::ui::ApplyStatusRole(m_etwCaptureStatusLabel, ks::ui::StatusRole::Info);
     }
     updateEtwCaptureActionState();
 

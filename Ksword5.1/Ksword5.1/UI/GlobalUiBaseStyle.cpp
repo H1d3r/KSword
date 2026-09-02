@@ -1,5 +1,7 @@
 #include "GlobalUiBaseStyle.h"
 
+#include "ThemeStatusRole.h"
+
 #include "../theme.h"
 
 namespace ks::ui
@@ -201,6 +203,11 @@ namespace ks::ui
             "  border:none;"
             "}"
 
+            // ---------- 语义状态色基线 ----------
+            // 规则文本由 ThemeStatusRole 生成；状态标签只带 ksword_status_role 属性，
+            // 不再自己持有 styleSheet，颜色随本样式块整体重建跟随主题。
+            "__STATUS_ROLE_RULES__"
+
             "__END_MARKER__\n");
 
         // 步进箭头没法用 QSS 着色，只能按“按钮底色的最大对比单色”在黑白两版之间挑；
@@ -234,6 +241,7 @@ namespace ks::ui
         baseControlStyle.replace(
             QStringLiteral("__ARROW_DOWN__"),
             arrowResourcePath(KswordTheme::SurfaceAltColor(), false));
+        baseControlStyle.replace(QStringLiteral("__STATUS_ROLE_RULES__"), BuildStatusRoleStyleRules());
         baseControlStyle.replace(QStringLiteral("__END_MARKER__"), QString::fromLatin1(kBaseControlStyleEndMarker));
         baseControlStyle.replace(QStringLiteral("__WINDOW__"), KswordTheme::MainBackgroundColorHex());
         baseControlStyle.replace(QStringLiteral("__SURFACE__"), KswordTheme::SurfaceColorHex());

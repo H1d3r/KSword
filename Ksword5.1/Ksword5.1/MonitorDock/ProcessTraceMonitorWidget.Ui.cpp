@@ -1,5 +1,6 @@
 #include "ProcessTraceMonitorWidget.h"
 #include "../UI/VisibleTableWidget.h"
+#include "../UI/ThemeStatusRole.h"
 
 // ============================================================
 // ProcessTraceMonitorWidget.Ui.cpp
@@ -221,7 +222,7 @@ void ProcessTraceMonitorWidget::initializeUi()
     availableLayout->addLayout(availableHeaderLayout);
 
     m_availableStatusLabel = new QLabel(QStringLiteral("● 等待首次刷新进程快照"), m_availablePanel);
-    m_availableStatusLabel->setStyleSheet(buildStatusStyle(monitorIdleColorHex()));
+    ks::ui::ApplyStatusRole(m_availableStatusLabel, ks::ui::StatusRole::Idle);
     availableLayout->addWidget(m_availableStatusLabel, 0);
 
     m_availableTable = new ks::ui::VisibleTableWidget(m_availablePanel);
@@ -288,7 +289,7 @@ void ProcessTraceMonitorWidget::initializeUi()
     targetLayout->addLayout(targetHeaderLayout);
 
     m_targetStatusLabel = new QLabel(QStringLiteral("● 当前没有监控目标"), m_targetPanel);
-    m_targetStatusLabel->setStyleSheet(buildStatusStyle(monitorIdleColorHex()));
+    ks::ui::ApplyStatusRole(m_targetStatusLabel, ks::ui::StatusRole::Idle);
     targetLayout->addWidget(m_targetStatusLabel, 0);
 
     m_targetTable = new ks::ui::VisibleTableWidget(m_targetPanel);
@@ -367,7 +368,7 @@ void ProcessTraceMonitorWidget::initializeUi()
     controlLayout->addWidget(m_exportButton, 0);
 
     m_statusLabel = new QLabel(QStringLiteral("● 空闲"), m_controlPanel);
-    m_statusLabel->setStyleSheet(buildStatusStyle(monitorIdleColorHex()));
+    ks::ui::ApplyStatusRole(m_statusLabel, ks::ui::StatusRole::Idle);
     controlLayout->addWidget(m_statusLabel, 0);
 
     configurationLayout->addWidget(m_controlPanel, 0);
@@ -454,7 +455,7 @@ void ProcessTraceMonitorWidget::initializeUi()
     filterLayout->addWidget(m_eventClearFilterButton, 2, 4);
 
     m_eventFilterStatusLabel = new QLabel(QStringLiteral("筛选结果：0 / 0"), m_filterPanel);
-    m_eventFilterStatusLabel->setStyleSheet(buildStatusStyle(monitorIdleColorHex()));
+    ks::ui::ApplyStatusRole(m_eventFilterStatusLabel, ks::ui::StatusRole::Idle);
     filterLayout->addWidget(m_eventFilterStatusLabel, 2, 5, 1, 3);
 
     configurationLayout->addWidget(m_filterPanel, 0);

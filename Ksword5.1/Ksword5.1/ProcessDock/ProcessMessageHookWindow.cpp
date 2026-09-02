@@ -272,10 +272,10 @@ namespace
             : QStringLiteral("transparent");
         const QString border = selected
             ? KswordTheme::AccentHex(KswordTheme::AccentRole::Blue)
-            : KswordTheme::BorderColorHex();
+            : KswordTheme::BorderHex();
         const QString textColor = selected
             ? KswordTheme::OnAccentHex()
-            : KswordTheme::TextPrimaryColorHex();
+            : KswordTheme::TextPrimaryHex();
         return QStringLiteral(
             "QPushButton{min-width:26px;max-width:26px;padding:3px 0;border:1px solid %1;"
             "border-radius:0;color:%2;background:%3;font-weight:700;}"
@@ -367,7 +367,7 @@ void ProcessMessageHookWindow::initializeUi()
         this);
     m_targetLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
     m_targetLabel->setStyleSheet(
-        QStringLiteral("font-weight:600;color:%1;").arg(KswordTheme::TextPrimaryColorHex()));
+        QStringLiteral("font-weight:600;color:%1;").arg(KswordTheme::TextPrimaryHex()));
 
     toolbarLayout->addWidget(m_refreshButton, 0);
     toolbarLayout->addWidget(scopeLabel, 0);

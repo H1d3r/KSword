@@ -2,6 +2,7 @@
 #include "../theme.h"
 #include "../Framework/PrivilegeElevationPrompt.h"
 #include "../UI/TableInteractionSupport.h"
+#include "../UI/ThemeStatusRole.h"
 
 // ============================================================
 // ProcessTraceMonitorWidget.Actions.cpp
@@ -625,7 +626,7 @@ void ProcessTraceMonitorWidget::refreshAvailableProcessListAsync()
     if (m_availableStatusLabel != nullptr)
     {
         m_availableStatusLabel->setText(QStringLiteral("● 正在刷新当前系统进程快照..."));
-        m_availableStatusLabel->setStyleSheet(buildStatusStyle(monitorInfoColorHex()));
+        ks::ui::ApplyStatusRole(m_availableStatusLabel, ks::ui::StatusRole::Info);
     }
     updateActionState();
 
@@ -695,7 +696,7 @@ void ProcessTraceMonitorWidget::populateAvailableProcessTable(const std::vector<
     if (m_availableStatusLabel != nullptr)
     {
         m_availableStatusLabel->setText(QStringLiteral("● 已刷新 %1 个进程").arg(m_availableProcessList.size()));
-        m_availableStatusLabel->setStyleSheet(buildStatusStyle(monitorSuccessColorHex()));
+        ks::ui::ApplyStatusRole(m_availableStatusLabel, ks::ui::StatusRole::Success);
     }
 }
 
@@ -736,7 +737,7 @@ void ProcessTraceMonitorWidget::applyAvailableProcessFilter()
             QStringLiteral("● 可见 %1 / %2 个进程")
             .arg(visibleRowCount)
             .arg(m_availableTable->rowCount()));
-        m_availableStatusLabel->setStyleSheet(buildStatusStyle(monitorIdleColorHex()));
+        ks::ui::ApplyStatusRole(m_availableStatusLabel, ks::ui::StatusRole::Idle);
     }
 }
 
@@ -1341,10 +1342,10 @@ void ProcessTraceMonitorWidget::refreshTargetTable()
             QStringLiteral("● 目标 %1 个，其中存活 %2 个")
             .arg(m_targetProcessList.size())
             .arg(aliveCount));
-        m_targetStatusLabel->setStyleSheet(buildStatusStyle(
+        ks::ui::ApplyStatusRole(m_targetStatusLabel,
             m_targetProcessList.empty()
-            ? monitorIdleColorHex()
-            : monitorSuccessColorHex()));
+            ? ks::ui::StatusRole::Idle
+            : ks::ui::StatusRole::Success);
     }
 }
 
@@ -1616,8 +1617,8 @@ void ProcessTraceMonitorWidget::updateEventFilterStatusText(const int visibleCou
         QStringLiteral("筛选结果：%1 / %2")
         .arg(visibleCount)
         .arg(totalCount));
-    m_eventFilterStatusLabel->setStyleSheet(buildStatusStyle(
-        visibleCount > 0 ? monitorSuccessColorHex() : monitorIdleColorHex()));
+    ks::ui::ApplyStatusRole(m_eventFilterStatusLabel,
+        visibleCount > 0 ? ks::ui::StatusRole::Success : ks::ui::StatusRole::Idle);
 }
 
 void ProcessTraceMonitorWidget::applyTimelineSelection(

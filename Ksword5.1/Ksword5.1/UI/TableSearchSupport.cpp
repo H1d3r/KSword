@@ -620,11 +620,11 @@ namespace
                 "QToolButton{background:transparent;color:%2;border:1px solid transparent;border-radius:3px;}"
                 "QToolButton:hover{background:%5;border-color:%4;}" )
                 .arg(
-                    KswordTheme::SurfaceColorHex(),
-                    KswordTheme::TextPrimaryColorHex(),
-                    KswordTheme::BorderStrongColorHex(),
+                    KswordTheme::SurfaceHex(),
+                    KswordTheme::TextPrimaryHex(),
+                    KswordTheme::BorderStrongHex(),
                     KswordTheme::PrimaryBlueHex,
-                    KswordTheme::SurfaceAltColorHex()));
+                    KswordTheme::SurfaceAltHex()));
             show();
             raise();
         }

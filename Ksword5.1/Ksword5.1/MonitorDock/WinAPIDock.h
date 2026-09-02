@@ -149,12 +149,6 @@ private:
     static QString blueButtonStyle();
     static QString blueInputStyle();
     static QString blueHeaderStyle();
-    static QString buildStatusStyle(const QString& colorHex);
-    static QString monitorInfoColorHex();
-    static QString monitorSuccessColorHex();
-    static QString monitorWarningColorHex();
-    static QString monitorErrorColorHex();
-    static QString monitorIdleColorHex();
     static QString eventCategoryText(std::uint32_t categoryValue);
     static QString defaultDllPathHint();
     static QString defaultRawHookModulesText();

@@ -3,6 +3,7 @@
 #include "../Framework/PrivilegeElevationPrompt.h"
 #include "../OnlineScan/SandboxUploadActions.h"
 #include "../UI/TableInteractionSupport.h"
+#include "../UI/ThemeStatusRole.h"
 #include "../theme.h"
 
 // ============================================================
@@ -461,7 +462,7 @@ void WinAPIDock::refreshProcessListAsync()
     if (m_processStatusLabel != nullptr)
     {
         m_processStatusLabel->setText(QStringLiteral("● 正在刷新系统进程快照..."));
-        m_processStatusLabel->setStyleSheet(buildStatusStyle(monitorInfoColorHex()));
+        ks::ui::ApplyStatusRole(m_processStatusLabel, ks::ui::StatusRole::Info);
     }
     updateActionState();
 
@@ -562,7 +563,7 @@ void WinAPIDock::populateProcessSelector(const std::vector<ks::process::ProcessR
     if (m_processStatusLabel != nullptr)
     {
         m_processStatusLabel->setText(QStringLiteral("● 已刷新 %1 个进程").arg(m_processList.size()));
-        m_processStatusLabel->setStyleSheet(buildStatusStyle(monitorSuccessColorHex()));
+        ks::ui::ApplyStatusRole(m_processStatusLabel, ks::ui::StatusRole::Success);
     }
     updateProcessSelectorStatus();
 }
@@ -602,12 +603,12 @@ void WinAPIDock::updateProcessSelectorStatus()
         {
             const QString processName = m_processCombo->itemData(selectedIndex, Qt::UserRole + 1).toString();
             m_processStatusLabel->setText(QStringLiteral("● 已选择 PID=%1 %2").arg(pidValue).arg(processName));
-            m_processStatusLabel->setStyleSheet(buildStatusStyle(monitorSuccessColorHex()));
+            ks::ui::ApplyStatusRole(m_processStatusLabel, ks::ui::StatusRole::Success);
         }
         else
         {
             m_processStatusLabel->setText(QStringLiteral("● 使用手动 PID=%1").arg(pidValue));
-            m_processStatusLabel->setStyleSheet(buildStatusStyle(monitorWarningColorHex()));
+            ks::ui::ApplyStatusRole(m_processStatusLabel, ks::ui::StatusRole::Warning);
         }
         return;
     }
@@ -616,11 +617,11 @@ void WinAPIDock::updateProcessSelectorStatus()
     if (inputText.isEmpty())
     {
         m_processStatusLabel->setText(QStringLiteral("● 候选 %1 个；输入进程名/PID 选择目标").arg(m_processCombo->count()));
-        m_processStatusLabel->setStyleSheet(buildStatusStyle(monitorIdleColorHex()));
+        ks::ui::ApplyStatusRole(m_processStatusLabel, ks::ui::StatusRole::Idle);
         return;
     }
     m_processStatusLabel->setText(QStringLiteral("● 未明确选中目标；请从下拉候选选择或输入数字 PID"));
-    m_processStatusLabel->setStyleSheet(buildStatusStyle(monitorWarningColorHex()));
+    ks::ui::ApplyStatusRole(m_processStatusLabel, ks::ui::StatusRole::Warning);
 }
 
 bool WinAPIDock::currentSelectedPid(std::uint32_t* pidOut) const
@@ -1039,7 +1040,7 @@ void WinAPIDock::addFakeSuccessRuleFromInputs()
     if (m_fakeRuleStatusLabel != nullptr)
     {
         m_fakeRuleStatusLabel->setText(QStringLiteral("规则：%1 条；启动会话时应用。").arg(m_fakeRuleTable->rowCount()));
-        m_fakeRuleStatusLabel->setStyleSheet(buildStatusStyle(monitorInfoColorHex()));
+        ks::ui::ApplyStatusRole(m_fakeRuleStatusLabel, ks::ui::StatusRole::Info);
     }
     updateActionState();
 }
@@ -1065,7 +1066,7 @@ void WinAPIDock::removeSelectedFakeSuccessRule()
     if (m_fakeRuleStatusLabel != nullptr)
     {
         m_fakeRuleStatusLabel->setText(QStringLiteral("规则：%1 条；启动会话时应用。").arg(m_fakeRuleTable->rowCount()));
-        m_fakeRuleStatusLabel->setStyleSheet(buildStatusStyle(monitorIdleColorHex()));
+        ks::ui::ApplyStatusRole(m_fakeRuleStatusLabel, ks::ui::StatusRole::Idle);
     }
     updateActionState();
 }
@@ -1438,8 +1439,8 @@ void WinAPIDock::applyEventFilter()
                 QStringLiteral("筛选结果：%1 / %2")
                     .arg(m_eventTable->rowCount())
                     .arg(m_eventTable->rowCount()));
-            m_eventFilterStatusLabel->setStyleSheet(buildStatusStyle(
-                m_eventTable->rowCount() > 0 ? monitorSuccessColorHex() : monitorIdleColorHex()));
+            ks::ui::ApplyStatusRole(m_eventFilterStatusLabel,
+                m_eventTable->rowCount() > 0 ? ks::ui::StatusRole::Success : ks::ui::StatusRole::Idle);
         }
         return;
     }
@@ -1469,8 +1470,8 @@ void WinAPIDock::applyEventFilter()
     {
         m_eventFilterStatusLabel->setText(
             QStringLiteral("筛选结果：%1 / %2").arg(visibleCount).arg(m_eventTable->rowCount()));
-        m_eventFilterStatusLabel->setStyleSheet(buildStatusStyle(
-            visibleCount > 0 ? monitorSuccessColorHex() : monitorIdleColorHex()));
+        ks::ui::ApplyStatusRole(m_eventFilterStatusLabel,
+            visibleCount > 0 ? ks::ui::StatusRole::Success : ks::ui::StatusRole::Idle);
     }
 }
 
