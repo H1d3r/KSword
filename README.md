@@ -33,7 +33,7 @@
 </div>
 
 <h1 align="center">Ksword5.1</h1>
-<p align="center"><strong>A source-available Windows Anti-Rootkit and kernel analysis suite</strong></p>
+<p align="center"><strong>Source-available Windows ARK &amp; kernel analysis suite</strong></p>
 
 <p align="center">
   <a href="https://github.com/KSwordDEV/KSword/stargazers">
@@ -50,207 +50,131 @@
   </a>
 </p>
 
-<p align="center">
-  <a href="#getting-started">Getting Started</a> ·
-  <a href="#features">Features</a> ·
-  <a href="#which-edition">Editions</a> ·
-  <a href="#building-from-source">Build</a> ·
-  <a href="#license">License</a>
-</p>
-
 ---
 
-## What is KSword?
+KSword is an ARK (Anti-Rootkit) and system analysis toolkit for Windows 10/11 x64. It ships a desktop app and a kernel driver together — the app enumerates processes, drivers, connections, etc. from user mode, the driver does the same from Ring 0, and then they compare. Discrepancies mean something is hiding.
 
-KSword is an **ARK** (Anti-Rootkit) toolkit for Windows 10/11. It comes with its own kernel driver, so it can look at the same thing — a process, a driver, a network connection — from both user mode and kernel mode at the same time. When the two views don't match, something is hiding.
+On top of that, there is a full set of system tools: memory search & hex editing, PE/ELF/Mach-O scanning, packet capture, raw NTFS forensics, SSDT/callback/hook inspection, registry & startup auditing, device-stack tracing, and security policy checks — roughly what you'd otherwise piece together from ten different programs.
 
-Think of it as a system-wide X-ray machine: it replaces the dozen separate tools you'd otherwise need for process inspection, memory forensics, network monitoring, disk analysis, driver debugging, and security auditing — all in one window.
+All audit pages are read-only by default. Anything that modifies the system (driver unload, disk write, protection-level change, etc.) is behind a separate button with a confirmation dialog and undo where possible. When a kernel offset or feature isn't available on the current build, the UI says so instead of guessing.
 
-**Design philosophy:**
+Source-available under the [KSword Community Source License v1.6](LICENSE) (not OSI-approved — see [License](#license)).
 
-- **Show the evidence, not just the conclusion.** Every field tells you where the data came from, so you can verify it yourself.
-- **Look but don't touch (by default).** Viewing never changes your system. Dangerous actions like unloading drivers or writing to disk are behind separate buttons with explicit warnings and, where possible, undo.
-- **Tell the truth when something doesn't work.** If a feature needs a kernel offset that isn't available on your Windows build, it says "unsupported" instead of guessing.
+## Quick Start
 
-Source-available under the [KSword Community Source License](LICENSE) — see [License](#license).
+Extract the release archive, run `Launcher.exe` as admin. It reads the support manifest and starts the right edition.
 
-## Getting Started
-
-1. Download and extract the release archive — you get a `Release\` folder.
-2. Run **`Launcher.exe`** as administrator.
-
-That's it. The launcher checks your system and picks the right edition for you.
-
-Alternatively, `KswordSetup.exe` is a convenience installer that does the same thing plus creates shortcuts. But just extracting the folder works fine.
+`KswordSetup.exe` is an optional installer that does the same thing plus creates shortcuts.
 
 > [!IMPORTANT]
-> Kernel-level features need admin rights and a loaded driver. Without the driver, the app still works — you just won't see the kernel-side data.
+> R0 features need the KswordARK driver loaded. Without it the app still works, but kernel-side pages will show "unavailable."
+
+## Two Editions
+
+|  | Ksword5.1 | KswordARKLight |
+|---|---|---|
+| Stack | Qt 6 / ADS dockable workspace | Native Win32, no runtime dependencies |
+| Use case | Full workflow | Old machines, quick triage, minimal footprint |
+
+Both use the same driver and the same `shared/driver/` protocol. Launcher picks for you.
 
 ## Features
 
-### See what's really running
+**Process / Thread / Handle** — tree & list views, R3/R0 cross-view to detect hidden objects, thread stacks, modules, tokens, PDB diagnostics. Gated actions for kill, suspend, R0 hide (recoverable), PPL patch.
 
-Browse all processes, threads, and handles — then compare what Windows reports against what the kernel driver actually finds. Mismatches mean something is hidden. You can also inspect thread stacks, modules, tokens, and process protection levels.
+**Memory** — region browser, pattern search, hex viewer, bookmarks, R0 reads, kernel executable-memory scan, PTE translation.
 
-### Inspect memory
+**Scanner** — structural PE / ELF / Mach-O analysis. Byte editor is length-preserving only, checks the source snapshot before writing, atomic replace, optional backup.
 
-Search process memory by pattern, browse regions in hex, set bookmarks. The driver can read memory regions that user-mode tools can't reach, scan kernel memory for executable code, and translate virtual addresses through the page tables.
+**Network** — capture & filter, connection management, per-process throttle, request builder, HTTPS inspection, WFP firewall, NIDS, segmented download. R0 inventories: TCP / UDP / AFD / NSI / NDIS / WFP.
 
-### Analyze binaries
+**Driver / Kernel** — service management, DriverObject / DeviceObject / MajorFunction inspection, transactional dispatch-table editor, loader-list removal (reversible), integrity & cross-view checks, unloaded-driver / PiDDB evidence. Object namespace, SSDT/SSSDT, IAT/EAT/inline hooks, callbacks (notify, registry, object, filter, bugcheck, shutdown, FS, logon, NMI, …), IDT baselines, descriptor-table & IOCTL decoding, disassembly.
 
-Drop a PE, ELF, or Mach-O file for a structural scan. There's also a byte editor, but it's deliberately strict: edits must be the same length, it double-checks the file hasn't changed since you opened it, and it writes atomically to prevent corruption.
+**File / Storage** — dual-pane manager, hashes, signatures, PE/strings/hex, unlocker, NTFS recovery, minifilter & Section evidence, raw filesystem browser with deleted-entry analysis (read-only by default, write requires unlock), device tree and R0 device-stack audit.
 
-### Monitor network traffic
+**Monitor** — per-process ETW, syscall capture, WinAPI agent, WMI subscriptions, ETW session management, risk center. Task-Manager-style live charts.
 
-Capture and filter packets, manage TCP/UDP connections, throttle traffic per-process, construct HTTP requests, inspect HTTPS sessions. The driver adds its own view of the network stack (TCP, UDP, AFD, NSI, NDIS, WFP) so you can spot connections that user-mode tools miss.
+**Window / Registry / Handle / Startup / Service / Privilege** — what you'd expect, plus Win32k GUI audit, startup-item risk gating with recovery, and service TSV/JSON export.
 
-### Debug drivers and kernel internals
+**Security** — AppLocker, WDAC, Defender/ASR, VBS/Hyper-V, driver trust, event logs.
 
-Load, unload, and inspect driver services. Examine driver objects, device objects, dispatch tables, and I/O fast paths. Browse the kernel's object namespace, hook tables (SSDT, IAT/EAT, inline), callbacks, and interrupt descriptors. A built-in disassembler lets you read kernel code in place.
+**Kernel Knowledge** — 71 bilingual searchable articles, each linked to live R3/R0 evidence pages.
 
-The **Kernel Knowledge** center has 71 searchable articles (bilingual) covering kernel concepts, each linked to the live evidence pages where you can see the real data.
-
-### Dig into files and disks
-
-Two-pane file manager with hash checking, digital signatures, PE structure views, and a file unlocker. For forensics: browse raw NTFS volumes, find deleted files, inspect minifilter stacks, and audit storage devices — all read-only by default, with disk writes requiring an explicit unlock.
-
-### Monitor system activity
-
-ETW-based process monitoring, syscall capture, WMI event subscriptions, and a risk aggregation center. Task-Manager-style live charts for CPU, GPU, memory, disk, and network. Window enumeration and message monitoring. Registry browsing with search. Startup item and service management.
-
-### Audit security posture
-
-Check AppLocker rules, WDAC/Code Integrity policies, Defender and ASR settings, VBS/Hyper-V configuration, driver trust, and Windows event logs — all from one place.
-
-### Virtualization lab (HVM)
-
-Run VMX capability tests, launch a one-shot test VM, or start a guarded Intel VT-x/EPT monitor that logs VM exits. Safety checks prevent activation on unsupported hardware. **For authorized lab use only.**
+**HVM** — VMX self-test, one-shot guest, guarded Intel VT-x/EPT resident monitor. Refuses on AMD or incompatible config. Lab use only.
 
 <details>
-<summary><b>Full feature list by dock</b> — 17 workspace docks + 4 auxiliary panels</summary>
+<summary>Full dock-by-dock table (17 main + 4 auxiliary)</summary>
 
 <br>
 
-For the OpenArk coverage comparison, see [docs/OpenArk功能对照与TODO.md](docs/OpenArk功能对照与TODO.md).
+See also [docs/OpenArk功能对照与TODO.md](docs/OpenArk功能对照与TODO.md) for the OpenArk comparison.
 
-| Dock | What's in it |
+| Dock | Contents |
 |---|---|
-| **Welcome** | Version info, build time, user info, project links. |
-| **Process** | Process tree/list with icons and change highlighting. Kill/suspend/resume/priority actions. Thread stacks, modules, tokens. R3 vs R0 cross-view for hidden process detection. Recoverable R0 process hiding (gated). PPL/signature operations with risk prompts. |
-| **Network** | Packet capture & filtering. TCP/UDP connection management. Per-process throttling. Request builder. HTTPS inspection. ARP/DNS tables. Live host discovery. WFP firewall events & rules. NIDS. Segmented downloads. R0 network stack inventories (TCP/UDP/AFD/NSI/NDIS/WFP). |
-| **Memory** | Process memory browsing & search. Hex viewer with bookmarks & breakpoints. R0 memory reads. Kernel executable-memory scan. Memory evidence pages. PTE / virtual-address translation. |
-| **File** | Dual-pane file manager. Hashes, signatures, PE/strings/hex views. File unlocker. NTFS recovery. Minifilter/FileObject/Section evidence. Storage-stack & BitLocker info. |
-| **Scanner** | Background PE/ELF/Mach-O structural scanning. Guarded byte editor (length-preserving only, atomic writes, optional backup). |
-| **Driver** | Driver service management (register/load/unload/delete). Loaded modules. DBWIN debug output. DriverObject/DeviceObject/MajorFunction/FastIo inspection. Transactional editors for dispatch tables and image metadata. Reversible loader-list removal. Driver Integrity checks. Module cross-view. Unloaded-driver & PiDDB evidence. |
-| **Kernel** | Object namespace browser. Atom table. SSDT/SSSDT tables. Inline/IAT/EAT hooks. CID cross-view. ALPC/IPC. Dynamic offset management. Capability matrix. Clean loaded-image & IDT baselines. Descriptor-table & IOCTL decoding. Kernel disassembly. Full callback inventory (notify, registry, object, filter, bugcheck, shutdown, filesystem, logon, NMI, etc.). Kernel Knowledge center (71 articles). HVM virtualization lab. |
-| **Monitor** | Per-process ETW tracing. Syscall capture. WinAPI agent. WMI subscriptions. ETW provider/session management. ARK risk center. |
-| **Hardware** | Task-Manager-style CPU/GPU/memory/disk/network charts. Process I/O & ETW file activity. Device tree (SetupAPI/CfgMgr). R0 device-stack audits (DevNode/USB/HID/PCI/ACPI/GPU/display/watchdog). |
-| **Privileges** | Local user accounts. Create user / reset password. Group info. Current process privilege snapshot. |
-| **Windows** | Window enumeration, filtering, preview, picking, control. Desktop management. Message monitoring. Win32k GUI/session audit. Hotkey/hook audit. |
-| **Registry** | Registry tree browsing. Key/value CRUD. `.reg` import/export. Async search. |
-| **Handles** | Handle list with PID/keyword/type filtering. Named-object resolution. Object-type statistics. HandleTable/ObjectHeader/ObjectType evidence. |
-| **Startup** | Categorized startup items across logon, services, drivers, scheduled tasks, registry, WMI. Risk-gated modifications with recovery where possible. |
-| **Services** | Service table with filtering/sorting. Start/stop/pause. Startup-type changes. Property editing. Dependencies. TSV/JSON export. |
-| **Miscellaneous** | BCD/boot config. Audio source attribution. System speed control (with warnings & recovery). Shell association management (context menus, URL handlers, Open With, Explorer Home). Read-only disk editor & raw filesystem forensics (write requires unlock). AppLocker/WDAC/Defender/ASR/platform security diagnostics. |
+| **Welcome** | Version, build info, project links. |
+| **Process** | Tree/list with icons & diff highlighting. Kill/suspend/resume/priority. Thread stacks, modules, tokens. R3/R0 cross-view. Recoverable R0 hiding (gated). PPL/signature ops with risk prompts. |
+| **Network** | Capture & filter. TCP/UDP management. Per-process throttle. Request builder. HTTPS. ARP/DNS. Live hosts. WFP events & rules. NIDS. Segmented download. R0 stack inventories. |
+| **Memory** | Region browser & search. Hex viewer + bookmarks/breakpoints. R0 reads. Kernel exec scan. Memory evidence. PTE/VA translation. |
+| **File** | Dual-pane manager. Hash/sig/PE/strings/hex. Unlocker. NTFS recovery. Minifilter/FileObject/Section evidence. Storage & BitLocker. |
+| **Scanner** | PE/ELF/Mach-O structural scan. Guarded byte editor (length-preserving, atomic, optional backup). |
+| **Driver** | Service CRUD. Loaded modules. DBWIN. DriverObj/DeviceObj/MajorFunction/FastIo. Transactional editors. Reversible loader-list removal. Integrity. Module cross-view. Unloaded/PiDDB evidence. |
+| **Kernel** | Object namespace. Atom table. SSDT/SSSDT. Inline/IAT/EAT hooks. CID cross-view. ALPC/IPC. DynData. Capability matrix. Loaded-image & IDT baselines. Descriptor/IOCTL decode. Disassembly. Callback inventory. Kernel Knowledge (71 articles). HVM. |
+| **Monitor** | Process ETW. Syscall capture. WinAPI agent. WMI subs. ETW provider/session mgmt. Risk center. |
+| **Hardware** | CPU/GPU/mem/disk/net charts. Process I/O & ETW file activity. SetupAPI/CfgMgr tree. R0 device audit. |
+| **Privileges** | Local accounts, groups, current process privileges. |
+| **Windows** | Window enum/filter/preview/pick/control. Desktop mgmt. Message monitor. Win32k GUI/session audit. Hotkey/hook audit. |
+| **Registry** | Tree browser. Key/value CRUD. .reg import/export. Async search. |
+| **Handles** | PID/keyword/type filter. Named-object resolution. Type stats. HandleTable/ObjectHeader evidence. |
+| **Startup** | Categorized across logon/service/driver/task/registry/WMI. Risk-gated changes with recovery. |
+| **Services** | Filter/sort. Start/stop/pause. Startup type. Property editing. Dependencies. TSV/JSON export. |
+| **Miscellaneous** | BCD/boot. Audio source attribution. System speed (with warnings). Shell association management. Read-only disk edit & raw FS forensics (write = unlock). AppLocker/WDAC/Defender/ASR diagnostics. |
 
-**Auxiliary panels:** task progress cards, filtered log output with call-chain tracing, an immediate/scratch window, and a real-time performance monitor.
+Auxiliary: task progress panel, log output with GUID call-chain tracing, immediate window, real-time perf monitor.
 
 </details>
 
-## Which Edition?
+## Repository Layout
 
-| | **Ksword5.1** (full) | **KswordARKLight** (lightweight) |
-|---|---|---|
-| Built with | Qt 6, dockable workspace | Pure Win32, no dependencies |
-| Best for | Full ARK workflows, deep analysis | Older machines, quick response, minimal footprint |
-| Feature set | Everything above | Core set: processes, memory, registry, files, drivers, kernel, monitoring, hardware, windows, startup, network, handles, security |
-
-Both editions talk to the same kernel driver. `Launcher.exe` picks one for you automatically.
-
-## What's in the Repository
-
-| Folder | What it is |
-|---|---|
-| `Ksword5.1/` | Full Qt desktop application. |
-| `KswordARKLight/` | Lightweight Win32 edition. |
-| `KswordARKDriver/` | The kernel driver. |
-| `Launcher/` | Startup helper that picks the right edition. |
-| `KswordCLI/` | Command-line interface — see [CLI docs](docs/CLI使用文档.md). |
-| `KswordSetup/` | Optional installer. |
-| `Taskbar/` | Top AppBar with `S O S Enter` quick launch. |
-| `KswordHUD/`, `APIMonitor_x64/` | HUD overlay and API monitoring helpers. |
-| `shared/driver/` | Shared protocol headers between user mode and kernel. |
-| `tools/` | PDB offset generator and other build tools. |
-| `docs/` | Technical documentation — see [full index](#documentation). |
+```
+Ksword5.1/              Full Qt app
+KswordARKLight/          Lightweight Win32 edition
+KswordARKDriver/         Kernel driver
+Launcher/                Startup helper
+KswordCLI/               CLI (docs: docs/CLI使用文档.md)
+KswordSetup/             Optional installer
+Taskbar/                 Top AppBar (S O S Enter quick launch)
+KswordHUD/               HUD overlay
+APIMonitor_x64/          API monitoring helper
+shared/driver/           Shared IOCTL protocol headers
+tools/                   PDB offset generator, build tools
+docs/                    Technical docs
+```
 
 Website: [KSwordDEV/Website](https://github.com/KSwordDEV/Website)
 
-## How It Works (for contributors)
+## Building
 
-The app and the driver communicate through a shared protocol layer. If you're contributing code, here's what matters:
-
-- **Protocol headers go in `shared/driver/`.** Don't scatter IOCTL definitions across UI or driver-private folders.
-- **UI code never talks to the driver directly.** Everything goes through `ArkDriverClient` (or the lightweight equivalent). No raw `DeviceIoControl` calls from dock code.
-- **Kernel offsets come from verified profiles**, not hardcoded values. If the bundled profile doesn't match your Windows build, the app resolves it from PDB symbols at runtime — but only after verifying the binary identity. It never guesses.
-- **New source files must be added to `.vcxproj` and `.vcxproj.filters`.** Third-party code keeps its upstream license.
-
-Full contributor notes: [AGENTS.md](AGENTS.md) · [CONTRIBUTING.md](CONTRIBUTING.md)
-
-<details>
-<summary><b>Protocol reference</b> — where capabilities are defined in code</summary>
-
-<br>
-
-| What | Where | Notes |
-|---|---|---|
-| Driver status & feature matrix | `KswordArkCapabilityIoctl.h` | Powers the "Driver Status" page. |
-| Dynamic kernel offsets | `KswordArkDynDataIoctl.h` | Profile matching, field sources, capability gates. |
-| Process extended info | `KswordArkProcessIoctl.h` (v2) | Session, image path, protection level, field availability. |
-| Recoverable process hiding | `IOCTL_KSWORD_ARK_SET_PROCESS_VISIBILITY` | Unlinks process from lists but keeps CID table entry for restore. |
-| Protection level changes | `KSW_CAP_PROCESS_PROTECTION_PATCH` | Gated; confirmation dialog shows impact and rollback risk. |
-| Vendored offsets | `third_party/systeminformer_dyn/` | System Informer offset data only — no KPH communication layer. |
-
-All headers live under `shared/driver/`.
-
-</details>
-
-## Building from Source
-
-**You need:** Windows 10/11, Visual Studio 2022 (MSVC), Qt 6.9.3 `msvc2022_64` (not needed for the lightweight edition), and WDK (only for the driver).
+Requirements: Windows 10/11, VS 2022 (MSVC), Qt 6.9.3 msvc2022_64 (not needed for Light/Launcher), WDK (driver only).
 
 ```powershell
-# 1. Tell the build system where Qt lives (run once)
 .\Setup-QtPaths.ps1 -QtDir 'C:\Qt\6.9.3\msvc2022_64'
 
-# 2. Build everything
 $msbuild = 'C:\Program Files\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin\MSBuild.exe'
 & $msbuild '.\Ksword5.1\Ksword5.1.sln' /t:Build /p:Configuration=Debug /p:Platform=x64 /m
 ```
 
-Or build just one piece:
+Light only: `& $msbuild '.\KswordARKLight\KswordARKLight.vcxproj' /t:Build /p:Configuration=Release /p:Platform=x64 /m`
 
-```powershell
-# Lightweight edition only (no Qt needed)
-& $msbuild '.\KswordARKLight\KswordARKLight.vcxproj' /t:Build /p:Configuration=Release /p:Platform=x64 /m
-
-# Launcher only
-& $msbuild '.\Launcher\Launcher.vcxproj' /t:Build /p:Configuration=Release /p:Platform=x64 /m
-```
-
-No WDK? Skip the driver — you can build the user-mode parts separately and reuse an existing driver binary for the release.
+No WDK? Build the user-mode projects and reuse an existing driver binary for the release.
 
 <details>
-<summary><b>Build troubleshooting</b></summary>
+<summary>Build troubleshooting</summary>
 
 <br>
 
-**Main app link fails with `LNK1000` / `IMAGE::BuildImage`**
+**LNK1000 / IMAGE::BuildImage on the main app** — do a one-off clean rebuild with WPO and LTCG off. Don't make it permanent. Check exit code and that `Ksword5.1\x64\Release\Ksword5.1.exe` exists and is non-zero.
 
-Do one clean rebuild with Whole Program Optimization off. Don't make it permanent — just that one build. Check the real exit code and that `Ksword5.1\x64\Release\Ksword5.1.exe` is non-zero.
-
-**Driver `ApiValidator` fails after linking**
-
-Usually an architecture mismatch in the WDK post-build step. Run the validator standalone with the x64 WDK path:
+**WDK ApiValidator fails after the driver links** — usually arch mismatch. Run standalone:
 
 ```powershell
 $solutionDir = (Resolve-Path '.\Ksword5.1').Path + '\'
@@ -260,50 +184,45 @@ $apiValidatorX64 = 'C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64'
   /p:ApiValidator_ApiExtractorExePath=$apiValidatorX64 /m:1 /v:minimal
 ```
 
-`Driver is 'Universal'.` means the API check passed, but doesn't prove the full build/sign/load pipeline works.
-
 </details>
 
-## Documentation
+## Contributing
 
-| Document | What it covers |
-|---|---|
-| [CLI使用文档.md](docs/CLI使用文档.md) | Command-line tool reference |
-| [功能技术文档.md](docs/功能技术文档.md) | Feature-level technical docs |
-| [内核知识中心.md](docs/内核知识中心.md) | Kernel Knowledge center source material |
-| [driver_ioctl_audit.md](docs/driver_ioctl_audit.md) | Driver IOCTL audit |
-| [OpenArk功能对照与TODO.md](docs/OpenArk功能对照与TODO.md) | OpenArk feature comparison & gaps |
-| [动态偏移功能接入步骤.md](docs/动态偏移功能接入步骤.md) | Wiring new features into dynamic offsets |
-| [pdb_r0_audit_prep/](docs/pdb_r0_audit_prep/) | PDB/R0 audit preparation |
-| [插件系统规范.md](docs/插件系统规范.md) | Plugin system spec |
-| [多语言语言包规范.md](docs/多语言语言包规范.md) | Localization rules |
+Protocol headers in `shared/driver/`, UI talks to the driver through `ArkDriverClient` only, kernel offsets come from verified PDB/DynData profiles (never hardcoded), new files go in `.vcxproj` + `.vcxproj.filters`.
+
+Details: [CONTRIBUTING.md](CONTRIBUTING.md) · [AGENTS.md](AGENTS.md)
 
 <details>
-<summary><b>Recent changes</b></summary>
+<summary>Protocol reference</summary>
 
 <br>
 
-- **Kernel Knowledge center** — 71 searchable articles covering kernel internals, each linked to live evidence pages.
-- **Scanner dock** — structural scanning for PE/ELF/Mach-O with a safe byte editor.
-- **Forensics expansion** — clean baselines for loaded images and IDT, descriptor-table decoding, kernel disassembly, wider R0 network coverage, raw filesystem browser with deleted-entry recovery.
-- **HVM** — VMX self-tests, one-shot test guests, and a guarded VT-x/EPT monitor.
-- **Runtime PDB resolution** — automatic offset resolution when the bundled profile doesn't match your kernel.
-- **Usability** — table-freeze controls, smooth scrolling, cancellable stall detector, better validation and recovery for startup/network changes.
+All headers under `shared/driver/`.
+
+| Area | Header | Notes |
+|---|---|---|
+| Driver status / capabilities | `KswordArkCapabilityIoctl.h` | Powers the Driver Status page. |
+| Dynamic offsets | `KswordArkDynDataIoctl.h` | Profile matching, field sources, capability gates. |
+| Process extended info | `KswordArkProcessIoctl.h` (v2) | Session, image path, protection level, field availability. |
+| Process hiding | `IOCTL_KSWORD_ARK_SET_PROCESS_VISIBILITY` | Unlinks from lists, keeps CID entry for restore. |
+| PPL patch | `KSW_CAP_PROCESS_PROTECTION_PATCH` | Gated; dialog shows impact + rollback risk. |
+| Vendored offsets | `third_party/systeminformer_dyn/` | System Informer offset data only, no KPH comms. |
 
 </details>
 
+## Docs
+
+[CLI使用文档](docs/CLI使用文档.md) · [功能技术文档](docs/功能技术文档.md) · [内核知识中心](docs/内核知识中心.md) · [IOCTL audit](docs/driver_ioctl_audit.md) · [OpenArk对照](docs/OpenArk功能对照与TODO.md) · [动态偏移接入](docs/动态偏移功能接入步骤.md) · [PDB/R0 audit prep](docs/pdb_r0_audit_prep/) · [插件系统](docs/插件系统规范.md) · [多语言规范](docs/多语言语言包规范.md)
+
 ## Notice
 
-> [!WARNING]
-> This project includes system-level debugging, auditing, and management capabilities. Use it only in legally authorized and compliant environments.
+This project includes system-level debugging, auditing, and management capabilities. Use only in legally authorized environments.
 
 ## License
 
-KSword is **source-available** under the [KSword Community Source License v1.6](LICENSE).
+KSword is source-available under the [KSword Community Source License v1.6](LICENSE). "Open source" here means the code is visible — it is not an OSI-approved license. See `LICENSE` for redistribution and commercial-use terms.
 
-"Open source" here means you can see and access the source code — it does **not** mean an OSI-approved license. Check `LICENSE` for what's allowed, especially around redistribution and commercial use. Third-party components keep their own licenses.
-
-The [Community Covenant](COMMUNITY_COVENANT.md) is a community promise about honesty, attribution, and responsible use — not additional license restrictions. Contributions follow [CONTRIBUTING.md](CONTRIBUTING.md).
+The [Community Covenant](COMMUNITY_COVENANT.md) is about attribution and responsible use, not additional license restrictions. Contributions: [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Star History
 
